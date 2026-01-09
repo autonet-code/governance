@@ -1,8 +1,6 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "./InfrastructureFactory.sol";
 import "./DAOFactory.sol";
 import "./EconomyFactory.sol";
@@ -13,7 +11,7 @@ import "../Registry.sol";
 import "../RepToken.sol";
 import "@openzeppelin/contracts/governance/TimelockController.sol";
 
-contract TrustlessFactory is Ownable {
+contract TrustlessFactory {
     struct TokenParams {
         string name;
         string symbol;
@@ -86,14 +84,14 @@ contract TrustlessFactory is Ownable {
         string[] values
     );
 
-    constructor(address _infraFactory, address _daoFactory, address _economyFactory, address _repTokenFactory) Ownable(msg.sender) {
+    constructor(address _infraFactory, address _daoFactory, address _economyFactory, address _repTokenFactory) {
         infrastructureFactory = InfrastructureFactory(_infraFactory);
         daoFactory = DAOFactory(_daoFactory);
         economyFactory = EconomyFactory(_economyFactory);
         repTokenFactory = RepTokenFactory(_repTokenFactory);
     }
 
-    function deployInfrastructure(uint48 timelockDelayInMinutes, uint arbitrationFeeBps) external onlyOwner {
+    function deployInfrastructure(uint48 timelockDelayInMinutes, uint arbitrationFeeBps) external {
         address economyAddr = economyFactory.deployEconomy(arbitrationFeeBps);
         address timelockAddr = infrastructureFactory.deployTimelock(address(this), timelockDelayInMinutes * 1 minutes);
         address registryAddr = infrastructureFactory.deployRegistry(address(this), address(0));
@@ -109,7 +107,7 @@ contract TrustlessFactory is Ownable {
         address timelockAddr,
         TokenParams calldata _tokenParams,
         GovParams calldata _govParams
-    ) external onlyOwner {
+    ) external {
         // Store params for later event emission
         currentDeployment.tokenParams = _tokenParams;
         currentDeployment.govParams = _govParams;
@@ -136,7 +134,7 @@ contract TrustlessFactory is Ownable {
         EconomyParams calldata _economyParams,
         string[] calldata _registryKeys,
         string[] calldata _registryValues
-    ) external onlyOwner {
+    ) external {
         require(_registryKeys.length == _registryValues.length, "Registry keys/values length mismatch");
 
         address economyAddr = _addressParams.contractAddresses[0];
