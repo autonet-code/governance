@@ -66,7 +66,7 @@ contract AutonetFactory {
      */
     function createAutonet(
         address economyAddress,
-        address registryAddress,
+        address payable registryAddress,
         address repTokenAddress,
         address timelockAddress,
         string calldata name,
@@ -83,21 +83,8 @@ contract AutonetFactory {
             revert AlreadyDeployedForEconomy(economyAddress, autonetForEconomy[economyAddress]);
         }
 
-        // Clone the implementation
-        autonet = Clones.clone(implementation);
-
-        // Initialize the clone
-        // Note: We can't call constructor on clones, so we need an initialize function
-        // But Autonet uses constructor... so we use a workaround:
-        // The clone will have uninitialized state, we need to set it up
-
-        // Actually, clones don't run constructors. We need to modify Autonet
-        // to support initialization OR use a different pattern.
-        //
-        // For now, let's use CREATE2 with full bytecode instead of clones.
-        // This is more expensive but simpler for initialization.
-
-        // ALTERNATIVE: Deploy full contract (not a clone)
+        // Deploy full contract (not a clone)
+        // Clones don't run constructors, so we deploy fresh instances
         // This costs more gas but ensures proper initialization
         Autonet newAutonet = new Autonet(
             economyAddress,

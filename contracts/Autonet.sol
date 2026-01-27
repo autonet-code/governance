@@ -71,7 +71,7 @@ contract Autonet is ERC20, ERC20Burnable, ReentrancyGuard {
 
     // --- LINKED JURISDICTION ---
     address public immutable economyAddress;
-    address public immutable registryAddress;
+    address payable public immutable registryAddress;
     address public immutable repTokenAddress;
     address public immutable timelockAddress;
 
@@ -162,7 +162,7 @@ contract Autonet is ERC20, ERC20Burnable, ReentrancyGuard {
 
     constructor(
         address _economyAddress,
-        address _registryAddress,
+        address payable _registryAddress,
         address _repTokenAddress,
         address _timelockAddress,
         string memory name,
@@ -174,7 +174,7 @@ contract Autonet is ERC20, ERC20Burnable, ReentrancyGuard {
         if (_timelockAddress == address(0)) revert ZeroAddress();
 
         economyAddress = _economyAddress;
-        registryAddress = _registryAddress;
+        registryAddress = _registryAddress; // payable for Registry's fallback
         repTokenAddress = _repTokenAddress;
         timelockAddress = _timelockAddress;
         admin = msg.sender;
