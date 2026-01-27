@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Autonet} from "./Autonet.sol";
 
 /**
@@ -42,6 +43,7 @@ contract AutonetFactory {
     error AlreadyDeployedForEconomy(address economy, address existing);
     error ZeroAddress();
     error InitializationFailed();
+    error DeployerNotJurisdictionMember();
 
     /**
      * @notice Deploy factory with Autonet implementation
@@ -77,6 +79,11 @@ contract AutonetFactory {
         if (registryAddress == address(0)) revert ZeroAddress();
         if (repTokenAddress == address(0)) revert ZeroAddress();
         if (timelockAddress == address(0)) revert ZeroAddress();
+
+        // Verify deployer is a jurisdiction member (has RepToken balance)
+        if (IERC20(repTokenAddress).balanceOf(msg.sender) == 0) {
+            revert DeployerNotJurisdictionMember();
+        }
 
         // Check if already deployed for this Economy (if enforced)
         if (enforceOnePerEconomy && autonetForEconomy[economyAddress] != address(0)) {
