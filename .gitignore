@@ -15,7 +15,7 @@ artifacts
 .deps/
 contracts/.states/
 contracts/.deps/
-
+pk.txt
 # AI/development files
 .aiaccess
 aiaccess.py

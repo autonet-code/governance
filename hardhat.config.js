@@ -40,16 +40,28 @@ module.exports = {
       accounts: [`0x${PRIVATE_KEY}`],
       timeout: 180000,
     },
+    ets: {
+      url: `https://node.shadownet.etherlink.com`,
+      chainId: 127823,
+      accounts: [`0x${PRIVATE_KEY}`],
+      timeout: 180000,
+    },
     etm: {
       url: `https://node.mainnet.etherlink.com`,
       chainId: 42793,
       accounts: [`0x${PRIVATE_KEY}`],
+    },
+    baseSepolia: {
+      url: `https://sepolia.base.org`,
+      chainId: 84532,
+      accounts: [`0x${SEPOLIA_PRIVATE_KEY}`],
     },
   },
   etherscan: {
     apiKey: {
       // Blockscout doesn't require a real API key, just a non-empty string
       et: "blockscout",
+      ets: "blockscout",
       etm: "blockscout",
     },
     customChains: [
@@ -59,6 +71,14 @@ module.exports = {
         urls: {
           apiURL: "https://testnet.explorer.etherlink.com/api",
           browserURL: "https://testnet.explorer.etherlink.com",
+        },
+      },
+      {
+        network: "ets",
+        chainId: 127823,
+        urls: {
+          apiURL: "https://shadownet.explorer.etherlink.com/api",
+          browserURL: "https://shadownet.explorer.etherlink.com",
         },
       },
       {

@@ -6,6 +6,8 @@ import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC2
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Checkpoints} from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
 import {Registry} from "./Registry.sol";
+import {AutonetUser} from "./AutonetUser.sol";
+import {IAutonetUser} from "./IAutonetUser.sol";
 
 /**
  * @title IInferenceProvider
@@ -122,6 +124,10 @@ contract Autonet is ERC20, ERC20Burnable, ReentrancyGuard {
     uint256 public totalInferenceBurned;
     mapping(address => uint256) public userInferenceBurned;
 
+    // --- USER CONTRACTS ---
+    mapping(address => address) public userContracts;  // wallet → UserContract
+    address[] public registeredUsers;
+
     // --- EVENTS ---
     event ServiceRegistered(bytes32 indexed serviceId, address indexed projectContract, bytes32 serviceType, address indexed creator);
     event ServiceActivated(bytes32 indexed serviceId);
@@ -134,6 +140,7 @@ contract Autonet is ERC20, ERC20Burnable, ReentrancyGuard {
     event BackerRewardClaimed(bytes32 indexed serviceId, uint256 indexed epoch, address indexed backer, uint256 amount);
     event InferenceRequested(bytes32 indexed serviceId, address indexed requester, bytes32 requestId, uint256 creditsBurned);
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+    event UserContractCreated(address indexed wallet, address indexed userContract);
 
     // --- ERRORS ---
     error NotAuthorized();
@@ -148,6 +155,7 @@ contract Autonet is ERC20, ERC20Burnable, ReentrancyGuard {
     error ZeroAddress();
     error InvalidRate();
     error InvalidServiceType();
+    error UserAlreadyRegistered();
 
     // --- MODIFIERS ---
     modifier onlyAdmin() {
@@ -334,6 +342,12 @@ contract Autonet is ERC20, ERC20Burnable, ReentrancyGuard {
         epochTotalUsage[currentEpoch] += units;
         service.totalUsageUnits += units;
 
+        // Update user contract stats if one exists
+        address userContract = userContracts[msg.sender];
+        if (userContract != address(0)) {
+            IAutonetUser(userContract).incrementStats(units);
+        }
+
         // Small attestation reward
         if (attestationRewardBps > 0 && units >= minUsageForReward) {
             uint256 unitValue = _getRegistryUint("autonet.usage.unitValue");
@@ -477,6 +491,58 @@ contract Autonet is ERC20, ERC20Burnable, ReentrancyGuard {
         if (newAdmin == address(0)) revert ZeroAddress();
         emit AdminTransferred(admin, newAdmin);
         admin = newAdmin;
+    }
+
+    // =========================================================================
+    // USER CONTRACTS
+    // =========================================================================
+
+    /**
+     * @notice Create a user contract for the caller
+     * @param standardsHash Hash of the jurisdiction standards at signup
+     * @return userContract The address of the new user contract
+     *
+     * Each wallet can only have one user contract.
+     * The caller becomes the owner of the new contract.
+     */
+    function createUserContract(bytes32 standardsHash) external returns (address userContract) {
+        if (userContracts[msg.sender] != address(0)) revert UserAlreadyRegistered();
+
+        AutonetUser newContract = new AutonetUser(
+            msg.sender,       // owner
+            address(this),    // autonet
+            standardsHash     // jurisdiction standards at signup
+        );
+
+        userContract = address(newContract);
+        userContracts[msg.sender] = userContract;
+        registeredUsers.push(msg.sender);
+
+        emit UserContractCreated(msg.sender, userContract);
+    }
+
+    /**
+     * @notice Get user contract address for a wallet
+     * @param wallet The wallet address to look up
+     * @return userContract The user contract address (zero if none)
+     */
+    function getUserContract(address wallet) external view returns (address) {
+        return userContracts[wallet];
+    }
+
+    /**
+     * @notice Get total number of registered users
+     */
+    function getRegisteredUserCount() external view returns (uint256) {
+        return registeredUsers.length;
+    }
+
+    /**
+     * @notice Get list of registered user wallets
+     * @dev For enumeration. May be expensive for large lists.
+     */
+    function getRegisteredUsers() external view returns (address[] memory) {
+        return registeredUsers;
     }
 
     // =========================================================================

@@ -287,12 +287,147 @@ describe("Autonet", function () {
             expect(providers[0]).to.equal(inferId);
         });
     });
+
+    describe("User Contracts", function () {
+        const standardsHash = ethers.keccak256(ethers.toUtf8Bytes("jurisdiction-standards-v1"));
+
+        it("should create user contract", async function () {
+            await expect(autonet.connect(user1).createUserContract(standardsHash))
+                .to.emit(autonet, "UserContractCreated")
+                .withArgs(user1.address, (addr) => addr !== ethers.ZeroAddress);
+
+            const userContractAddr = await autonet.getUserContract(user1.address);
+            expect(userContractAddr).to.not.equal(ethers.ZeroAddress);
+
+            // Verify user count
+            expect(await autonet.getRegisteredUserCount()).to.equal(1);
+        });
+
+        it("should not allow duplicate user contracts", async function () {
+            await autonet.connect(user1).createUserContract(standardsHash);
+
+            await expect(autonet.connect(user1).createUserContract(standardsHash))
+                .to.be.revertedWithCustomError(autonet, "UserAlreadyRegistered");
+        });
+
+        it("should track registered users", async function () {
+            await autonet.connect(user1).createUserContract(standardsHash);
+            await autonet.connect(user2).createUserContract(standardsHash);
+
+            const users = await autonet.getRegisteredUsers();
+            expect(users.length).to.equal(2);
+            expect(users[0]).to.equal(user1.address);
+            expect(users[1]).to.equal(user2.address);
+        });
+
+        it("should initialize user contract correctly", async function () {
+            await autonet.connect(user1).createUserContract(standardsHash);
+            const userContractAddr = await autonet.getUserContract(user1.address);
+
+            const AutonetUser = await ethers.getContractFactory("AutonetUser");
+            const userContract = AutonetUser.attach(userContractAddr);
+
+            expect(await userContract.owner()).to.equal(user1.address);
+            expect(await userContract.autonet()).to.equal(await autonet.getAddress());
+            expect(await userContract.jurisdictionStandardsHash()).to.equal(standardsHash);
+            expect(await userContract.alignmentScore()).to.equal(0);
+        });
+
+        it("should allow owner to set preferences", async function () {
+            await autonet.connect(user1).createUserContract(standardsHash);
+            const userContractAddr = await autonet.getUserContract(user1.address);
+
+            const AutonetUser = await ethers.getContractFactory("AutonetUser");
+            const userContract = AutonetUser.attach(userContractAddr);
+
+            await expect(userContract.connect(user1).setPreference("theme", "dark"))
+                .to.emit(userContract, "PreferenceSet")
+                .withArgs("theme", "dark");
+
+            expect(await userContract.getPreference("theme")).to.equal("dark");
+
+            const keys = await userContract.getPreferenceKeys();
+            expect(keys.length).to.equal(1);
+            expect(keys[0]).to.equal("theme");
+        });
+
+        it("should not allow non-owner to set preferences", async function () {
+            await autonet.connect(user1).createUserContract(standardsHash);
+            const userContractAddr = await autonet.getUserContract(user1.address);
+
+            const AutonetUser = await ethers.getContractFactory("AutonetUser");
+            const userContract = AutonetUser.attach(userContractAddr);
+
+            await expect(userContract.connect(user2).setPreference("theme", "dark"))
+                .to.be.revertedWithCustomError(userContract, "NotOwner");
+        });
+
+        it("should allow owner to update alignment", async function () {
+            await autonet.connect(user1).createUserContract(standardsHash);
+            const userContractAddr = await autonet.getUserContract(user1.address);
+
+            const AutonetUser = await ethers.getContractFactory("AutonetUser");
+            const userContract = AutonetUser.attach(userContractAddr);
+
+            await expect(userContract.connect(user1).updateAlignment(7500))
+                .to.emit(userContract, "AlignmentUpdated")
+                .withArgs(0, 7500);
+
+            expect(await userContract.alignmentScore()).to.equal(7500);
+        });
+
+        it("should reject invalid alignment score", async function () {
+            await autonet.connect(user1).createUserContract(standardsHash);
+            const userContractAddr = await autonet.getUserContract(user1.address);
+
+            const AutonetUser = await ethers.getContractFactory("AutonetUser");
+            const userContract = AutonetUser.attach(userContractAddr);
+
+            await expect(userContract.connect(user1).updateAlignment(10001))
+                .to.be.revertedWithCustomError(userContract, "InvalidScore");
+        });
+
+        it("should update stats on usage attestation", async function () {
+            // Create user contract
+            await autonet.connect(user1).createUserContract(standardsHash);
+            const userContractAddr = await autonet.getUserContract(user1.address);
+
+            const AutonetUser = await ethers.getContractFactory("AutonetUser");
+            const userContract = AutonetUser.attach(userContractAddr);
+
+            // Register and activate a service
+            const serviceId = ethers.keccak256(ethers.toUtf8Bytes("user-stats-test"));
+            await autonet.connect(user1).registerService(serviceId, mockProject, "hash");
+            await autonet.activateService(serviceId);
+
+            // Attest usage
+            await autonet.connect(user1).attestUsage(serviceId, 100);
+            await autonet.connect(user1).attestUsage(serviceId, 50);
+
+            // Check stats
+            expect(await userContract.totalAttestations()).to.equal(2);
+            expect(await userContract.totalUsageUnits()).to.equal(150);
+        });
+
+        it("should only allow autonet to increment stats", async function () {
+            await autonet.connect(user1).createUserContract(standardsHash);
+            const userContractAddr = await autonet.getUserContract(user1.address);
+
+            const AutonetUser = await ethers.getContractFactory("AutonetUser");
+            const userContract = AutonetUser.attach(userContractAddr);
+
+            // Direct call should fail
+            await expect(userContract.connect(user1).incrementStats(100))
+                .to.be.revertedWithCustomError(userContract, "NotAutonet");
+        });
+    });
 });
 
 describe("AutonetFactory", function () {
     let deployer, user1;
     let factory;
     let mockEconomy, mockRegistry, mockRepToken, mockTimelock;
+    let mockRepTokenContract;
 
     beforeEach(async function () {
         [deployer, user1] = await ethers.getSigners();
@@ -302,12 +437,15 @@ describe("AutonetFactory", function () {
         const mockRegistryContract = await MockRegistry.deploy();
 
         const MockRepToken = await ethers.getContractFactory("AutonetMockRepToken");
-        const mockRepTokenContract = await MockRepToken.deploy("Test Rep", "REP");
+        mockRepTokenContract = await MockRepToken.deploy("Test Rep", "REP");
 
         mockEconomy = deployer.address;
         mockRegistry = await mockRegistryContract.getAddress();
         mockRepToken = await mockRepTokenContract.getAddress();
         mockTimelock = deployer.address;
+
+        // Give deployer some RepToken balance to allow deployment
+        await mockRepTokenContract.mint(deployer.address, ethers.parseEther("100"));
 
         // Deploy implementation for factory reference (not actually used as clone)
         const Autonet = await ethers.getContractFactory("Autonet");
@@ -377,5 +515,79 @@ describe("AutonetFactory", function () {
         await factory.createAutonet(mockEconomy, mockRegistry, mockRepToken, mockTimelock, "ATN2", "A2");
 
         expect(await factory.getDeployedCount()).to.equal(2);
+    });
+
+    describe("Jurisdiction Ownership Verification", function () {
+        it("should allow deployer with RepToken balance to deploy", async function () {
+            // Deployer already has RepToken balance from beforeEach
+            const tx = await factory.createAutonet(
+                mockEconomy,
+                mockRegistry,
+                mockRepToken,
+                mockTimelock,
+                "Test ATN",
+                "TATN"
+            );
+
+            const receipt = await tx.wait();
+            const event = receipt.logs.find(log => log.eventName === "AutonetCreated");
+            expect(event).to.not.be.undefined;
+
+            const autonetAddress = event.args.autonet;
+            expect(autonetAddress).to.not.equal(ethers.ZeroAddress);
+        });
+
+        it("should allow user with RepToken balance to deploy", async function () {
+            // Give user1 RepToken balance
+            await mockRepTokenContract.mint(user1.address, ethers.parseEther("50"));
+
+            const tx = await factory.connect(user1).createAutonet(
+                mockEconomy,
+                mockRegistry,
+                mockRepToken,
+                mockTimelock,
+                "User ATN",
+                "UATN"
+            );
+
+            const receipt = await tx.wait();
+            const event = receipt.logs.find(log => log.eventName === "AutonetCreated");
+            expect(event).to.not.be.undefined;
+            expect(event.args.deployer).to.equal(user1.address);
+        });
+
+        it("should reject deployer without RepToken balance", async function () {
+            // user1 has no RepToken balance (no mint call)
+            await expect(
+                factory.connect(user1).createAutonet(
+                    mockEconomy,
+                    mockRegistry,
+                    mockRepToken,
+                    mockTimelock,
+                    "Test ATN",
+                    "TATN"
+                )
+            ).to.be.revertedWithCustomError(factory, "DeployerNotJurisdictionMember");
+        });
+
+        it("should reject deployer with zero RepToken balance after transfer", async function () {
+            // Give user1 RepToken then transfer it all away
+            await mockRepTokenContract.mint(user1.address, ethers.parseEther("100"));
+            await mockRepTokenContract.connect(user1).transfer(deployer.address, ethers.parseEther("100"));
+
+            // Now user1 has 0 balance
+            expect(await mockRepTokenContract.balanceOf(user1.address)).to.equal(0);
+
+            await expect(
+                factory.connect(user1).createAutonet(
+                    mockEconomy,
+                    mockRegistry,
+                    mockRepToken,
+                    mockTimelock,
+                    "Test ATN",
+                    "TATN"
+                )
+            ).to.be.revertedWithCustomError(factory, "DeployerNotJurisdictionMember");
+        });
     });
 });

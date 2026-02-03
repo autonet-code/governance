@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 async function main() {
-  console.log("Deploying TrustlessFactory and dependencies to Etherlink Testnet...\n");
+  console.log("Deploying TrustlessFactory and dependencies to Etherlink Shadownet Testnet...\n");
 
   const [deployer] = await ethers.getSigners();
   console.log("Deploying with account:", deployer.address);
@@ -71,8 +71,8 @@ async function main() {
 
   // Save deployment addresses
   const deploymentInfo = {
-    network: "Etherlink-Testnet",
-    chainId: 128123,
+    network: "Etherlink-Shadownet",
+    chainId: 127823,
     deployer: deployer.address,
     timestamp: new Date().toISOString(),
     projectImplementations: {
@@ -88,7 +88,7 @@ async function main() {
     }
   };
 
-  const outputPath = path.join(__dirname, "..", "deployments", "etherlink-testnet-trustless.json");
+  const outputPath = path.join(__dirname, "..", "deployments", "etherlink-shadownet-trustless.json");
   const outputDir = path.dirname(outputPath);
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
