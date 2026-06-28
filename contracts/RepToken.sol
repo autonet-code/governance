@@ -34,6 +34,27 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     address public admin;
     bool public immutable isTransferable;
 
+    // Optional auto-delegation target. When set, an account that receives tokens
+    // while having NO delegate of its own is auto-delegated to `defaultDelegate`
+    // on first receipt. The moment a holder calls delegate() themselves, their
+    // choice wins and is never auto-reset (auto-delegation only fires when the
+    // account's current delegate is address(0)). Governance-settable; address(0)
+    // disables the feature (default). Suite-level primitive: enables flows like
+    // the Coin Offering auto-delegating buyers to an execution delegate without
+    // any signature, while preserving each holder's right to reclaim their vote.
+    address public defaultDelegate;
+
+    // Accounts exempted from auto-delegation. Inventory-holding contracts (e.g.
+    // a Coin Offering holding unsold tokens, a treasury, a vesting vault) must
+    // be exempt so their held float does NOT accrue voting power to the default
+    // delegate — only tokens in the hands of real holders should auto-delegate.
+    // Governance-settable. An exempt account can still self-delegate explicitly.
+    mapping(address => bool) public autoDelegateExempt;
+
+    event DefaultDelegateUpdated(address indexed previous, address indexed current);
+    event AutoDelegateExemptSet(address indexed account, bool exempt);
+    event AutoDelegated(address indexed account, address indexed delegatee);
+
     address payable public immutable registryAddress;
     address public immutable timelockAddress;
 
@@ -129,6 +150,14 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         }
     }
 
+    // Canonical parity convention (see docs/ECONOMY_REGISTRY_SETTINGS.md):
+    // parity is an 18-decimal fixed-point multiplier. parity == 1e18 means 1:1.
+    // reputation = amount * parity / 1e18. This is decimal-correct for any
+    // payment-token decimals: the registry value bakes in the decimal adjustment
+    // (e.g. a 6-decimal USDC at 1:1 rep uses parity = 1e18 * 1e12 = 1e30), so a
+    // single convention serves both the Economy reputation pull and the CO.
+    uint256 internal constant PARITY_ONE = 1e18;
+
     function _calculateReputation(address token, uint amount) internal view returns (uint256) {
         string memory parityKey = string.concat("jurisdiction.parity.", Strings.toHexString(uint160(token)));
         string memory parityStr = Registry(registryAddress).getRegistryValue(parityKey);
@@ -136,9 +165,7 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         if (bytes(parityStr).length > 0) {
             uint256 parity = Strings.parseUint(parityStr);
             if (parity > 0) {
-                // Parity is a simple multiplier (1, 2, 3, etc.)
-                // Both amount (earnings) and reputation token have 18 decimals, so no scaling needed
-                return amount * parity;
+                return (amount * parity) / PARITY_ONE;
             }
         }
         return 0;
@@ -226,6 +253,25 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         require(economyAddress == address(0), "RepToken: Economy address already set");
         economyAddress = _economyAddress;
     }
+
+    // Governance-settable auto-delegation target. Set to address(0) to disable.
+    // Does not retroactively change existing delegations; only affects accounts
+    // that receive tokens while holding no delegate of their own.
+    function setDefaultDelegate(address _defaultDelegate) external {
+        require(msg.sender == admin || msg.sender == timelockAddress, "RepToken: Caller is not the admin or Timelock");
+        emit DefaultDelegateUpdated(defaultDelegate, _defaultDelegate);
+        defaultDelegate = _defaultDelegate;
+    }
+
+    // Exempt (or un-exempt) an account from auto-delegation. Used for
+    // inventory-holding contracts (Coin Offering, treasury, vesting) whose held
+    // float must not accrue votes to the default delegate. Does not change any
+    // existing delegation; only affects future auto-delegation on receipt.
+    function setAutoDelegateExempt(address account, bool exempt) external {
+        require(msg.sender == admin || msg.sender == timelockAddress, "RepToken: Caller is not the admin or Timelock");
+        autoDelegateExempt[account] = exempt;
+        emit AutoDelegateExemptSet(account, exempt);
+    }
     
     function decimals() public pure override returns (uint8) { return 18; }
     function CLOCK_MODE() public pure override returns (string memory) { return "mode=timestamp"; }
@@ -257,6 +303,22 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         }
         if (to != address(0)) {
             _balanceHistory[to].push(timestamp, uint208(balanceOf(to)));
+
+            // Auto-delegate on first receipt: if a default delegate is configured
+            // and the recipient has not chosen a delegate of their own, point their
+            // voting weight at the default. A holder who later calls delegate()
+            // sets a non-zero delegatee and is never auto-reset by this branch.
+            // Skipped for the default delegate itself (it self-represents) and for
+            // exempt accounts (inventory-holding contracts whose float must not vote).
+            if (
+                defaultDelegate != address(0) &&
+                to != defaultDelegate &&
+                !autoDelegateExempt[to] &&
+                delegates(to) == address(0)
+            ) {
+                _delegate(to, defaultDelegate);
+                emit AutoDelegated(to, defaultDelegate);
+            }
         }
     }
     

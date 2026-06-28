@@ -66,8 +66,10 @@ describe("RepToken and Economy Integration", function () {
         const nativeParityKey = `jurisdiction.parity.${NATIVE_CURRENCY.toLowerCase()}`;
         const tokenParityKey = `jurisdiction.parity.${(await testToken.getAddress()).toLowerCase()}`;
         
-        await registry.connect(timelock).editRegistry(nativeParityKey, "1");
-        await registry.connect(timelock).editRegistry(tokenParityKey, "2");
+        // Parity is an 18-decimal fixed-point multiplier (see docs/ECONOMY_REGISTRY_SETTINGS.md):
+        // 1e18 == 1:1. testToken is 18-decimals, so 1x and 2x are 1e18 and 2e18.
+        await registry.connect(timelock).editRegistry(nativeParityKey, ethers.parseEther("1").toString());
+        await registry.connect(timelock).editRegistry(tokenParityKey, ethers.parseEther("2").toString());
     });
 
     afterEach(async function() {
@@ -141,7 +143,7 @@ describe("RepToken and Economy Integration", function () {
 
         const tokenParityKey = `jurisdiction.parity.${(await testToken.getAddress()).toLowerCase()}`;
         
-        await registry.connect(timelock).editRegistry(tokenParityKey, "5");
+        await registry.connect(timelock).editRegistry(tokenParityKey, ethers.parseEther("5").toString());
 
         const expectedReputation = tokenEarnings * 5n;
         await repToken.connect(contractor).claimReputationFromEconomy();
