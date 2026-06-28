@@ -131,6 +131,28 @@ describe("RepToken defaultDelegate", function () {
         ).to.be.revertedWith("RepToken: Caller is not the admin or Timelock");
     });
 
+    it("a whitelisted minter can mint; non-minters cannot", async function () {
+        // `other` cannot mint until granted.
+        await expect(repToken.connect(other).mint(buyer.address, ethers.parseEther("1")))
+            .to.be.revertedWith("RepToken: Not authorized to mint");
+
+        await expect(repToken.connect(timelock).setMinter(other.address, true))
+            .to.emit(repToken, "MinterSet").withArgs(other.address, true);
+
+        await repToken.connect(other).mint(buyer.address, ethers.parseEther("10"));
+        expect(await repToken.balanceOf(buyer.address)).to.equal(ethers.parseEther("10"));
+
+        // Revoke and confirm it no longer mints.
+        await repToken.connect(timelock).setMinter(other.address, false);
+        await expect(repToken.connect(other).mint(buyer.address, ethers.parseEther("1")))
+            .to.be.revertedWith("RepToken: Not authorized to mint");
+    });
+
+    it("only admin/timelock can grant minter rights", async function () {
+        await expect(repToken.connect(other).setMinter(other.address, true))
+            .to.be.revertedWith("RepToken: Caller is not the admin or Timelock");
+    });
+
     it("turning the feature off (address(0)) stops future auto-delegation", async function () {
         await repToken.connect(timelock).setDefaultDelegate(execDelegate.address);
         await repToken.connect(timelock).setDefaultDelegate(ethers.ZeroAddress);

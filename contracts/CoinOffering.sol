@@ -8,6 +8,10 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {Registry} from "./Registry.sol";
 
+interface IMintableATNB {
+    function mint(address to, uint256 amount) external;
+}
+
 /**
  * @title CoinOffering ("CO")
  * @notice Continuous, launch-independent offering for the network governance
@@ -74,8 +78,14 @@ contract CoinOffering is ReentrancyGuard, Pausable {
     /// @notice Admin (expected: the Timelock). Holds configuration & recovery powers.
     address public admin;
 
-    /// @notice Total ATNB base units sold across the lifetime of the offering.
-    uint256 public totalSold;
+    /// @notice Max ATNB base units this offering may ever mint (the fundraising
+    ///         goal / hard cap). DAO-settable. 0 means the sale is closed.
+    uint256 public saleCap;
+
+    /// @notice Total ATNB base units minted to buyers so far (== amount raised in
+    ///         ATNB terms). No pre-minted inventory: every ATNB the CO creates is
+    ///         in a buyer's hands, so total supply is never diluted by unsold float.
+    uint256 public totalMinted;
 
     /// @notice Total payment routed to the treasury, per payment token.
     mapping(address => uint256) public totalRaised;
@@ -92,7 +102,7 @@ contract CoinOffering is ReentrancyGuard, Pausable {
         uint256 parity
     );
     event AdminTransferred(address indexed previous, address indexed current);
-    event InventoryRecovered(address indexed to, uint256 amount);
+    event SaleCapSet(uint256 previous, uint256 current);
 
     // =========================================================================
     // ERRORS
@@ -101,7 +111,7 @@ contract CoinOffering is ReentrancyGuard, Pausable {
     error ZeroAddress();
     error InvalidAmount();
     error TokenNotRegistered(address token);
-    error InsufficientInventory(uint256 requested, uint256 available);
+    error CapExceeded(uint256 requested, uint256 remaining);
     error NotAdmin();
     error DustAmount(); // payment too small to yield any ATNB at current parity
 
@@ -163,11 +173,13 @@ contract CoinOffering is ReentrancyGuard, Pausable {
         atnbOut = (paymentAmount * parity) / PARITY_ONE;
         if (atnbOut == 0) revert DustAmount();
 
-        uint256 available = IERC20(atnbToken).balanceOf(address(this));
-        if (atnbOut > available) revert InsufficientInventory(atnbOut, available);
+        // Enforce the fundraising goal: cannot mint past the cap.
+        if (totalMinted + atnbOut > saleCap) {
+            revert CapExceeded(atnbOut, saleCap - totalMinted);
+        }
 
         // Effects
-        totalSold += atnbOut;
+        totalMinted += atnbOut;
         totalRaised[paymentToken] += paymentAmount;
 
         // Interactions ---------------------------------------------------------
@@ -180,9 +192,11 @@ contract CoinOffering is ReentrancyGuard, Pausable {
         //    invariant is enforced socially at registration time.
         IERC20(paymentToken).safeTransferFrom(msg.sender, registryAddress, paymentAmount);
 
-        // 2. Deliver ATNB from inventory to the buyer (grants governance; the
-        //    token auto-delegates to the default delegate on this receipt).
-        IERC20(atnbToken).safeTransfer(msg.sender, atnbOut);
+        // 2. Mint ATNB directly to the buyer (no inventory). Grants governance;
+        //    the token auto-delegates to the default delegate on this receipt.
+        //    Because tokens are minted on-demand, total supply only ever reflects
+        //    tokens actually held — dividends and votes are never diluted by float.
+        IMintableATNB(atnbToken).mint(msg.sender, atnbOut);
 
         emit TokensPurchased(msg.sender, paymentToken, paymentAmount, atnbOut, parity);
     }
@@ -222,9 +236,9 @@ contract CoinOffering is ReentrancyGuard, Pausable {
         return Strings.parseUint(parityStr);
     }
 
-    /// @notice Current ATNB inventory held by the offering.
-    function inventory() external view returns (uint256) {
-        return IERC20(atnbToken).balanceOf(address(this));
+    /// @notice ATNB still mintable before hitting the cap (the remaining goal).
+    function remaining() external view returns (uint256) {
+        return totalMinted >= saleCap ? 0 : saleCap - totalMinted;
     }
 
     // =========================================================================
@@ -241,13 +255,15 @@ contract CoinOffering is ReentrancyGuard, Pausable {
     }
 
     /**
-     * @notice Recover unsold ATNB inventory (e.g. to return it to the treasury).
-     * @dev Admin-gated so it leans on the timelock delay.
+     * @notice Set the fundraising cap (max ATNB the CO may ever mint). This IS
+     *         the goal: raise it to open a tranche, set it to `totalMinted` to
+     *         close the sale. Cannot be set below what's already been minted.
+     * @dev Admin-gated (timelock in production).
      */
-    function recoverInventory(address to, uint256 amount) external onlyAdmin {
-        if (to == address(0)) revert ZeroAddress();
-        IERC20(atnbToken).safeTransfer(to, amount);
-        emit InventoryRecovered(to, amount);
+    function setSaleCap(uint256 newCap) external onlyAdmin {
+        require(newCap >= totalMinted, "CO: cap below already minted");
+        emit SaleCapSet(saleCap, newCap);
+        saleCap = newCap;
     }
 
     /// @notice Pause buying.

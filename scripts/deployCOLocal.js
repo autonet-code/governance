@@ -1,0 +1,85 @@
+// Deploy the CoinOffering stack to a LOCAL Hardhat node (chainId 31337) and write
+// addresses for the Flutter frontend to consume. Run against a running node:
+//   npx hardhat node            # in one shell (persistent)
+//   npx hardhat run scripts/deployCOLocal.js --network localhost
+//
+// Uses the well-known funded test accounts so MetaMask can import a buyer key.
+const { ethers } = require("hardhat");
+const fs = require("fs");
+const path = require("path");
+
+async function main() {
+  const signers = await ethers.getSigners();
+  const deployer = signers[0];             // admin / DAO stand-in
+  const execDelegate = signers[1];         // execution-team delegate
+  const buyer = signers[2];                // a demo buyer (MetaMask can import this key)
+
+  const net = await ethers.provider.getNetwork();
+  console.log(`\n=== CO local deploy (chainId ${net.chainId}) ===`);
+  console.log("Deployer/admin:", deployer.address);
+  console.log("Exec delegate :", execDelegate.address);
+  console.log("Demo buyer    :", buyer.address);
+
+  // Registry (treasury + spend guard)
+  const Registry = await ethers.getContractFactory("Registry");
+  const registry = await Registry.deploy(deployer.address, deployer.address);
+  await registry.waitForDeployment();
+  const registryAddr = await registry.getAddress();
+
+  // ATNB = transferable RepToken
+  const RepToken = await ethers.getContractFactory("RepToken");
+  const atnb = await RepToken.deploy("Autonet Boats", "ATNB", registryAddr, deployer.address, [], [], true);
+  await atnb.waitForDeployment();
+  const atnbAddr = await atnb.getAddress();
+
+  // Test USDC (6 decimals)
+  const TestERC20 = await ethers.getContractFactory("TestERC20");
+  const usdc = await TestERC20.deploy("USD Coin", "USDC", 6, 0);
+  await usdc.waitForDeployment();
+  const usdcAddr = await usdc.getAddress();
+
+  // CoinOffering
+  const CO = await ethers.getContractFactory("CoinOffering");
+  const co = await CO.deploy(atnbAddr, registryAddr, deployer.address);
+  await co.waitForDeployment();
+  const coAddr = await co.getAddress();
+
+  // Wire: parity (1 USDC -> 2 ATNB => 2e18 * 1e12 = 2e30), default delegate,
+  // exempt CO inventory, mint inventory, fund the demo buyer with USDC.
+  const PARITY = ethers.parseEther("2") * (10n ** 12n);
+  await (await registry.editRegistry(`jurisdiction.parity.${usdcAddr.toLowerCase()}`, PARITY.toString())).wait();
+  // Wire the Registry's "jurisdiction" to ATNB so the dividend path
+  // (RepToken.claimPassiveIncome -> Registry.disburseEarmarked) is authorized.
+  await (await registry.setJurisdictionAddress(atnbAddr)).wait();
+  await (await atnb.setDefaultDelegate(execDelegate.address)).wait();
+  // Grant the CO minter rights and set the fundraising cap (the goal). No
+  // pre-minted inventory: the CO mints to buyers on demand, up to saleCap.
+  await (await atnb.setMinter(coAddr, true)).wait();
+  await (await co.setSaleCap(ethers.parseEther("1000000"))).wait(); // goal: 1,000,000 ATNB
+  await (await usdc.mint(buyer.address, ethers.parseUnits("100000", 6))).wait();
+
+  console.log("\nDeployed:");
+  console.log("  Registry    :", registryAddr);
+  console.log("  ATNB        :", atnbAddr);
+  console.log("  USDC        :", usdcAddr);
+  console.log("  CoinOffering:", coAddr);
+
+  // Write a frontend-consumable config (addresses + the demo buyer key for import).
+  const out = {
+    chainId: Number(net.chainId),
+    rpcUrl: "http://127.0.0.1:8545",
+    contracts: { registry: registryAddr, atnb: atnbAddr, usdc: usdcAddr, coinOffering: coAddr },
+    parity: PARITY.toString(),
+    accounts: {
+      admin: deployer.address,
+      executionDelegate: execDelegate.address,
+      demoBuyer: buyer.address,
+    },
+    note: "Local Hardhat. Import demoBuyer key 0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a into MetaMask (Account #2) to buy.",
+  };
+  const outPath = path.join(__dirname, "..", "deployments", "local-co.json");
+  fs.writeFileSync(outPath, JSON.stringify(out, null, 2));
+  console.log("\nWrote", outPath);
+}
+
+main().catch((e) => { console.error(e); process.exitCode = 1; });

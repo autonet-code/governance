@@ -56,12 +56,10 @@ describe("CoinOffering (CO)", function () {
         // undelegated are auto-delegated to the execution team.
         await atnb.connect(deployer).setDefaultDelegate(executionDelegate.address);
 
-        // The CO holds unsold inventory; that float must NOT accrue votes to the
-        // execution delegate. Exempt the CO so only buyers auto-delegate.
-        await atnb.connect(deployer).setAutoDelegateExempt(await co.getAddress(), true);
-
-        // DAO "mints ATNB to the CO" (deployer is admin of the freshly deployed token).
-        await atnb.connect(deployer).mint(await co.getAddress(), ethers.parseEther("1000000"));
+        // Grant the CO minter rights and set the fundraising cap (the goal).
+        // No pre-minted inventory: the CO mints to buyers on demand up to saleCap.
+        await atnb.connect(deployer).setMinter(await co.getAddress(), true);
+        await co.connect(dao).setSaleCap(ethers.parseEther("1000000"));
 
         // Buyer funded with USDC and approves the CO.
         await usdc.mint(buyer.address, ethers.parseUnits("100000", USDC_DECIMALS));
@@ -79,22 +77,21 @@ describe("CoinOffering (CO)", function () {
 
             const registryAddr = await registry.getAddress();
             const treasuryUsdcBefore = await usdc.balanceOf(registryAddr);
-            const coAtnbBefore = await atnb.balanceOf(await co.getAddress());
 
             await expect(co.connect(buyer).buy(await usdc.getAddress(), pay))
                 .to.emit(co, "TokensPurchased")
                 .withArgs(buyer.address, await usdc.getAddress(), pay, expectedAtnb, PARITY);
 
-            // ATNB delivered from inventory.
+            // ATNB minted to the buyer (no inventory; CO never holds ATNB).
             expect(await atnb.balanceOf(buyer.address)).to.equal(expectedAtnb);
-            expect(await atnb.balanceOf(await co.getAddress())).to.equal(coAtnbBefore - expectedAtnb);
+            expect(await atnb.balanceOf(await co.getAddress())).to.equal(0n);
 
             // Payment routed straight to the treasury — CO holds no cash.
             expect(await usdc.balanceOf(registryAddr)).to.equal(treasuryUsdcBefore + pay);
             expect(await usdc.balanceOf(await co.getAddress())).to.equal(0n);
 
             // Accounting.
-            expect(await co.totalSold()).to.equal(expectedAtnb);
+            expect(await co.totalMinted()).to.equal(expectedAtnb);
             expect(await co.totalRaised(await usdc.getAddress())).to.equal(pay);
         });
 
@@ -169,13 +166,21 @@ describe("CoinOffering (CO)", function () {
             ).to.be.revertedWithCustomError(co, "DustAmount");
         });
 
-        it("reverts when CO has insufficient ATNB inventory", async function () {
-            const inv = await co.inventory();
-            await co.connect(dao).recoverInventory(dao.address, inv);
+        it("reverts when a buy would exceed the sale cap (fundraising goal)", async function () {
+            // Lower the cap to just below one more purchase.
+            await co.connect(dao).setSaleCap(ethers.parseEther("1000")); // exactly 500 USDC worth
+            await co.connect(buyer).buy(await usdc.getAddress(), ethers.parseUnits("500", USDC_DECIMALS)); // hits cap
+            expect(await co.remaining()).to.equal(0n);
 
             await expect(
                 co.connect(buyer).buy(await usdc.getAddress(), ethers.parseUnits("1", USDC_DECIMALS))
-            ).to.be.revertedWithCustomError(co, "InsufficientInventory");
+            ).to.be.revertedWithCustomError(co, "CapExceeded");
+        });
+
+        it("tracks remaining toward the goal", async function () {
+            await co.connect(buyer).buy(await usdc.getAddress(), ethers.parseUnits("500", USDC_DECIMALS));
+            // cap 1,000,000 ATNB - 1,000 minted = 999,000 remaining
+            expect(await co.remaining()).to.equal(ethers.parseEther("999000"));
         });
     });
 
@@ -207,9 +212,17 @@ describe("CoinOffering (CO)", function () {
     // =========================================================================
 
     describe("admin", function () {
-        it("only admin can recover inventory", async function () {
-            await expect(co.connect(attacker).recoverInventory(attacker.address, 1n))
+        it("only admin can set the sale cap, and not below minted", async function () {
+            await expect(co.connect(attacker).setSaleCap(ethers.parseEther("5")))
                 .to.be.revertedWithCustomError(co, "NotAdmin");
+
+            await co.connect(buyer).buy(await usdc.getAddress(), ethers.parseUnits("500", USDC_DECIMALS));
+            // cannot set cap below the 1000 ATNB already minted
+            await expect(co.connect(dao).setSaleCap(ethers.parseEther("500")))
+                .to.be.revertedWith("CO: cap below already minted");
+            // can raise it
+            await expect(co.connect(dao).setSaleCap(ethers.parseEther("2000000")))
+                .to.emit(co, "SaleCapSet");
         });
 
         it("only admin can transfer admin", async function () {

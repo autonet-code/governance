@@ -51,8 +51,14 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     // Governance-settable. An exempt account can still self-delegate explicitly.
     mapping(address => bool) public autoDelegateExempt;
 
+    // Addresses authorized to mint, in addition to admin. Used to grant a sale
+    // contract (the Coin Offering) the right to mint tokens directly to buyers
+    // up to its own cap, so no pre-minted inventory is needed. Governance-settable.
+    mapping(address => bool) public minters;
+
     event DefaultDelegateUpdated(address indexed previous, address indexed current);
     event AutoDelegateExemptSet(address indexed account, bool exempt);
+    event MinterSet(address indexed account, bool allowed);
     event AutoDelegated(address indexed account, address indexed delegatee);
 
     address payable public immutable registryAddress;
@@ -284,9 +290,16 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         admin = newAdmin;
     }
 
-    // Mint and burn functions for governance proposals (controlled by admin/timelock)
+    // Grant/revoke minter rights (e.g. the Coin Offering). Governance-gated.
+    function setMinter(address account, bool allowed) external {
+        require(msg.sender == admin || msg.sender == timelockAddress, "RepToken: Caller is not the admin or Timelock");
+        minters[account] = allowed;
+        emit MinterSet(account, allowed);
+    }
+
+    // Mint: admin/timelock (governance proposals) or a whitelisted minter (the CO).
     function mint(address to, uint256 amount) public {
-        require(msg.sender == admin, "RepToken: Only admin can mint");
+        require(msg.sender == admin || minters[msg.sender], "RepToken: Not authorized to mint");
         _mint(to, amount);
     }
 
