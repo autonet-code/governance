@@ -18,6 +18,17 @@
  *   npx hardhat run scripts/deploy-autonet-jurisdiction.js --network localhost
  *   npx hardhat run scripts/deploy-autonet-jurisdiction.js --network ets
  *
+ * Governance timing (all in SECONDS, no hidden multipliers — see the units
+ * note at the constants below):
+ *   VOTING_DELAY_SECS    delay between propose and vote start (default 60)
+ *   VOTING_PERIOD_SECS   voting window (default 604800 = 1 week)
+ *   TIMELOCK_DELAY_SECS  timelock execution delay (default 60)
+ *
+ * TEST NETWORKS (shadownet genesis): the proposal lifecycle must be FAST —
+ * no voting delay, ~2 minute voting window, no execution delay:
+ *   VOTING_DELAY_SECS=0 VOTING_PERIOD_SECS=120 TIMELOCK_DELAY_SECS=0 \
+ *   npx hardhat run scripts/deploy-autonet-jurisdiction.js --network ets
+ *
  * Prerequisites:
  *   - For localhost: `npx hardhat node` running in another terminal
  *   - For ets/etm: PRIVATE_KEY in .env
@@ -35,11 +46,64 @@ const JURISDICTION_NAME = "Autonet";
 const TOKEN_NAME = "Autonet Rep";
 const TOKEN_SYMBOL = "AREP";
 
-// Governance parameters
-const TIMELOCK_DELAY_MINUTES = 1;       // 1 minute for testing
-const VOTING_PERIOD = 50400;            // ~1 week in blocks
+// ─── Governance timing — UNITS PATH (read before changing) ──────────────────
+//
+// The factories interpret governor timing values as MINUTES, and the governor
+// clock is TIMESTAMP-based — two facts that combined to turn the old constant
+// `VOTING_PERIOD = 50400` ("~1 week in blocks", a block-count figure from OZ
+// docs) into 3,024,000 SECONDS (35 days) on-chain:
+//
+//   script seconds/60 → govParams.votingPeriod → TrustlessFactory.deployDAOToken
+//   → daoSettings[1] → DAOFactory.deployDAO (names it `minsVoting`)
+//   → HomebaseDAO constructor: GovernorSettings(minsDelay * 1 minutes,
+//     minsVoting * 1 minutes, …)                      ← the hidden ×60
+//
+//   RepToken.CLOCK_MODE() == "mode=timestamp" (RepToken.sol:283), so
+//   GovernorSettings values are SECONDS, not blocks: 50400 × 60 = 3,024,000 s.
+//
+//   The governor's votingDelay rides the SAME ×60: govParams.timelockDelay
+//   (misleadingly named — it is the VOTING DELAY, not the timelock's) →
+//   daoSettings[0] → `minsDelay * 1 minutes`. The old hardcoded 1 → 60 s.
+//
+//   The TIMELOCK minDelay takes a separate ×60 path: script minutes →
+//   TrustlessFactory.deployInfrastructure(timelockDelayInMinutes) →
+//   InfrastructureFactory.deployTimelock(admin, timelockDelayInMinutes *
+//   1 minutes). The old TIMELOCK_DELAY_MINUTES = 1 → minDelay 60 s.
+//
+// The env vars below are SECONDS with no hidden multipliers: the script
+// divides by 60 (rounding UP — the factories cannot express sub-minute
+// granularity; 0 stays 0) before handing values to the minutes-based factory.
+//
+// Shadownet/test-network genesis (fast lifecycle, per user ruling):
+//   VOTING_DELAY_SECS=0 VOTING_PERIOD_SECS=120 TIMELOCK_DELAY_SECS=0
+
+function envSeconds(name, defaultSecs) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return defaultSecs;
+  const secs = Number(raw);
+  if (!Number.isInteger(secs) || secs < 0) {
+    throw new Error(`${name} must be a non-negative integer (seconds), got "${raw}"`);
+  }
+  return secs;
+}
+
+// Seconds → the factories' whole-minute unit (rounded up; warn on remainder).
+function toFactoryMinutes(name, secs) {
+  if (secs % 60 !== 0) {
+    const mins = Math.ceil(secs / 60);
+    console.warn(`  WARNING: ${name}=${secs}s is not a whole minute — the ` +
+      `factory only takes minutes; rounding UP to ${mins} min (${mins * 60}s).`);
+    return mins;
+  }
+  return secs / 60;
+}
+
+const VOTING_DELAY_SECS = envSeconds("VOTING_DELAY_SECS", 60);        // was govParams.timelockDelay=1 (min)
+const VOTING_PERIOD_SECS = envSeconds("VOTING_PERIOD_SECS", 604800);  // ~1 week INTENT, correctly expressed
+const TIMELOCK_DELAY_SECS = envSeconds("TIMELOCK_DELAY_SECS", 60);    // was TIMELOCK_DELAY_MINUTES=1
+
 const PROPOSAL_THRESHOLD = ethers.parseEther("10"); // 10 tokens to propose
-const QUORUM_FRACTION = 4;             // 4%
+const QUORUM_FRACTION = 4;             // 4% — one 1000-AREP voter clears it (needs 40)
 
 // Economy parameters
 const ARBITRATION_FEE_BPS = 250;       // 2.5%
@@ -456,8 +520,9 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════════════════
 
   console.log("Step 1: Deploying infrastructure (Economy, Timelock, Registry)...");
+  console.log(`  Timing: votingDelay=${VOTING_DELAY_SECS}s votingPeriod=${VOTING_PERIOD_SECS}s timelockDelay=${TIMELOCK_DELAY_SECS}s`);
   const tx1 = await trustlessFactory.deployInfrastructure(
-    TIMELOCK_DELAY_MINUTES,
+    toFactoryMinutes("TIMELOCK_DELAY_SECS", TIMELOCK_DELAY_SECS), // ×60 inside the factory
     ARBITRATION_FEE_BPS
   );
   const receipt1 = await tx1.wait();
@@ -489,8 +554,12 @@ async function main() {
 
   const govParams = {
     name: `${JURISDICTION_NAME} DAO`,
-    timelockDelay: 1,   // 1 block
-    votingPeriod: VOTING_PERIOD,
+    // NB: `timelockDelay` here is the GOVERNOR'S VOTING DELAY (misnamed in the
+    // factory struct), NOT the timelock minDelay. Both governor values are in
+    // the factory's MINUTES unit (×60 in HomebaseDAO's constructor, timestamp
+    // clock) — see the units-path note at the constants.
+    timelockDelay: toFactoryMinutes("VOTING_DELAY_SECS", VOTING_DELAY_SECS),
+    votingPeriod: toFactoryMinutes("VOTING_PERIOD_SECS", VOTING_PERIOD_SECS),
     proposalThreshold: PROPOSAL_THRESHOLD,
     quorumFraction: QUORUM_FRACTION,
   };
