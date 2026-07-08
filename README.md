@@ -55,28 +55,17 @@ Economic activity generates reputation, which translates to governance power. Th
 - DAO-to-DAO collaboration
 - Grant distribution with milestone tracking
 
-### 3. Autonet (AI Economic Layer)
+### 3. Autonet Integration (AI Economic Layer)
 
-An economic layer for decentralized AI services that bridges governance tokens with real-world compute. Autonet enables jurisdictions to host AI-powered services where usage is attested on-chain and rewards flow to service creators and their backers.
+The jurisdiction connects to the **external Autonet network** (the Substrate contract in the autonet repo). ATN — the network's training/inference credit (6-decimal) — is minted and accounted THERE, never locally: the legacy jurisdiction-local `Autonet.sol` token was removed from this suite. The jurisdiction-side surface is a set of satellites:
 
-- **Governance-to-credit conversion**: Lock RepTokens to mint ATN (Autonet credits)
-- **Service registry**: Register AI services with attestation of real-world utility
-- **Inference providers**: Services implement `IInferenceProvider` to accept ATN for compute
-- **Epoch-based rewards**: Usage-proportional reward distribution to service backers
-- **On-chain user identity**: Per-wallet `AutonetUser` contracts for identity and preferences
-
-**How it works:**
-
-1. Jurisdiction members lock governance tokens to mint ATN credits (one-way, irreversible)
-2. Service creators register AI services linked to Economy projects
-3. Users spend ATN on inference requests—ATN is burned as proof of real utility
-4. Usage is attested on-chain during reward epochs
-5. Rewards distribute proportionally to project backers based on service usage
+- **`AutonetVault`**: CoinOffering-shaped router that sells Substrate ATN for registry-whitelisted ERC20s at registry parity. Payment routes straight to the DAO treasury (Registry); ATN is minted to the buyer on the external Substrate via `IAutonetATN.mintFromVault`. Uncapped, buy-only, never custodies funds.
+- **`ReputationMirror`**: reads the soulbound agent reputation earned on the Substrate and mints RepToken to the human owners of owner-bound agents (mirror, don't bridge — no token ever flows between the two ledgers).
+- **`CoinOffering`**: sells the jurisdiction's own transferable governance token (ATNB) for whitelisted ERC20s under a DAO-set sale cap.
 
 **Use cases:**
-- Decentralized AI inference networks
-- AI agent orchestration governed by DAOs
-- On-chain attestation of AI service usage
+- Funding a jurisdiction treasury by selling network ATN
+- Translating agent training reputation into DAO governance weight
 - Economic alignment of AI services with community standards
 
 ## How They Connect
@@ -97,21 +86,24 @@ An economic layer for decentralized AI services that bridges governance tokens w
 │             └──────────────┬─────────────────┘                               │
 │                            │                                                 │
 │                   ┌────────▼────────┐       ┌──────────────────────────┐     │
-│                   │    RepToken     │       │      Autonet (AI)        │     │
-│                   │                 │──────►│                          │     │
-│                   │ Governance power│ Lock  │  • ATN inference credits │     │
-│                   │ from economic   │       │  • Service registry      │     │
-│                   │ activity        │       │  • Epoch-based rewards   │     │
-│                   └─────────────────┘       │  • User identity (chain) │     │
-│                                             │  • Inference providers   │     │
-│                                             └──────────────────────────┘     │
-└──────────────────────────────────────────────────────────────────────────────┘
+│                   │    RepToken     │       │  Autonet satellites      │     │
+│                   │                 │◄──────│                          │     │
+│                   │ Governance power│ Mirror│  • AutonetVault (sells   │     │
+│                   │ from economic   │       │    external Substrate    │     │
+│                   │ activity        │       │    ATN, pays treasury)   │     │
+│                   └─────────────────┘       │  • ReputationMirror      │     │
+│                                             │    (substrate rep →      │     │
+│                                             │     owner RepToken)      │     │
+│                                             └────────────┬─────────────┘     │
+└──────────────────────────────────────────────────────────┼───────────────────┘
+                                                           ▼
+                                             external Autonet Substrate (ATN)
 ```
 
 1. **Activity generates reputation**: Complete projects, fund work, or arbitrate disputes → earn RepTokens
 2. **Reputation enables governance**: Hold RepTokens → vote on proposals, create proposals, appeal rulings
 3. **Governance shapes the economy**: DAO votes set fees, quorums, thresholds, and can override arbitration
-4. **Reputation powers AI services**: Lock RepTokens → mint ATN credits → spend on decentralized inference → usage rewards flow back to backers
+4. **AI work feeds governance**: agents earn reputation on the external Substrate → ReputationMirror mints RepToken to their owners; AutonetVault sells Substrate ATN and funds the treasury
 
 ## Quick Start
 
@@ -141,8 +133,8 @@ npx hardhat run scripts/deployStandardFactory.js --network et
 # Economy DAO (governance + marketplace)
 npx hardhat run scripts/deployTrustlessFactory.js --network et
 
-# Autonet (AI economic layer)
-npx hardhat run scripts/deployAutonetFactory.js --network et
+# Autonet jurisdiction (DAO suite + genesis satellites; see script header)
+npx hardhat run scripts/deploy-autonet-jurisdiction.js --network et
 ```
 
 ### Run Tests
@@ -175,9 +167,9 @@ Detailed documentation is organized into chapters:
 | `Economy` | Marketplace contract that deploys and tracks projects |
 | `NativeProject` | Escrow contract for native currency (ETH/XTZ) projects |
 | `ERC20Project` | Escrow contract for ERC20 token projects |
-| `Autonet` | ERC20 token (ATN) + service registry + epoch-based reward distribution for AI services |
-| `AutonetUser` | Per-wallet on-chain identity contract with preferences and usage stats |
-| `IAutonetUser` | Interface for user identity contracts |
+| `AutonetVault` | Sells external Substrate ATN for whitelisted ERC20s; payment routes to the Registry treasury |
+| `ReputationMirror` | Mints RepToken to owners of agents that earned reputation on the external Substrate |
+| `CoinOffering` | Sells the transferable governance token (ATNB) for whitelisted ERC20s, capped by the DAO |
 
 ### Factory Contracts
 
@@ -187,7 +179,6 @@ Detailed documentation is organized into chapters:
 | `StandardFactoryTransferable` | DAO without economy | Transferable RepToken |
 | `StandardFactoryWrapped` | DAO wrapping existing ERC20 | WrappedRepToken |
 | `TrustlessFactory` | DAO with economy | Non-transferable RepToken |
-| `AutonetFactory` | Autonet instance for a jurisdiction | ATN (Autonet credits) |
 
 ## Key Concepts
 
@@ -222,27 +213,18 @@ Backers can choose to release a portion of their contribution immediately upon c
 
 ### Autonet: AI Economic Layer
 
-Autonet introduces an economic mechanism for decentralized AI services within a jurisdiction. The core idea: **AI alignment as economic equilibrium**—rather than constraining AI behavior through training alone, the system creates economic incentives where aligned work is subsidized and misaligned work carries premiums.
+The Autonet network's economics live on its own Substrate contract (autonet repo): ATN is minted there in lockstep with soulbound agent reputation, with no admin keys. The core idea: **AI alignment as economic equilibrium**—rather than constraining AI behavior through training alone, the system creates economic incentives where aligned work is subsidized and misaligned work carries premiums.
 
-**ATN Token Mechanics:**
-- RepToken holders lock governance tokens to mint ATN (1:1 default rate, configurable by governance)
-- Conversion is one-way and irreversible, committing tokens to the AI economy
-- ATN is a standard ERC20 token used to pay for inference and AI services
+This suite integrates with that network rather than reimplementing it:
 
-**Service Registry:**
-- Services register with a linked Economy project contract, a codebase hash (git commit or IPFS CID), and a service type
-- Two service types: `GENERAL` (attested usage) and `INFERENCE_PROVIDER` (accepts ATN for compute via `IInferenceProvider`)
-- Inference requests burn ATN—proving real utility and preventing unbacked token inflation
+**AutonetVault (ATN offering):**
+- Sells the external Substrate ATN for registry-whitelisted ERC20s at the registry-settled parity (`jurisdiction.parity.<token>`, 18-dec fixed point; ATN itself is 6-decimal — decimals are baked into the parity value)
+- Payment is pulled straight into the DAO treasury (Registry) — the vault never custodies funds
+- Mints via the minimal `IAutonetATN.mintFromVault(to, amount)` surface, which the Substrate implements gated to the vault address (a constructor arg on the Substrate side — see the genesis choreography in `scripts/deploy-autonet-jurisdiction.js`)
 
-**Epoch-Based Reward Distribution:**
-- Reward epochs allocate a budget of ATN across active services proportional to their attested usage
-- Project backers claim rewards proportional to their stake in the backing project
-- This creates a direct incentive loop: back useful AI services → earn ATN rewards
-
-**AutonetUser (On-Chain Identity):**
-- Each wallet can deploy an `AutonetUser` contract via `Autonet.createUserContract()`
-- Stores: standards agreement hash, alignment score (0-10000 basis points), key-value preferences, cumulative usage stats
-- Separates on-chain verifiable data from off-chain sensitive data (goals, conversation history, credentials)
+**ReputationMirror (reputation → governance):**
+- Reads `agentReputation` / `getAgentOwner` from the Substrate and mints RepToken to human owners proportional to newly earned agent reputation (delta-based, monotonic cursor, mirror-don't-bridge)
+- The DAO timelock governs the exchange rate and must grant the mirror minter rights on RepToken
 
 **Theoretical Foundation:**
 The framework is described in detail in the paper *"Emergent Alignment: Economic Mechanisms for the Peaceful Transfer of Work from Humans to AI"* (see `paper/` directory), which presents alignment as pricing based on semantic distance from published jurisdiction standards, with a seven-tendency World Model for value-aligned representation.
@@ -256,7 +238,6 @@ StandardFactory:        0xeB7509CC4496C857a3EC2D722d3AA10da419725d
 InfrastructureFactory:  0xaAee6c3C383D8f85920977375561fcb7CdA5543b
 DAOFactory:             0x72C0413227418e4C1bbA40559c762c15A1417db7
 RepTokenFactory:        0x440a296CF621F704ac25F5F27FB3d043F7B95F05
-AutonetFactory:         0xFE139f357eDdAD062e334723957EAe35990e838A
 ```
 
 ## Tech Stack
@@ -275,10 +256,9 @@ AutonetFactory:         0xFE139f357eDdAD062e334723957EAe35990e838A
 | Bad arbitration | DAO appeal system |
 | Reentrancy | ReentrancyGuard on treasury operations |
 | Abandoned projects | 150-day arbitration timeout |
-| Unbacked AI credits | One-way RepToken lock (irreversible conversion to ATN) |
-| Inference fraud | ATN burned on request; providers implement IInferenceProvider |
-| Reward gaming | Epoch-based proportional distribution with admin attestation |
-| Sybil identity | AutonetUser tied to wallet; factory enforces jurisdiction membership |
+| Vault custody risk | AutonetVault routes payment atomically to the Registry treasury; never holds funds |
+| Unbacked ATN sales | ATN minted only on the external Substrate, gated to the vault address fixed at Substrate construction |
+| Reputation double-count | ReputationMirror delta-based accrual over a monotonic per-agent cursor |
 
 ## Web Interfaces
 
