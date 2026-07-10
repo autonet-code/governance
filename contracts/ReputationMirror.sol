@@ -22,6 +22,14 @@ interface IMintableRepToken {
 }
 
 /// @title ReputationMirror
+/// @custom:deprecated RETIRED by docs/tool_substrate.md "Decision (2026-07-10):
+///         fees-only emission + REP-from-earnings". Under that model Substrate.sol
+///         stops minting reputation entirely, so there is NOTHING TO MIRROR: REP
+///         is a pure function of ratified ATN earnings, computed DAO-side by
+///         AutonetRepClaim.sol (which reads Substrate's agentMintTotal +
+///         serviceEarnings and mints RepToken 1:1). This contract is kept in-tree
+///         for history and for any in-flight deployment; new deployments should
+///         wire AutonetRepClaim instead and revoke this mirror's minter grant.
 /// @notice Derivation mirror per docs/jurisdiction_wiring_map.md §B3: the
 ///         ratified rule is **mirror, don't bridge**. Two reputation ledgers
 ///         measure different things and belong to different entities —
