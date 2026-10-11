@@ -811,8 +811,8 @@ Deployed 2026-10-11. Live addresses are kept in Firestore `contracts/Etherlink-S
 | StandardFactoryTransferable (wrapper_t) | `0xfA5Df76fEF1c434dfAb764F837C6b2cf42A6685D` |
 | StandardFactoryWrapped (wrapper_w) | `0x7BCFa3C390C9f004b0e43019094f4f6208e97c2D` |
 | TrustlessFactory (wrapper_trustless) | `0xE748fD0cE8aCFE3c187C6e16ABB6Ba6341Dd380F` |
-| NativeProject impl | `0xAA27316e0ebAa6726f34dAc5B73987c7330cF706` |
-| ERC20Project impl | `0x089fC80B09738D3e4a21dB7dbAFAC336326ae0B4` |
+| NativeProject impl | `0x422E09547f732f7aE1177Be0C42B6d3903fc9f3A` |
+| ERC20Project impl | `0xc873836843DA3C03D8A4aD08e99C3009b88fD179` |
 | InfrastructureFactory | `0xBb334a55096cDf2B7C46406c119eB989CCA4fbEb` |
 | DAOFactory | `0x432583bdEc29722d0593b1F3E198B793A5b9423F` |
 | RepTokenFactory | `0xDa57341ee91Fc987E4F56c560bf71dfAC705eF73` |
