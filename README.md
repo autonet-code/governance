@@ -231,13 +231,22 @@ The framework is described in detail in the paper *"Emergent Alignment: Economic
 
 ## Deployed Addresses
 
-### Etherlink Testnet
+### Etherlink Shadownet (chainId 127823)
+
+Deployed 2026-10-11. Live addresses are kept in Firestore `contracts/Etherlink-Shadownet`; the old Ghostnet testnet is retired.
 
 ```
-StandardFactory:        0xeB7509CC4496C857a3EC2D722d3AA10da419725d
-InfrastructureFactory:  0xaAee6c3C383D8f85920977375561fcb7CdA5543b
-DAOFactory:             0x72C0413227418e4C1bbA40559c762c15A1417db7
-RepTokenFactory:        0x440a296CF621F704ac25F5F27FB3d043F7B95F05
+StandardFactory (wrapper):               0x18A6cFc4E2e99C7f164Fc0857Bc2985D8CF629a2
+StandardFactoryTransferable (wrapper_t): 0xfA5Df76fEF1c434dfAb764F837C6b2cf42A6685D
+StandardFactoryWrapped (wrapper_w):      0x7BCFa3C390C9f004b0e43019094f4f6208e97c2D
+TrustlessFactory (wrapper_trustless):    0xE748fD0cE8aCFE3c187C6e16ABB6Ba6341Dd380F
+NativeProject impl:                      0xAA27316e0ebAa6726f34dAc5B73987c7330cF706
+ERC20Project impl:                       0x089fC80B09738D3e4a21dB7dbAFAC336326ae0B4
+InfrastructureFactory:                   0xBb334a55096cDf2B7C46406c119eB989CCA4fbEb
+DAOFactory:                              0x432583bdEc29722d0593b1F3E198B793A5b9423F
+RepTokenFactory:                         0xDa57341ee91Fc987E4F56c560bf71dfAC705eF73
+EconomyFactory:                          0x36d6364E7191C31272a2D456D02178f58a457373
+WrappedRepTokenFactory:                  0x61597CeDA571c910430b4Bad89F8f5939C91201E
 ```
 
 ## Tech Stack
