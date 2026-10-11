@@ -72,24 +72,28 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     
     mapping(address => Checkpoints.Trace208) private _balanceHistory;
 
+    // Reward epochs: each REP earns its share of an epoch budget exactly once. A holder who
+    // delegated to someone else at the snapshot keeps (1 - delegateShare) of it and their
+    // delegate earns the rest, so delegating to one's own second wallet gains nothing.
     struct RewardEpoch {
         uint256 budget;
         address paymentToken;
         uint48 startTimestamp;
+        uint16 delegateShareBps;
     }
 
-    uint256 public currentPassiveIncomeEpoch;
-    mapping(uint256 => RewardEpoch) public passiveIncomeEpochs;
-    mapping(uint256 => mapping(address => bool)) public hasClaimedPassiveIncome;
+    uint16 public constant MAX_DELEGATE_SHARE_BPS = 2500;
+    uint16 public delegateShareBps = 100; // 1% of a delegator's reward goes to their delegate
 
-    uint256 public currentDelegateRewardEpoch;
-    mapping(uint256 => RewardEpoch) public delegateRewardEpochs;
-    mapping(uint256 => mapping(address => bool)) public hasClaimedDelegateReward;
+    uint256 public currentRewardEpoch;
+    mapping(uint256 => RewardEpoch) public rewardEpochs;
+    mapping(uint256 => mapping(address => bool)) public hasClaimedReward;
 
-    event NewPassiveIncomeEpoch(uint256 indexed epochId, uint256 budget, address indexed paymentToken);
-    event PassiveIncomeClaimed(address indexed member, uint256 indexed epochId, uint256 amount);
-    event NewDelegateRewardEpoch(uint256 indexed epochId, uint256 budget, address indexed paymentToken);
-    event DelegateRewardClaimed(address indexed delegate, uint256 indexed epochId, uint256 amount);
+    mapping(address => Checkpoints.Trace208) private _delegateeHistory;
+
+    event NewRewardEpoch(uint256 indexed epochId, uint256 budget, address indexed paymentToken, uint16 delegateShareBps);
+    event RewardClaimed(address indexed account, uint256 indexed epochId, uint256 amount);
+    event DelegateShareSet(uint16 delegateShareBps);
     event ReputationClaimedFromEconomy(address indexed user, uint256 amount);
 
     constructor(
@@ -177,75 +181,80 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         return 0;
     }
     
-    // --- LEGACY INCENTIVE MECHANISMS ---
+    // --- REWARD EPOCHS ---
 
-    function startNewPassiveIncomeEpoch(uint256 budget, address paymentToken) external {
+    function setDelegateShareBps(uint16 newShareBps) external {
+        require(msg.sender == timelockAddress, "RepToken: Only Timelock can set the delegate share");
+        require(newShareBps <= MAX_DELEGATE_SHARE_BPS, "RepToken: Delegate share too high");
+        delegateShareBps = newShareBps;
+        emit DelegateShareSet(newShareBps);
+    }
+
+    function rewardPurpose(uint256 epochId, address paymentToken) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked("REWARD", epochId, paymentToken));
+    }
+
+    // Starts an epoch and reserves its budget in the registry in the same call.
+    function startNewRewardEpoch(uint256 budget, address paymentToken) external {
         require(msg.sender == timelockAddress, "RepToken: Only Timelock can start an epoch");
-        currentPassiveIncomeEpoch++;
-        passiveIncomeEpochs[currentPassiveIncomeEpoch] = RewardEpoch({
+        require(budget > 0, "RepToken: Empty budget");
+        currentRewardEpoch++;
+        rewardEpochs[currentRewardEpoch] = RewardEpoch({
             budget: budget,
             paymentToken: paymentToken,
-            startTimestamp: clock()
+            startTimestamp: clock(),
+            delegateShareBps: delegateShareBps
         });
-        emit NewPassiveIncomeEpoch(currentPassiveIncomeEpoch, budget, paymentToken);
+        Registry(registryAddress).earmarkFunds(rewardPurpose(currentRewardEpoch, paymentToken), budget, paymentToken);
+        emit NewRewardEpoch(currentRewardEpoch, budget, paymentToken, delegateShareBps);
     }
 
-    function startNewDelegateRewardEpoch(uint256 budget, address paymentToken) external {
-        require(msg.sender == timelockAddress, "RepToken: Only Timelock can start an epoch");
-        currentDelegateRewardEpoch++;
-        delegateRewardEpochs[currentDelegateRewardEpoch] = RewardEpoch({
-            budget: budget,
-            paymentToken: paymentToken,
-            startTimestamp: clock()
-        });
-        emit NewDelegateRewardEpoch(currentDelegateRewardEpoch, budget, paymentToken);
+    // An account's reward: its own REP (less the delegate's cut if delegated elsewhere)
+    // plus the delegate's cut of REP delegated to it, all at the snapshot before the epoch.
+    function rewardOf(uint256 epochId, address account) public view returns (uint256) {
+        RewardEpoch memory epoch = rewardEpochs[epochId];
+        require(epochId > 0 && epochId <= currentRewardEpoch, "RepToken: Invalid epoch ID");
+        uint256 snapshot = epoch.startTimestamp - 1;
+        uint256 totalReputation = getPastTotalSupply(snapshot);
+        if (totalReputation == 0) return 0;
+
+        uint256 balance = _getPastBalance(account, snapshot);
+        address delegatee = pastDelegatee(account, snapshot);
+        uint256 weight = balance;
+        if (delegatee != address(0) && delegatee != account) {
+            weight = (balance * (10000 - epoch.delegateShareBps)) / 10000;
+        }
+
+        // Votes include the account's own balance only if it delegated to itself
+        uint256 delegatedIn = getPastVotes(account, snapshot) - (delegatee == account ? balance : 0);
+        weight += (delegatedIn * epoch.delegateShareBps) / 10000;
+
+        return (weight * epoch.budget) / totalReputation;
     }
 
-    function claimPassiveIncome(uint256 epochId) external {
-        RewardEpoch storage epoch = passiveIncomeEpochs[epochId];
-        require(epochId > 0 && epochId <= currentPassiveIncomeEpoch, "RepToken: Invalid epoch ID");
-        require(epoch.startTimestamp > 0, "RepToken: Epoch does not exist");
-        require(!hasClaimedPassiveIncome[epochId][msg.sender], "RepToken: Already claimed for this epoch");
-        uint256 snapshotTime = epoch.startTimestamp - 1;
-        uint256 userReputation = _getPastBalance(msg.sender, snapshotTime);
-        require(userReputation > 0, "RepToken: No reputation at epoch start");
-        uint256 totalReputation = getPastTotalSupply(snapshotTime);
-        require(totalReputation > 0, "RepToken: Zero total supply at epoch start");
-        uint256 rewardAmount = (userReputation * epoch.budget) / totalReputation;
+    function claimReward(uint256 epochId) external {
+        require(!hasClaimedReward[epochId][msg.sender], "RepToken: Already claimed for this epoch");
+        uint256 rewardAmount = rewardOf(epochId, msg.sender);
         require(rewardAmount > 0, "RepToken: Reward amount is zero");
-        hasClaimedPassiveIncome[epochId][msg.sender] = true;
-        bytes32 purpose = keccak256(abi.encodePacked("PASSIVE_INCOME", epochId, epoch.paymentToken));
-        Registry(registryAddress).disburseEarmarked(msg.sender, rewardAmount, purpose, epoch.paymentToken);
-        emit PassiveIncomeClaimed(msg.sender, epochId, rewardAmount);
-    }
-
-    function claimRepresentationReward(uint256 epochId) external {
-        RewardEpoch storage epoch = delegateRewardEpochs[epochId];
-        require(epochId > 0 && epochId <= currentDelegateRewardEpoch, "RepToken: Invalid epoch ID");
-        require(epoch.startTimestamp > 0, "RepToken: Epoch does not exist");
-        require(!hasClaimedDelegateReward[epochId][msg.sender], "RepToken: Already claimed for this epoch");
-        uint256 snapshotTime = epoch.startTimestamp - 1;
-        uint256 totalVotingPower = getPastVotes(msg.sender, snapshotTime);
-        uint256 ownPastBalance = _getPastBalance(msg.sender, snapshotTime);
-        require(totalVotingPower > ownPastBalance, "RepToken: No delegated votes at epoch start");
-        uint256 delegatedVotes = totalVotingPower - ownPastBalance;
-        uint256 totalReputation = getPastTotalSupply(snapshotTime);
-        require(totalReputation > 0, "RepToken: Zero total supply at epoch start");
-        uint256 rewardAmount = (delegatedVotes * epoch.budget) / totalReputation;
-        require(rewardAmount > 0, "RepToken: Reward amount is zero");
-        hasClaimedDelegateReward[epochId][msg.sender] = true;
-        bytes32 purpose = keccak256(abi.encodePacked("DELEGATE_REWARD", epochId, epoch.paymentToken));
-        Registry(registryAddress).disburseEarmarked(msg.sender, rewardAmount, purpose, epoch.paymentToken);
-        emit DelegateRewardClaimed(msg.sender, epochId, rewardAmount);
+        hasClaimedReward[epochId][msg.sender] = true;
+        RewardEpoch memory epoch = rewardEpochs[epochId];
+        Registry(registryAddress).disburseEarmarked(msg.sender, rewardAmount, rewardPurpose(epochId, epoch.paymentToken), epoch.paymentToken);
+        emit RewardClaimed(msg.sender, epochId, rewardAmount);
     }
 
     // --- GETTERS & CONFIG ---
-    function getPassiveIncomeEpochStart(uint256 epochId) external view override returns (uint48) {
-        return passiveIncomeEpochs[epochId].startTimestamp;
+    function getRewardEpochStart(uint256 epochId) external view override returns (uint48) {
+        return rewardEpochs[epochId].startTimestamp;
     }
 
-    function getDelegateRewardEpochStart(uint256 epochId) external view override returns (uint48) {
-        return delegateRewardEpochs[epochId].startTimestamp;
+    function pastDelegatee(address account, uint256 timepoint) public view returns (address) {
+        require(timepoint < block.timestamp, "ERC20: snapshot query for future block");
+        return address(uint160(_delegateeHistory[account].upperLookup(uint48(timepoint))));
+    }
+
+    function _delegate(address account, address delegatee) internal override {
+        super._delegate(account, delegatee);
+        _delegateeHistory[account].push(clock(), uint208(uint160(delegatee)));
     }
 
     function _getPastBalance(address account, uint256 timepoint) internal view returns (uint256) {

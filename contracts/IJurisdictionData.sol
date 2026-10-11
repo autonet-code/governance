@@ -7,17 +7,10 @@ pragma solidity ^0.8.20;
  */
 interface IJurisdictionData {
     /**
-     * @dev Returns the start timestamp of a specific passive income epoch.
+     * @dev Returns the start timestamp of a specific reward epoch.
      * @param epochId The ID of the epoch to query.
      * @return The unix timestamp (as uint48) when the epoch started.
      */
-    function getPassiveIncomeEpochStart(uint256 epochId) external view returns (uint48);
-
-    /**
-     * @dev Returns the start timestamp of a specific delegate reward epoch.
-     * @param epochId The ID of the epoch to query.
-     * @return The unix timestamp (as uint48) when the epoch started.
-     */
-    function getDelegateRewardEpochStart(uint256 epochId) external view returns (uint48);
+    function getRewardEpochStart(uint256 epochId) external view returns (uint48);
 }
 // IJurisdictionData.sol

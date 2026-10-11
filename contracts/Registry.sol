@@ -16,6 +16,10 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
     address public wrapper;
     address public jurisdictionAddress;
     mapping(bytes32 => uint256) public earmarkedFunds;
+    // Earmarks reserve real balance: the per-token total can't be over-committed or spent
+    // by ordinary transfers. NATIVE_TOKEN stands for the chain's native currency.
+    mapping(bytes32 => address) public earmarkToken;
+    mapping(address => uint256) public totalEarmarked;
 
     // ---------------------------------------------------------------------
     // TREASURY-SPEND GUARD (rolling-window rate limit)
@@ -176,6 +180,7 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
 
     function transferETH(address payable to, uint256 amount) _treasuryOps external nonReentrant {
         require(address(this).balance >= amount, "Insufficient balance");
+        _requireUnreserved(NATIVE_TOKEN, amount);
         _meterSpend(NATIVE_TOKEN, amount);
         to.transfer(amount);
         emit TransferredETH(to, amount);
@@ -185,7 +190,8 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
         address token,
         address to,
         uint256 amount
-    ) external _treasuryOps {
+    ) external _treasuryOps nonReentrant {
+        _requireUnreserved(token, amount);
         _meterSpend(token, amount);
         bool success = IERC20(token).transfer(to, amount);
         require(success, "ERC20 transfer failed");
@@ -260,76 +266,77 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
         emit JurisdictionAddressSet(_jurisdictionAddress);
     }
 
-    function earmarkFunds(bytes32 purpose, uint256 amount, address tokenAddress) external _treasuryOps {
-        uint256 currentBalance = IERC20(tokenAddress).balanceOf(address(this));
-        require(currentBalance >= earmarkedFunds[purpose] + amount, "Cannot earmark more than available balance");
+    function _balanceOf(address token) internal view returns (uint256) {
+        return token == NATIVE_TOKEN ? address(this).balance : IERC20(token).balanceOf(address(this));
+    }
+
+    function _requireUnreserved(address token, uint256 amount) internal view {
+        require(_balanceOf(token) >= totalEarmarked[token] + amount, "Registry: Funds are earmarked");
+    }
+
+    function _release(bytes32 purpose, uint256 amount) internal {
+        earmarkedFunds[purpose] -= amount;
+        totalEarmarked[earmarkToken[purpose]] -= amount;
+    }
+
+    // The jurisdiction earmarks reward epoch budgets as it starts them (itself timelock-gated).
+    function earmarkFunds(bytes32 purpose, uint256 amount, address tokenAddress) external {
+        require(msg.sender == owner || msg.sender == jurisdictionAddress, "Only the DAO can earmark funds");
+        address existing = earmarkToken[purpose];
+        require(existing == address(0) || existing == tokenAddress, "Registry: Purpose bound to another token");
+        require(_balanceOf(tokenAddress) >= totalEarmarked[tokenAddress] + amount, "Cannot earmark more than available balance");
+        earmarkToken[purpose] = tokenAddress;
         earmarkedFunds[purpose] += amount;
+        totalEarmarked[tokenAddress] += amount;
         emit FundsEarmarked(purpose, amount);
     }
 
     function withdrawEarmarkedFunds(bytes32 purpose, uint256 amount) external _treasuryOps {
         require(earmarkedFunds[purpose] >= amount, "Registry: Cannot withdraw more than earmarked");
-        earmarkedFunds[purpose] -= amount;
+        _release(purpose, amount);
         emit EarmarkedFundsWithdrawn(purpose, amount);
     }
 
     function disburseEarmarked(address recipient, uint256 amount, bytes32 purpose, address tokenAddress) external nonReentrant {
         require(msg.sender == jurisdictionAddress, "Registry: Caller is not the Jurisdiction");
+        require(earmarkToken[purpose] == tokenAddress, "Registry: Wrong token for purpose");
         require(earmarkedFunds[purpose] >= amount, "Registry: Insufficient earmarked funds");
-
-        uint256 currentBalance = IERC20(tokenAddress).balanceOf(address(this));
-        require(currentBalance >= amount, "Registry: Insufficient token balance for disbursement");
 
         // Epoch-reward bypass path is ALSO metered: the rolling-window cap
         // covers this outflow exactly like a direct transferERC20, so the
         // disburse path cannot be used to outrun the build cadence.
         _meterSpend(tokenAddress, amount);
 
-        earmarkedFunds[purpose] -= amount;
-        bool success = IERC20(tokenAddress).transfer(recipient, amount);
-        require(success, "ERC20 transfer failed during disbursement");
+        _release(purpose, amount);
+        if (tokenAddress == NATIVE_TOKEN) {
+            (bool sent, ) = payable(recipient).call{value: amount}("");
+            require(sent, "Native transfer failed during disbursement");
+        } else {
+            bool success = IERC20(tokenAddress).transfer(recipient, amount);
+            require(success, "ERC20 transfer failed during disbursement");
+        }
         emit EarmarkedFundsDisbursed(recipient, purpose, amount);
     }
 
     /**
-     * @notice Allows DAO governance to reclaim funds from a concluded benefits epoch after a grace period.
+     * @notice Allows DAO governance to release the unclaimed rest of a reward epoch after a grace period.
      * @dev The grace period starts from the beginning of the *next* epoch.
      * @param epochId The ID of the epoch to reclaim from.
      * @param paymentToken The address of the token used in that epoch.
-     * @param isDelegateReward A boolean to specify which type of epoch it was.
      */
-    function reclaimEarmarkedFunds(uint256 epochId, address paymentToken, bool isDelegateReward) external _treasuryOps {
-        // 1. Get the configured grace period from this registry.
-        string memory gracePeriodStr = getRegistryValue("benefits.claim.gracePeriod");
-        uint256 gracePeriod = Strings.parseUint(gracePeriodStr);
+    function reclaimEarmarkedFunds(uint256 epochId, address paymentToken) external _treasuryOps {
+        uint256 gracePeriod = Strings.parseUint(getRegistryValue("benefits.claim.gracePeriod"));
         require(gracePeriod > 0, "Registry: Grace period not set");
 
-        // 2. Determine the timestamp when the grace period started.
-        // This is the start time of the *next* epoch (epochId + 1).
-        uint48 gracePeriodStartTime;
-        if (isDelegateReward) {
-            gracePeriodStartTime = IJurisdictionData(jurisdictionAddress).getDelegateRewardEpochStart(epochId + 1);
-        } else {
-            gracePeriodStartTime = IJurisdictionData(jurisdictionAddress).getPassiveIncomeEpochStart(epochId + 1);
-        }
-
-        // 3. Perform the critical time check.
+        uint48 gracePeriodStartTime = IJurisdictionData(jurisdictionAddress).getRewardEpochStart(epochId + 1);
         require(gracePeriodStartTime > 0, "Registry: The subsequent epoch has not started yet");
         require(block.timestamp > gracePeriodStartTime + gracePeriod, "Registry: Claim grace period has not passed");
 
-        // 4. Construct the purpose hash and reclaim the funds.
-        bytes32 purpose;
-        if (isDelegateReward) {
-            purpose = keccak256(abi.encodePacked("DELEGATE_REWARD", epochId, paymentToken));
-        } else {
-            purpose = keccak256(abi.encodePacked("PASSIVE_INCOME", epochId, paymentToken));
-        }
-
+        bytes32 purpose = keccak256(abi.encodePacked("REWARD", epochId, paymentToken));
         uint256 remainingAmount = earmarkedFunds[purpose];
         require(remainingAmount > 0, "Registry: No funds to reclaim");
 
-        earmarkedFunds[purpose] = 0;
-
+        _release(purpose, remainingAmount);
         emit EarmarkedFundsWithdrawn(purpose, remainingAmount);
     }
 

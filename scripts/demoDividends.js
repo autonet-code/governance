@@ -14,11 +14,6 @@ const { ethers } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 
-function key(...parts) {
-  // matches keccak256(abi.encodePacked("PASSIVE_INCOME", epochId(uint256), token(address)))
-  return ethers.solidityPackedKeccak256(["string", "uint256", "address"], parts);
-}
-
 async function main() {
   const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "deployments", "local-co.json")));
   const c = cfg.contracts;
@@ -30,9 +25,9 @@ async function main() {
   const co = await ethers.getContractAt(["function buy(address,uint256) returns (uint256)"], c.coinOffering);
   const atnb = await ethers.getContractAt([
     "function balanceOf(address) view returns (uint256)",
-    "function startNewPassiveIncomeEpoch(uint256,address)",
-    "function claimPassiveIncome(uint256)",
-    "function currentPassiveIncomeEpoch() view returns (uint256)",
+    "function startNewRewardEpoch(uint256,address)",
+    "function claimReward(uint256)",
+    "function currentRewardEpoch() view returns (uint256)",
     "function delegate(address)",
     "function delegates(address) view returns (address)",
   ], c.atnb);
@@ -44,7 +39,6 @@ async function main() {
     "function decimals() view returns (uint8)",
   ], c.usdc);
   const registry = await ethers.getContractAt([
-    "function earmarkFunds(bytes32,uint256,address) external",
     "function setSpendCap(address,uint256) external",
   ], c.registry);
 
@@ -73,20 +67,17 @@ async function main() {
   await (await registry.setSpendCap(c.usdc, 0)).wait(); // 0 == unmetered
 
   // --- 3. Earmark for the next epoch + start it ---
-  console.log("[3] Earmarking revenue + starting distribution epoch...");
-  const nextEpoch = (await atnb.currentPassiveIncomeEpoch()) + 1n;
-  const purpose = key("PASSIVE_INCOME", nextEpoch, c.usdc);
-  await (await registry.earmarkFunds(purpose, revenue, c.usdc)).wait();
-  await (await atnb.startNewPassiveIncomeEpoch(revenue, c.usdc)).wait();
-  const epochId = await atnb.currentPassiveIncomeEpoch();
+  console.log("[3] Starting distribution epoch (earmarks the budget itself)...");
+  await (await atnb.startNewRewardEpoch(revenue, c.usdc)).wait();
+  const epochId = await atnb.currentRewardEpoch();
   console.log("   Epoch", epochId.toString(), "started with", ethers.formatUnits(revenue, dec), "USDC budget");
 
   // --- 4. Holders claim ---
   console.log("\n[4] Holders claim dividends...");
   const aUsdcBefore = await usdc.balanceOf(alice.address);
   const bUsdcBefore = await usdc.balanceOf(bob.address);
-  await (await atnb.connect(alice).claimPassiveIncome(epochId)).wait();
-  await (await atnb.connect(bob).claimPassiveIncome(epochId)).wait();
+  await (await atnb.connect(alice).claimReward(epochId)).wait();
+  await (await atnb.connect(bob).claimReward(epochId)).wait();
   const aGain = (await usdc.balanceOf(alice.address)) - aUsdcBefore;
   const bGain = (await usdc.balanceOf(bob.address)) - bUsdcBefore;
   console.log("   Alice received:", ethers.formatUnits(aGain, dec), "USDC");
@@ -96,7 +87,8 @@ async function main() {
   const total = aGain + bGain;
   const ratioOk = aGain === bGain * 2n; // exact for these round numbers
   console.log("\n[5] Checks:");
-  console.log("   total distributed:", ethers.formatUnits(total, dec), "USDC (budget 3000)");
+  // Both holders are auto-delegated away, so their delegate's cut (1% by default) is left for the delegate to claim
+  console.log("   total distributed:", ethers.formatUnits(total, dec), "USDC (budget 3000, delegate cut unclaimed)");
   console.log("   Alice == 2x Bob (pro-rata by stake):", ratioOk);
   if (!ratioOk) throw new Error("pro-rata split incorrect");
   console.log("\n=== DIVIDEND CYCLE OK (dividends track ATNB balance, even when votes are delegated away) ===");
