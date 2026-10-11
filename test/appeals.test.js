@@ -105,7 +105,8 @@ describe("Appeals and Advanced Fund Handling", function () {
             expect(await project.ruling_hash()).to.equal("dao_ruling");
 
             // 6. Verify arbiter was still paid because they ruled
-            expect(await testToken.balanceOf(arbiter.address)).to.equal(arbitrationFee);
+            const arbiterNet = arbitrationFee - (arbitrationFee * (await economy.platformFeeBps())) / 10000n;
+            expect(await testToken.balanceOf(arbiter.address)).to.equal(arbiterNet);
         });
 
         it("should finalize the arbiter's ruling if the appeal initiation period expires", async function() {

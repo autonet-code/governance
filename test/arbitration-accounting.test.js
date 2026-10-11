@@ -214,7 +214,7 @@ describe("Arbitration Fund Accounting", function () {
             expect(backer1After - backer1Before).to.equal(-backersArbShare); // Lost only arb fee share
 
             // Arbiter gets full arb fee
-            expect(arbiterAfter - arbiterBefore).to.equal(arbitrationFee);
+            expect(arbiterAfter - arbiterBefore).to.equal(arbitrationFee - (arbitrationFee * BigInt(PLATFORM_FEE_BPS)) / 10000n);
 
             // Zero balance
             expect(await testToken.balanceOf(await project.getAddress())).to.equal(0);
@@ -266,7 +266,7 @@ describe("Arbitration Fund Accounting", function () {
 
             // Net change for contractor: -stake + earnings
             expect(contractorAfter - contractorBefore).to.equal(expectedContractorNet - contractorStake);
-            expect(arbiterAfter - arbiterBefore).to.equal(arbitrationFee);
+            expect(arbiterAfter - arbiterBefore).to.equal(arbitrationFee - (arbitrationFee * BigInt(PLATFORM_FEE_BPS)) / 10000n);
             expect(authorAfter - authorBefore).to.equal(authorFee);
 
             // Zero balance
@@ -300,7 +300,11 @@ describe("Arbitration Fund Accounting", function () {
 
             // Verify immediate was released
             const contractorAfterSign = await testToken.balanceOf(contractor.address);
-            expect(contractorAfterSign - contractorBefore).to.equal(immediateAmount - contractorStake);
+            // Immediate release is taxed like any other payout
+            const immediatePlatformFee = (immediateAmount * BigInt(PLATFORM_FEE_BPS)) / 10000n;
+            const immediateAuthorFee = ((immediateAmount - immediatePlatformFee) * BigInt(AUTHOR_FEE_BPS)) / 10000n;
+            const immediateNet = immediateAmount - immediatePlatformFee - immediateAuthorFee;
+            expect(contractorAfterSign - contractorBefore).to.equal(immediateNet - contractorStake);
 
             // Dispute
             await project.connect(backer1).voteToDispute();
@@ -329,13 +333,13 @@ describe("Arbitration Fund Accounting", function () {
             const backerRefund = ((pool * 10n) / 100n) * totalLocked / totalLocked; // 89.5
 
             // Contractor total gain = immediate + contractorNet - stake
-            expect(contractorAfter - contractorBefore).to.equal(immediateAmount + contractorNet - contractorStake);
+            expect(contractorAfter - contractorBefore).to.equal(immediateNet + contractorNet - contractorStake);
 
             // Backer loss = funding - refund
             expect(backer1Before - backer1After).to.equal(fundingAmount - backerRefund);
 
-            // Arbiter gets full fee
-            expect(arbiterAfter - arbiterBefore).to.equal(arbitrationFee);
+            // Arbiter gets the fee minus platform fee
+            expect(arbiterAfter - arbiterBefore).to.equal(arbitrationFee - (arbitrationFee * BigInt(PLATFORM_FEE_BPS)) / 10000n);
 
             // Zero balance
             expect(await testToken.balanceOf(await project.getAddress())).to.equal(0);
@@ -516,7 +520,7 @@ describe("Arbitration Fund Accounting", function () {
 
             expect(contractorAfter - contractorBefore).to.equal(contractorNet - contractorStake);
             expect(backer1Before - backer1After).to.equal(fundingAmount - backerRefund);
-            expect(arbiterAfter - arbiterBefore).to.equal(arbitrationFee);
+            expect(arbiterAfter - arbiterBefore).to.equal(arbitrationFee - (arbitrationFee * BigInt(PLATFORM_FEE_BPS)) / 10000n);
 
             // Zero balance
             expect(await testToken.balanceOf(await project.getAddress())).to.equal(0);

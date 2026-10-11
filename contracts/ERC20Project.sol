@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./IEconomy.sol";
 import "./IGovernedEconomy.sol";
 import "@openzeppelin/contracts/governance/utils/IVotes.sol";
@@ -9,6 +10,8 @@ import "@openzeppelin/contracts/governance/IGovernor.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
 contract ERC20Project is Initializable {
+    using SafeERC20 for IERC20;
+
     IEconomy public economy;
     IERC20 public token;
     uint public coolingOffPeriodEnds;
@@ -186,11 +189,6 @@ contract ERC20Project is Initializable {
         require(amount > 0, "Amount must be greater than zero.");
         require(immediateBps <= IGovernedEconomy(address(economy)).maxImmediateBps(), "Immediate percentage exceeds maximum allowed");
 
-        require(
-            token.transferFrom(msg.sender, address(this), amount),
-            "Token transfer failed. Did you approve?"
-        );
-
         uint immediateAmount = (amount * immediateBps) / 10000;
 
         if (contributions[msg.sender].total == 0) {
@@ -209,6 +207,7 @@ contract ERC20Project is Initializable {
         totalLocked += amount - immediateAmount;
         projectValue += amount;
 
+        token.safeTransferFrom(msg.sender, address(this), amount);
         emit SendFunds(msg.sender, amount, immediateBps);
     }
 
@@ -219,20 +218,48 @@ contract ERC20Project is Initializable {
         require(projectValue > 0, "Can't sign a contract with no funds in it.");
 
         arbitrationFee = (totalLocked * IGovernedEconomy(address(economy)).arbitrationFeeBps()) / 10000;
-        require(token.transferFrom(msg.sender, address(this), arbitrationFee / 2), "Must stake half the arbitration fee to sign.");
+        token.safeTransferFrom(msg.sender, address(this), arbitrationFee / 2);
 
         stage = Stage.Ongoing;
         emit ContractSigned(msg.sender);
 
-        // Release immediate funds to contractor (fee-free)
+        // Release immediate funds to contractor (taxed like any other payout)
         if (totalImmediate > 0) {
             immediateReleased = totalImmediate;
-            economy.updateEarnings(contractor, totalImmediate, address(token));
-            require(token.transfer(contractor, totalImmediate), "Failed to send immediate funds to contractor");
-            emit ImmediateFundsReleased(contractor, totalImmediate);
+            uint paid = _payContractor(totalImmediate);
+            emit ImmediateFundsReleased(contractor, paid);
         }
     }
-    
+
+    // Every payout that accrues reputation pays the platform fee to the treasury first.
+    // Returns the amount the payee actually received.
+    function _payWithFees(address payee, uint amount, bool withAuthorFee) private returns (uint) {
+        IGovernedEconomy governedEconomy = IGovernedEconomy(address(economy));
+
+        uint platformFee = (amount * governedEconomy.platformFeeBps()) / 10000;
+        uint remainder = amount - platformFee;
+        uint authorFee = withAuthorFee ? (remainder * governedEconomy.authorFeeBps()) / 10000 : 0;
+        uint net = remainder - authorFee;
+
+        if (platformFee > 0) {
+            token.safeTransfer(governedEconomy.registryAddress(), platformFee);
+        }
+        if (authorFee > 0) {
+            economy.updateEarnings(author, authorFee, address(token));
+            token.safeTransfer(author, authorFee);
+            emit AuthorPaid(author, authorFee);
+        }
+        if (net > 0) {
+            economy.updateEarnings(payee, net, address(token));
+            token.safeTransfer(payee, net);
+        }
+        return net;
+    }
+
+    function _payContractor(uint amount) private returns (uint) {
+        return _payWithFees(contractor, amount, true);
+    }
+
     // Helper to calculate locked amount for a contributor
     function _getLockedAmount(address contributor) internal view returns (uint) {
         Contribution memory contrib = contributions[contributor];
@@ -403,12 +430,11 @@ contract ERC20Project is Initializable {
         availableToContractor = (pool * percent) / 100;
 
         if (arbiterHasRuled) {
-            require(token.transfer(arbiter, arbitrationFee), "Failed to send arbitration fee to arbiter");
-            economy.updateEarnings(arbiter, arbitrationFee, address(token));
+            _payWithFees(arbiter, arbitrationFee, false);
         } else {
             // Arbiter didn't rule - forfeit fee to DAO treasury
             address registry = IGovernedEconomy(address(economy)).registryAddress();
-            require(token.transfer(registry, arbitrationFee), "Failed to send forfeited fee to DAO treasury");
+            token.safeTransfer(registry, arbitrationFee);
         }
         emit ProjectClosed(msg.sender);
     }
@@ -421,29 +447,8 @@ contract ERC20Project is Initializable {
         require(amountToPay > 0, "Nothing to withdraw");
         availableToContractor = 0;
 
-        IGovernedEconomy governedEconomy = IGovernedEconomy(address(economy));
-        uint platformFee = (amountToPay * governedEconomy.platformFeeBps()) / 10000;
-        uint256 remainder = amountToPay - platformFee;
-        uint authorFee = (remainder * governedEconomy.authorFeeBps()) / 10000;
-        uint256 amountToWithdraw = remainder - authorFee;
-        
-        economy.updateEarnings(contractor, amountToWithdraw, address(token));
-        if (authorFee > 0) {
-            economy.updateEarnings(author, authorFee, address(token));
-            require(token.transfer(author, authorFee), "Failed to send fee to author");
-            emit AuthorPaid(author, authorFee);
-        }
-
-        if (amountToWithdraw > 0) {
-            require(token.transfer(contractor, amountToWithdraw), "Failed to send tokens to contractor");
-        }
-
-        if (platformFee > 0) {
-            address registry = governedEconomy.registryAddress();
-            require(token.transfer(registry, platformFee), "Failed to send platform fee to DAO treasury");
-        }
-
-        emit ContractorPaid(contractor, amountToWithdraw);
+        uint paid = _payContractor(amountToPay);
+        emit ContractorPaid(contractor, paid);
     }
     
     function withdrawAsContributor() public {
@@ -489,7 +494,7 @@ contract ERC20Project is Initializable {
         }
 
         if (expenditure > 0) economy.updateSpendings(msg.sender, expenditure, address(token));
-        if (exitAmount > 0) require(token.transfer(msg.sender, exitAmount), "Failed to send tokens");
+        if (exitAmount > 0) token.safeTransfer(msg.sender, exitAmount);
         emit ContributorWithdrawn(msg.sender, exitAmount);
     }
     
@@ -501,7 +506,7 @@ contract ERC20Project is Initializable {
 
         contractorReclaimedStake = true;
         uint stakeAmount = arbitrationFee / 2;
-        require(token.transfer(contractor, stakeAmount), "Failed to withdraw stake.");
+        token.safeTransfer(contractor, stakeAmount);
     }
     
     function daoVeto() public {
@@ -530,7 +535,7 @@ contract ERC20Project is Initializable {
         if (totalBalance > trackedBalance) {
             uint256 orphanedAmount = totalBalance - trackedBalance;
             address registry = IGovernedEconomy(address(economy)).registryAddress();
-            require(sweepToken.transfer(registry, orphanedAmount), "Failed to sweep tokens to DAO treasury");
+            sweepToken.safeTransfer(registry, orphanedAmount);
             emit OrphanedTokensSwept(tokenAddress, orphanedAmount);
         }
     }

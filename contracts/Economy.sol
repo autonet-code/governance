@@ -31,6 +31,13 @@ contract Economy is IEconomy {
     uint public appealPeriod;
     uint public maxImmediateBps; // Max % of contribution that can be released immediately (basis points)
 
+    // Every payout that accrues reputation pays the platform fee to the treasury, so the floor
+    // is the minimum price of reputation. Without it, wash trading mints REP for free.
+    uint public constant MIN_PLATFORM_FEE_BPS = 100; // 1%
+
+    // Configures the economy until the DAO addresses are set; after that only the timelock can.
+    address public admin;
+
     // --- STATE: Project & User Ledgers ---
     address public nativeProjectImplementation;
     address public erc20ProjectImplementation;
@@ -94,6 +101,7 @@ contract Economy is IEconomy {
     event ProjectThresholdSet(uint newThreshold);
     event AppealPeriodSet(uint newPeriod);
     event MaxImmediateBpsSet(uint newMaxBps);
+    event AdminTransferred(address newAdmin);
 
     constructor(uint _arbitrationFeeBps) {
         arbitrationFeeBps = _arbitrationFeeBps;
@@ -103,10 +111,25 @@ contract Economy is IEconomy {
         backersVoteQuorumBps = 7000; // 70%
         appealPeriod = 7 days;
         maxImmediateBps = 2000; // 20% - max portion of contribution available to contractor immediately
+        admin = msg.sender;
     }
 
-    function setImplementations(address _native, address _erc20) external {
-        require(timelockAddress == address(0) || msg.sender == timelockAddress, "Protected");
+    modifier onlyGovernance() {
+        if (timelockAddress == address(0)) {
+            require(msg.sender == admin, "Protected");
+        } else {
+            require(msg.sender == timelockAddress, "Protected");
+        }
+        _;
+    }
+
+    function transferAdmin(address newAdmin) external {
+        require(timelockAddress == address(0) && msg.sender == admin, "Protected");
+        admin = newAdmin;
+        emit AdminTransferred(newAdmin);
+    }
+
+    function setImplementations(address _native, address _erc20) external onlyGovernance {
         nativeProjectImplementation = _native;
         erc20ProjectImplementation = _erc20;
     }
@@ -238,6 +261,8 @@ contract Economy is IEconomy {
 
     function setDaoAddresses(address _timelock, address _registry, address _governor, address _repToken) external {
         require(timelockAddress == address(0), "DAO addresses can only be set once.");
+        require(msg.sender == admin, "Protected");
+        require(_timelock != address(0), "Invalid timelock");
         timelockAddress = _timelock;
         registryAddress = _registry;
         governorAddress = _governor;
@@ -245,51 +270,44 @@ contract Economy is IEconomy {
         emit DaoAddressesSet(_timelock, _registry, _governor, _repToken);
     }
 
-    function setPlatformFee(uint newFeeBps) external {
-        require(timelockAddress == address(0) || msg.sender == timelockAddress, "Protected");
+    function setPlatformFee(uint newFeeBps) external onlyGovernance {
+        require(newFeeBps >= MIN_PLATFORM_FEE_BPS && newFeeBps <= 5000, "Platform fee out of range");
         platformFeeBps = newFeeBps;
         emit PlatformFeeSet(newFeeBps);
     }
 
-    function setAuthorFee(uint newFeeBps) external {
-        require(timelockAddress == address(0) || msg.sender == timelockAddress, "Protected");
+    function setAuthorFee(uint newFeeBps) external onlyGovernance {
         authorFeeBps = newFeeBps;
         emit AuthorFeeSet(newFeeBps);
     }
 
-    function setArbitrationFee(uint newFeeBps) external {
-        require(timelockAddress == address(0) || msg.sender == timelockAddress, "Protected");
+    function setArbitrationFee(uint newFeeBps) external onlyGovernance {
         arbitrationFeeBps = newFeeBps;
         emit ArbitrationFeeSet(newFeeBps);
     }
 
-    function setCoolingOffPeriod(uint newPeriod) external {
-        require(timelockAddress == address(0) || msg.sender == timelockAddress, "Protected");
+    function setCoolingOffPeriod(uint newPeriod) external onlyGovernance {
         coolingOffPeriod = newPeriod;
         emit CoolingOffPeriodSet(newPeriod);
     }
 
-    function setBackersVoteQuorum(uint newQuorumBps) external {
-        require(timelockAddress == address(0) || msg.sender == timelockAddress, "Protected");
+    function setBackersVoteQuorum(uint newQuorumBps) external onlyGovernance {
         require(newQuorumBps >= 5000 && newQuorumBps <= 9900, "Quorum must be between 50% and 99%");
         backersVoteQuorumBps = newQuorumBps;
         emit BackersVoteQuorumSet(newQuorumBps);
     }
 
-    function setProjectThreshold(uint newThreshold) external {
-        require(timelockAddress == address(0) || msg.sender == timelockAddress, "Protected");
+    function setProjectThreshold(uint newThreshold) external onlyGovernance {
         projectThreshold = newThreshold;
         emit ProjectThresholdSet(newThreshold);
     }
 
-    function setAppealPeriod(uint newPeriod) external {
-        require(timelockAddress == address(0) || msg.sender == timelockAddress, "Protected");
+    function setAppealPeriod(uint newPeriod) external onlyGovernance {
         appealPeriod = newPeriod;
         emit AppealPeriodSet(newPeriod);
     }
 
-    function setMaxImmediateBps(uint newMaxBps) external {
-        require(timelockAddress == address(0) || msg.sender == timelockAddress, "Protected");
+    function setMaxImmediateBps(uint newMaxBps) external onlyGovernance {
         require(newMaxBps <= 5000, "Max immediate cannot exceed 50%");
         maxImmediateBps = newMaxBps;
         emit MaxImmediateBpsSet(newMaxBps);

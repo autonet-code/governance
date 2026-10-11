@@ -150,8 +150,9 @@ describe("Project Lifecycle under DAO Governance", function () {
             // 5. Verify final state (Closed)
             expect(await project.stage()).to.equal(6); // Closed
             expect(await project.disputeResolution()).to.equal(arbiterPayoutPercent);
-            // Arbiter gets the full arbitration fee
-            expect(await ethers.provider.getBalance(arbiter.address)).to.equal(arbiterBalanceBefore - arbitrateGasUsed + arbitrationFee);
+            // Arbiter gets the arbitration fee minus the platform fee
+            const arbiterNet = arbitrationFee - (arbitrationFee * (await economy.platformFeeBps())) / 10000n;
+            expect(await ethers.provider.getBalance(arbiter.address)).to.equal(arbiterBalanceBefore - arbitrateGasUsed + arbiterNet);
 
             // 6. Contractor withdraws their partial payment
             // The project value after arbitration fee deduction (half comes from project funds)

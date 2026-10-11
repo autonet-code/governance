@@ -9,6 +9,7 @@ contract EconomyFactory {
 
     function deployEconomy(uint arbitrationFeeBps) external returns (address) {
         Economy economy = new Economy(arbitrationFeeBps);
+        economy.transferAdmin(msg.sender);
         deployedEconomies.push(address(economy));
         return address(economy);
     }

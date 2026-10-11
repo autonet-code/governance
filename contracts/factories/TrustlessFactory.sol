@@ -50,14 +50,19 @@ contract TrustlessFactory {
     EconomyFactory public immutable economyFactory;
     RepTokenFactory public immutable repTokenFactory;
 
-    // Storage for deployment parameters to emit NewDaoCreated event
+    // A suite is deployed over three transactions. Each in-progress deployment is bound to the
+    // caller that started it, so nobody else can finalize it with their own governor.
     struct DeploymentData {
+        address economy;
+        address registry;
+        address timelock;
+        address repToken;
+        address dao;
         TokenParams tokenParams;
         GovParams govParams;
         uint256 timelockDelay;
-        bool isSet;
     }
-    DeploymentData private currentDeployment;
+    mapping(address => DeploymentData) private pendingDeployments;
 
     event InfrastructureDeployed(address economy, address registry, address timelock);
     event DAOTokenDeployed(address repToken, address dao);
@@ -96,8 +101,12 @@ contract TrustlessFactory {
         address timelockAddr = infrastructureFactory.deployTimelock(address(this), timelockDelayInMinutes * 1 minutes);
         address registryAddr = infrastructureFactory.deployRegistry(address(this), address(0));
 
-        // Store timelock delay for later event emission
-        currentDeployment.timelockDelay = timelockDelayInMinutes * 1 minutes;
+        delete pendingDeployments[msg.sender];
+        DeploymentData storage d = pendingDeployments[msg.sender];
+        d.economy = economyAddr;
+        d.registry = registryAddr;
+        d.timelock = timelockAddr;
+        d.timelockDelay = timelockDelayInMinutes * 1 minutes;
 
         emit InfrastructureDeployed(economyAddr, registryAddr, timelockAddr);
     }
@@ -108,10 +117,11 @@ contract TrustlessFactory {
         TokenParams calldata _tokenParams,
         GovParams calldata _govParams
     ) external {
-        // Store params for later event emission
-        currentDeployment.tokenParams = _tokenParams;
-        currentDeployment.govParams = _govParams;
-        currentDeployment.isSet = true;
+        DeploymentData storage d = pendingDeployments[msg.sender];
+        require(d.registry != address(0) && d.repToken == address(0), "No infrastructure pending for caller");
+        require(registryAddr == d.registry && timelockAddr == d.timelock, "Not the caller's infrastructure");
+        d.tokenParams = _tokenParams;
+        d.govParams = _govParams;
 
         address repTokenAddr = repTokenFactory.deployRepToken(
             _tokenParams.name, _tokenParams.symbol, payable(registryAddr), timelockAddr,
@@ -125,6 +135,8 @@ contract TrustlessFactory {
         daoSettings[2] = _govParams.proposalThreshold;
         daoSettings[3] = _govParams.quorumFraction;
         address daoAddr = daoFactory.deployDAO(repTokenAddr, timelockAddr, _govParams.name, daoSettings);
+        d.repToken = repTokenAddr;
+        d.dao = daoAddr;
         emit DAOTokenDeployed(repTokenAddr, daoAddr);
     }
 
@@ -142,6 +154,8 @@ contract TrustlessFactory {
         address timelockAddr = _addressParams.contractAddresses[2];
         address repTokenAddr = _addressParams.contractAddresses[3];
         address daoAddr = _addressParams.contractAddresses[4];
+
+        _checkPending(_addressParams.contractAddresses);
 
         Economy economy = Economy(payable(economyAddr));
         Registry registry = Registry(payable(registryAddr));
@@ -177,24 +191,42 @@ contract TrustlessFactory {
 
         emit SuiteConfigured(msg.sender, economyAddr, registryAddr, timelockAddr, repTokenAddr, daoAddr);
 
-        // Emit NewDaoCreated event for indexer compatibility
-        if (currentDeployment.isSet) {
-            emit NewDaoCreated(
-                daoAddr,
-                repTokenAddr,
-                currentDeployment.tokenParams.initialMembers,
-                currentDeployment.tokenParams.initialAmounts,
-                currentDeployment.tokenParams.name,
-                currentDeployment.tokenParams.symbol,
-                "Economy DAO", // Description for economy DAOs
-                currentDeployment.timelockDelay,
-                registryAddr,
-                _registryKeys,
-                _registryValues
-            );
-            // Clear deployment data
-            delete currentDeployment;
-        }
+        _emitNewDaoCreated(daoAddr, repTokenAddr, registryAddr, _registryKeys, _registryValues);
+        delete pendingDeployments[msg.sender];
+    }
+
+    function _checkPending(address[5] calldata addrs) private view {
+        DeploymentData storage d = pendingDeployments[msg.sender];
+        require(d.dao != address(0), "No deployment pending for caller");
+        require(
+            addrs[0] == d.economy && addrs[1] == d.registry && addrs[2] == d.timelock &&
+            addrs[3] == d.repToken && addrs[4] == d.dao,
+            "Addresses do not match caller's deployment"
+        );
+    }
+
+    // Emitted for indexer compatibility
+    function _emitNewDaoCreated(
+        address daoAddr,
+        address repTokenAddr,
+        address registryAddr,
+        string[] calldata _registryKeys,
+        string[] calldata _registryValues
+    ) private {
+        DeploymentData storage d = pendingDeployments[msg.sender];
+        emit NewDaoCreated(
+            daoAddr,
+            repTokenAddr,
+            d.tokenParams.initialMembers,
+            d.tokenParams.initialAmounts,
+            d.tokenParams.name,
+            d.tokenParams.symbol,
+            "Economy DAO", // Description for economy DAOs
+            d.timelockDelay,
+            registryAddr,
+            _registryKeys,
+            _registryValues
+        );
     }
 }
 // TrustlessFactory.solasdas

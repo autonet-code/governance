@@ -236,19 +236,45 @@ contract NativeProject is Initializable {
         stage = Stage.Ongoing;
         emit ContractSigned(msg.sender);
 
-        // Release immediate funds to contractor (fee-free - fees only apply to escrow release)
+        // Release immediate funds to contractor (taxed like any other payout)
         if (totalImmediate > 0) {
             immediateReleased = totalImmediate;
-
-            // Record earnings for the contractor (immediate portion is fee-free)
-            economy.updateEarnings(contractor, totalImmediate, economy.NATIVE_CURRENCY());
-
-            // Transfer immediate funds to contractor
-            (bool sent, ) = payable(contractor).call{value: totalImmediate}("");
-            require(sent, "Failed to send immediate funds to contractor");
-
-            emit ImmediateFundsReleased(contractor, totalImmediate);
+            uint paid = _payContractor(totalImmediate);
+            emit ImmediateFundsReleased(contractor, paid);
         }
+    }
+
+    // Every payout that accrues reputation pays the platform fee to the treasury first.
+    // Returns the amount the payee actually received.
+    function _payWithFees(address payee, uint amount, bool withAuthorFee) private returns (uint) {
+        IGovernedEconomy governedEconomy = IGovernedEconomy(address(economy));
+        address nativeCurrency = economy.NATIVE_CURRENCY();
+
+        uint platformFee = (amount * governedEconomy.platformFeeBps()) / 10000;
+        uint remainder = amount - platformFee;
+        uint authorFee = withAuthorFee ? (remainder * governedEconomy.authorFeeBps()) / 10000 : 0;
+        uint net = remainder - authorFee;
+
+        if (platformFee > 0) {
+            (bool sentRegistry, ) = payable(governedEconomy.registryAddress()).call{value: platformFee}("");
+            require(sentRegistry, "Failed to send platform fee to DAO treasury");
+        }
+        if (authorFee > 0) {
+            economy.updateEarnings(author, authorFee, nativeCurrency);
+            (bool sentAuthor, ) = payable(author).call{value: authorFee}("");
+            require(sentAuthor, "Failed to send Ether to author");
+            emit AuthorPaid(author, authorFee);
+        }
+        if (net > 0) {
+            economy.updateEarnings(payee, net, nativeCurrency);
+            (bool sent, ) = payable(payee).call{value: net}("");
+            require(sent, "Failed to send Ether");
+        }
+        return net;
+    }
+
+    function _payContractor(uint amount) private returns (uint) {
+        return _payWithFees(contractor, amount, true);
     }
 
     // Helper to calculate locked amount for a contributor
@@ -409,10 +435,8 @@ contract NativeProject is Initializable {
         availableToContractor = (pool * percent) / 100;
 
         if (arbiterHasRuled) {
-            // Pay arbiter the full fee
-            (bool sentArbiter, ) = payable(arbiter).call{value: arbitrationFee}("");
-            require(sentArbiter, "Failed to send arbitration fee to arbiter");
-            economy.updateEarnings(arbiter, arbitrationFee, economy.NATIVE_CURRENCY());
+            // Pay arbiter the fee, less the platform fee
+            _payWithFees(arbiter, arbitrationFee, false);
         } else {
             // Arbiter didn't rule - forfeit fee to DAO treasury
             address registry = IGovernedEconomy(address(economy)).registryAddress();
@@ -431,33 +455,8 @@ contract NativeProject is Initializable {
         require(amountToPay > 0, "Nothing to withdraw");
         availableToContractor = 0;
 
-        IGovernedEconomy governedEconomy = IGovernedEconomy(address(economy));
-        uint platformFee = (amountToPay * governedEconomy.platformFeeBps()) / 10000;
-        uint256 remainder = amountToPay - platformFee;
-        uint authorFee = (remainder * governedEconomy.authorFeeBps()) / 10000;
-        uint256 amountToWithdraw = remainder - authorFee;
-
-        address nativeCurrency = economy.NATIVE_CURRENCY();
-        economy.updateEarnings(contractor, amountToWithdraw, nativeCurrency);
-        if (authorFee > 0) {
-            economy.updateEarnings(author, authorFee, nativeCurrency);
-            (bool sentAuthor, ) = payable(author).call{value: authorFee}("");
-            require(sentAuthor, "Failed to send Ether to author");
-            emit AuthorPaid(author, authorFee);
-        }
-        
-        if (amountToWithdraw > 0) {
-            (bool sentContractor, ) = payable(contractor).call{value: amountToWithdraw}("");
-            require(sentContractor, "Failed to send Ether to contractor");
-        }
-
-        if (platformFee > 0) {
-            address registry = governedEconomy.registryAddress();
-            (bool sentRegistry, ) = payable(registry).call{value: platformFee}("");
-            require(sentRegistry, "Failed to send platform fee to DAO treasury");
-        }
-
-        emit ContractorPaid(contractor, amountToWithdraw);
+        uint paid = _payContractor(amountToPay);
+        emit ContractorPaid(contractor, paid);
     }
 
     function withdrawAsContributor() public {

@@ -229,7 +229,7 @@ describe("Comprehensive Arbitration Tests", function () {
 
     describe("Arbiter Fee Payment", function() {
 
-        it("should pay arbiter the full arbitration fee", async function() {
+        it("should pay arbiter the arbitration fee minus the platform fee", async function() {
             const project = await createERC20Project();
             const amount = ethers.parseEther("1000");
 
@@ -241,7 +241,8 @@ describe("Comprehensive Arbitration Tests", function () {
 
             const arbiterBalanceAfter = await testToken.balanceOf(arbiter.address);
 
-            expect(arbiterBalanceAfter - arbiterBalanceBefore).to.equal(arbitrationFee);
+            const arbiterNet = arbitrationFee - (arbitrationFee * (await economy.platformFeeBps())) / 10000n;
+            expect(arbiterBalanceAfter - arbiterBalanceBefore).to.equal(arbiterNet);
         });
 
         it("should mark arbitrationFeePaidOut as true after ruling", async function() {
