@@ -95,8 +95,9 @@ async function main() {
     await (await uProject.connect(contractor).signContract()).wait();
     await (await uProject.connect(backer).voteToReleasePayment()).wait();
     await (await uProject.connect(contractor).withdrawAsContractor()).wait();
-    await (await uProject.connect(backer).withdrawAsContributor()).wait();
     await (await uProject.connect(contractor).reclaimArbitrationStake()).wait();
+
+    // The USDC backer never withdraws: spending is read from the closed project
 
     // --- Checks ---
     const nImm = fees(nAmount - nLocked), nRel = fees(nLocked);

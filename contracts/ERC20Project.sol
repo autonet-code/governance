@@ -47,6 +47,7 @@ contract ERC20Project is Initializable {
     uint public arbitrationFee;
     bool public arbitrationFeePaidOut = false;
     bool public contractorReclaimedStake = false;
+    mapping(address => bool) public contributorSettled; // withdrew after close
     
     address public daoTimelock;
     address public daoGovernor;
@@ -193,6 +194,7 @@ contract ERC20Project is Initializable {
 
         if (contributions[msg.sender].total == 0) {
             backers.push(msg.sender);
+            economy.registerBacker(msg.sender);
             contributions[msg.sender].total = amount;
             contributions[msg.sender].immediate = immediateAmount;
             contributions[msg.sender].locked = amount - immediateAmount;
@@ -451,49 +453,52 @@ contract ERC20Project is Initializable {
         emit ContractorPaid(contractor, paid);
     }
     
+    // What a backer gets back from a closed project.
+    function _closedExit(address contributor) internal view returns (uint) {
+        Contribution memory contrib = contributions[contributor];
+        // If the contract was never signed (e.g. vetoed while pending), immediate funds were never released
+        uint exitAmount = immediateReleased == 0 ? contrib.immediate : 0;
+        if (arbitrationFeePaidOut) {
+            // Pool = totalLocked - backer's share of arb fee (same as _finalizeDispute)
+            uint backersArbShare = arbitrationFee - (arbitrationFee / 2);
+            uint pool = totalLocked - backersArbShare;
+            // Proportion based on lockedAmount / totalLocked (not total contribution)
+            exitAmount += ((pool * (100 - disputeResolution)) / 100) * contrib.locked / totalLocked;
+        } else {
+            exitAmount += (contrib.locked * (100 - disputeResolution)) / 100;
+        }
+        return exitAmount;
+    }
+
+    /// What a backer spent on this project. Zero until the project closes.
+    function spentBy(address contributor) external view returns (uint) {
+        if (stage != Stage.Closed) return 0;
+        return contributions[contributor].total - _closedExit(contributor);
+    }
+
     function withdrawAsContributor() public {
         require(stage == Stage.Open || stage == Stage.Pending || stage == Stage.Closed, "Withdrawals only allowed when the project is open, pending or closed.");
 
-        uint contribTotal = contributions[msg.sender].total;
-        uint contribImmediate = contributions[msg.sender].immediate;
-        uint contribLocked = contributions[msg.sender].locked;
-        require(contribTotal > 0, "No contributions to withdraw.");
-
-        // Calculate immediate and locked portions
-        uint immediateAmount = contribImmediate;
-        uint lockedAmount = contribLocked;
-
-        // Clear the contribution
-        contributions[msg.sender].total = 0;
-        contributions[msg.sender].immediate = 0;
-        contributions[msg.sender].locked = 0;
+        Contribution memory contrib = contributions[msg.sender];
+        require(contrib.total > 0, "No contributions to withdraw.");
 
         uint256 exitAmount;
-        uint256 expenditure;
-
         if (stage == Stage.Open || stage == Stage.Pending) {
             // Pre-signing withdrawal: get everything back
-            exitAmount = contribTotal;
-            totalImmediate -= contribImmediate;
-            totalLocked -= contribLocked;
-            projectValue -= contribTotal;
+            contributions[msg.sender].total = 0;
+            contributions[msg.sender].immediate = 0;
+            contributions[msg.sender].locked = 0;
+            exitAmount = contrib.total;
+            totalImmediate -= contrib.immediate;
+            totalLocked -= contrib.locked;
+            projectValue -= contrib.total;
         } else {
-            // Post-signing: immediate is gone, only locked available
-            expenditure = contribImmediate;
-            if (arbitrationFeePaidOut) {
-                // Pool = totalLocked - backer's share of arb fee (same as _finalizeDispute)
-                uint backersArbShare = arbitrationFee - (arbitrationFee / 2);
-                uint pool = totalLocked - backersArbShare;
-                // Backer gets their proportional share of (100 - disputeResolution)% of the pool
-                // Proportion based on lockedAmount / totalLocked (not total contribution)
-                exitAmount = ((pool * (100 - disputeResolution)) / 100) * lockedAmount / totalLocked;
-            } else {
-                exitAmount = (lockedAmount * (100 - disputeResolution)) / 100;
-            }
-            expenditure += lockedAmount - exitAmount;
+            // Closed: the contribution record stays so spentBy() keeps reporting spending
+            require(!contributorSettled[msg.sender], "Already withdrawn.");
+            contributorSettled[msg.sender] = true;
+            exitAmount = _closedExit(msg.sender);
         }
 
-        if (expenditure > 0) economy.updateSpendings(msg.sender, expenditure, address(token));
         if (exitAmount > 0) token.safeTransfer(msg.sender, exitAmount);
         emit ContributorWithdrawn(msg.sender, exitAmount);
     }

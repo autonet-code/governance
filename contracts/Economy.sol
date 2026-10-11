@@ -12,6 +12,10 @@ interface IRepToken {
     function balanceOf(address account) external view returns (uint256);
 }
 
+interface IProjectSpending {
+    function spentBy(address backer) external view returns (uint);
+}
+
 contract Economy is IEconomy {
     // --- STATE: DAO Governance ---
     address public timelockAddress;
@@ -56,6 +60,12 @@ contract Economy is IEconomy {
     mapping(address => address[]) public projectsAsAuthor;
     mapping(address => address[]) public projectsAsContractor;
     mapping(address => address[]) public projectsAsArbiter;
+
+    // Backers' spending is read from each backed project once it closes, so it accrues
+    // without the backer having to withdraw and without per-backer loops at close.
+    mapping(address => address[]) public projectsAsBacker;
+    mapping(address => mapping(address => bool)) private _isBackerOf;
+    mapping(address => address) public projectToken; // project => payment token (NATIVE_CURRENCY for native)
 
     struct UserProfile {
         address[] earnedTokens;
@@ -166,11 +176,7 @@ contract Economy is IEconomy {
             earnedAmounts[i] = earnings[userAddress][earnedTokenList[i]];
         }
 
-        address[] memory spentTokenList = _spentTokens[userAddress];
-        uint[] memory spentAmounts = new uint[](spentTokenList.length);
-        for(uint i = 0; i < spentTokenList.length; i++) {
-            spentAmounts[i] = spendings[userAddress][spentTokenList[i]];
-        }
+        (address[] memory spentTokenList, uint[] memory spentAmounts) = _spendingsOf(userAddress);
 
         return UserProfile({
             earnedTokens: earnedTokenList,
@@ -198,6 +204,7 @@ contract Economy is IEconomy {
         
         deployedProjects.push(clone);
         isProjectContract[clone] = true;
+        projectToken[clone] = NATIVE_CURRENCY;
 
         NativeProject(clone).initialize{value: msg.value}(
             payable(address(this)), name, msg.sender, contractor, arbiter, 
@@ -223,6 +230,7 @@ contract Economy is IEconomy {
 
         deployedProjects.push(clone);
         isProjectContract[clone] = true;
+        projectToken[clone] = tokenAddress;
 
         ERC20Project(clone).initialize(
             payable(address(this)), tokenAddress, name, msg.sender, contractor, arbiter,
@@ -230,6 +238,37 @@ contract Economy is IEconomy {
         );
 
         emit NewProject(clone, name, contractor, arbiter, termsHash, repo, description, tokenAddress);
+    }
+
+    // Recorded spendings plus what the user spent on each closed project they backed, per token.
+    function _spendingsOf(address user) internal view returns (address[] memory tokens, uint[] memory amounts) {
+        address[] memory recorded = _spentTokens[user];
+        address[] memory backed = projectsAsBacker[user];
+        tokens = new address[](recorded.length + backed.length);
+        amounts = new uint[](recorded.length + backed.length);
+        uint n = recorded.length;
+        for (uint i = 0; i < n; i++) {
+            tokens[i] = recorded[i];
+            amounts[i] = spendings[user][recorded[i]];
+        }
+        for (uint i = 0; i < backed.length; i++) {
+            uint spent = IProjectSpending(backed[i]).spentBy(user);
+            if (spent == 0) continue;
+            address token = projectToken[backed[i]];
+            uint j = 0;
+            while (j < n && tokens[j] != token) j++;
+            if (j == n) { tokens[n] = token; n++; }
+            amounts[j] += spent;
+        }
+        assembly { mstore(tokens, n) mstore(amounts, n) }
+    }
+
+    function registerBacker(address backer) external override {
+        require(isProjectContract[msg.sender], "Only Project contracts can call this function.");
+        if (!_isBackerOf[backer][msg.sender]) {
+            _isBackerOf[backer][msg.sender] = true;
+            projectsAsBacker[backer].push(msg.sender);
+        }
     }
 
     function updateEarnings(address user, uint amount, address tokenAddress) external override {
