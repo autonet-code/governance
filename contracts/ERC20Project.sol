@@ -92,6 +92,7 @@ contract ERC20Project is Initializable {
     event DaoOverruled(address indexed timelock, uint256 percent, string rulingHash);
     event AuthorPaid(address author, uint256 amount);
     event VetoedByDao(address indexed timelock);
+    event ArbitrationStakeReclaimed(address contractor, uint256 amount);
     event OrphanedTokensSwept(address indexed token, uint256 amount);
     event BackerVoteCast(address indexed voter, uint256 votingPower, bool forDispute);
 
@@ -134,23 +135,22 @@ contract ERC20Project is Initializable {
         }
     }
 
-    function getProjectDetails() public view returns (ProjectDetails memory) {
-        return ProjectDetails({
-            name: name,
-            author: author,
-            contractor: contractor,
-            arbiter: arbiter,
-            stage: stage,
-            projectValue: projectValue,
-            totalImmediate: totalImmediate,
-            totalLocked: totalLocked,
-            immediateReleased: immediateReleased,
-            totalVotesForRelease: totalVotesForRelease,
-            totalVotesForDispute: totalVotesForDispute,
-            availableToContractor: availableToContractor,
-            arbitrationFee: arbitrationFee,
-            fundsReleased: fundsReleased
-        });
+    function getProjectDetails() public view returns (ProjectDetails memory d) {
+        // Assigned field by field: a 14-field struct literal overflows the stack under viaIR
+        d.name = name;
+        d.author = author;
+        d.contractor = contractor;
+        d.arbiter = arbiter;
+        d.stage = stage;
+        d.projectValue = projectValue;
+        d.totalImmediate = totalImmediate;
+        d.totalLocked = totalLocked;
+        d.immediateReleased = immediateReleased;
+        d.totalVotesForRelease = totalVotesForRelease;
+        d.totalVotesForDispute = totalVotesForDispute;
+        d.availableToContractor = availableToContractor;
+        d.arbitrationFee = arbitrationFee;
+        d.fundsReleased = fundsReleased;
     }
 
     function arbitrationPeriodExpired() public {
@@ -514,6 +514,7 @@ contract ERC20Project is Initializable {
         contractorReclaimedStake = true;
         uint stakeAmount = arbitrationFee / 2;
         token.safeTransfer(contractor, stakeAmount);
+        emit ArbitrationStakeReclaimed(contractor, stakeAmount);
     }
     
     function daoVeto() public {

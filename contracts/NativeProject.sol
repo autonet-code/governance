@@ -529,6 +529,7 @@ contract NativeProject is Initializable {
         uint stakeAmount = arbitrationFee / 2;
         (bool sent, ) = payable(contractor).call{value: stakeAmount}("");
         require(sent, "Failed to withdraw stake.");
+        emit ArbitrationStakeReclaimed(contractor, stakeAmount);
     }
     
     function daoVeto() public {
