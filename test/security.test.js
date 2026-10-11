@@ -1,5 +1,6 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
+const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
 // Regression tests for the factory hijack and zero-cost REP farming fixed in Oct 2026.
 describe("Security", function () {
@@ -100,6 +101,34 @@ describe("Security", function () {
                 attacker.address, attacker.address, attacker.address, attacker.address
             )).to.be.revertedWith("Protected");
         });
+
+        it("keeps project cooling-off at least as long as a full proposal lifecycle, even with parties set at creation", async function () {
+            const { economy, registry, timelock } = await deployInfra(victim);
+            const { repToken, dao } = await deployDaoToken(victim, registry, timelock, "Victim DAO");
+            await trustlessFactory.connect(victim).configureAndFinalize(
+                await addressParams(economy, registry, timelock, repToken, dao), economyParams, [], []
+            );
+            const econ = await ethers.getContractAt("Economy", economy);
+            const gov = await ethers.getContractAt("HomebaseDAO", dao);
+            const tl = await ethers.getContractAt(
+                "@openzeppelin/contracts/governance/TimelockController.sol:TimelockController", timelock);
+
+            const lifecycle = (await gov.votingDelay()) + (await gov.votingPeriod()) + (await tl.getMinDelay());
+            expect(await econ.coolingOffPeriod()).to.equal(60n);
+            expect(lifecycle).to.be.gt(60n);
+            expect(await econ.effectiveCoolingOffPeriod()).to.equal(lifecycle);
+
+            // Parties named at creation: the contractor still has to wait out the full lifecycle
+            const receipt = await (await econ.connect(member).createProject(
+                "p", attacker.address, victim.address, "t", "r", "d")).wait();
+            const addr = receipt.logs.find(l => l.eventName === "NewProject").args.contractAddress;
+            const project = await ethers.getContractAt("NativeProject", addr);
+            await project.connect(member).sendFunds({ value: ethers.parseEther("1") });
+            await expect(project.connect(attacker).signContract({ value: ethers.parseEther("0.025") }))
+                .to.be.revertedWith("Contract signing is blocked during the cooling-off period.");
+            await time.increase(lifecycle);
+            await project.connect(attacker).signContract({ value: ethers.parseEther("0.025") });
+        });
     });
 
     describe("Reputation farming", function () {
@@ -121,6 +150,7 @@ describe("Security", function () {
                 "Jurisdiction", "JUR", await registry.getAddress(), timelock.address, [], [], false);
             await repToken.setAdmin(timelock.address);
             await repToken.connect(timelock).setEconomyAddress(await economy.getAddress());
+            await economy.setCoolingOffPeriod(0); // no governance lifecycle to wait for in this fixture
             await economy.setDaoAddresses(timelock.address, await registry.getAddress(), deployer.address, await repToken.getAddress());
             await economy.connect(timelock).setPlatformFee(PLATFORM_FEE_BPS);
             await economy.connect(timelock).setAuthorFee(AUTHOR_FEE_BPS);

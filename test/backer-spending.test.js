@@ -31,6 +31,7 @@ describe("Backer spending", function () {
             "Jurisdiction", "JUR", await registry.getAddress(), timelock.address, [], [], false);
         await repToken.setAdmin(timelock.address);
         await repToken.connect(timelock).setEconomyAddress(await economy.getAddress());
+        await economy.setCoolingOffPeriod(0); // no governance lifecycle to wait for in this fixture
         await economy.setDaoAddresses(timelock.address, await registry.getAddress(), deployer.address, await repToken.getAddress());
         await registry.connect(timelock).editRegistry(`jurisdiction.parity.${NATIVE.toLowerCase()}`, ethers.parseEther("1").toString());
     });

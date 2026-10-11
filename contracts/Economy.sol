@@ -147,6 +147,25 @@ contract Economy is IEconomy {
     fallback() external payable { emit InboundValue(); }
     receive() external payable { emit InboundValue(); }
 
+    // A project's cooling-off must give the jurisdiction time to run a full proposal (e.g. a
+    // veto) before the contractor can sign, so it never drops below the governance lifecycle.
+    function proposalLifecycle() public view returns (uint total) {
+        total += _readUint(governorAddress, "votingDelay()");
+        total += _readUint(governorAddress, "votingPeriod()");
+        total += _readUint(timelockAddress, "getMinDelay()");
+    }
+
+    function effectiveCoolingOffPeriod() external view returns (uint) {
+        uint lifecycle = proposalLifecycle();
+        return coolingOffPeriod > lifecycle ? coolingOffPeriod : lifecycle;
+    }
+
+    function _readUint(address target, string memory signature) private view returns (uint) {
+        if (target.code.length == 0) return 0;
+        (bool ok, bytes memory data) = target.staticcall(abi.encodeWithSignature(signature));
+        return ok && data.length >= 32 ? abi.decode(data, (uint)) : 0;
+    }
+
     function getNumberOfProjects() public view returns (uint) { return deployedProjects.length; }
 
     function getConfig() public view returns (EconomyConfig memory) {

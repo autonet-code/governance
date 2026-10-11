@@ -126,6 +126,8 @@ contract ERC20Project is Initializable {
         economy.registerProjectRoles(address(this), _author, _contractor, _arbiter);
 
         if (contractor != address(0) && arbiter != address(0)) {
+            // Parties named at creation get the same cooling-off as setParties
+            coolingOffPeriodEnds = block.timestamp + IGovernedEconomy(address(economy)).effectiveCoolingOffPeriod();
             stage = Stage.Pending;
         } else {
             stage = Stage.Open;
@@ -166,7 +168,7 @@ contract ERC20Project is Initializable {
         require(msg.sender == author, "Only the Project's Author can set the other parties.");
         require(_contractor != address(0) && _arbiter != address(0), "Contractor and arbiter addresses must be valid.");
         
-        coolingOffPeriodEnds = block.timestamp + IGovernedEconomy(address(economy)).coolingOffPeriod();
+        coolingOffPeriodEnds = block.timestamp + IGovernedEconomy(address(economy)).effectiveCoolingOffPeriod();
         contractor = _contractor;
         arbiter = _arbiter;
         termsHash = _termsHash;

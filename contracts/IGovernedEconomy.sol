@@ -5,6 +5,7 @@ pragma solidity ^0.8.0;
 // that Project contracts need to read from the main Economy contract.
 interface IGovernedEconomy {
     function coolingOffPeriod() external view returns (uint);
+    function effectiveCoolingOffPeriod() external view returns (uint);
     function arbitrationFeeBps() external view returns (uint);
     function platformFeeBps() external view returns (uint);
     function authorFeeBps() external view returns (uint);

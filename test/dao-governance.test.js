@@ -36,6 +36,7 @@ describe("DAO-Governed Economy", function () {
         );
 
         // This simulates the DAO factory setting up the economy
+        await economy.setCoolingOffPeriod(0); // no governance lifecycle to wait for in this fixture
         await economy.connect(deployer).setDaoAddresses(
             timelock.address,
             registry.address,

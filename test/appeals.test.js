@@ -58,6 +58,7 @@ describe("Appeals and Advanced Fund Handling", function () {
 
         // Link contracts
         await economy.connect(deployer).setImplementations(await nativeProjectImpl.getAddress(), await erc20ProjectImpl.getAddress());
+        await economy.setCoolingOffPeriod(0); // no governance lifecycle to wait for in this fixture
         await economy.connect(deployer).setDaoAddresses(timelock.address, registry.address, await mockGovernor.getAddress(), await mockRepToken.getAddress());
 
         // Set DAO parameters

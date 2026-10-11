@@ -4,7 +4,7 @@
 //
 //   npx hardhat node
 //   npx hardhat run scripts/e2eLocal.js --network localhost
-const { ethers } = require("hardhat");
+const { ethers, network } = require("hardhat");
 
 const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 const PLATFORM_FEE_BPS = 100n;
@@ -24,6 +24,12 @@ async function deploy(name, ...args) {
     const c = await (await ethers.getContractFactory(name)).deploy(...args);
     await c.waitForDeployment();
     return c;
+}
+
+// Cooling-off is at least the jurisdiction's proposal lifecycle; fast-forward the node past it
+async function passCoolingOff(economy) {
+    await network.provider.send("evm_increaseTime", [Number(await economy.effectiveCoolingOffPeriod()) + 1]);
+    await network.provider.send("evm_mine");
 }
 
 const eventArgs = (receipt, name) => receipt.logs.find(l => l.eventName === name).args;
@@ -63,6 +69,7 @@ async function main() {
     const economy = await ethers.getContractAt("Economy", infra.economy);
     const repToken = await ethers.getContractAt("RepToken", daoTok.repToken);
     check("economy admin can no longer configure", await economy.timelockAddress(), infra.timelock);
+    check("cooling-off covers the proposal lifecycle", await economy.effectiveCoolingOffPeriod(), await economy.proposalLifecycle());
 
     const fees = (amount) => {
         const platform = amount * PLATFORM_FEE_BPS / 10000n;
@@ -76,6 +83,7 @@ async function main() {
     const nProject = await ethers.getContractAt("NativeProject", nAddr);
     await (await nProject.connect(backer).sendFundsWithImmediate(2000, { value: nAmount })).wait();
     const nLocked = nAmount * 8000n / 10000n;
+    await passCoolingOff(economy);
     await (await nProject.connect(contractor).signContract({ value: nLocked * ARB_FEE_BPS / 10000n / 2n })).wait();
     await (await nProject.connect(backer).voteToReleasePayment()).wait();
     await (await nProject.connect(contractor).withdrawAsContractor()).wait();
@@ -92,6 +100,7 @@ async function main() {
     await (await uProject.connect(backer).sendFundsWithImmediate(uAmount, 1000)).wait();
     const uLocked = uAmount * 9000n / 10000n;
     await (await usdc.connect(contractor).approve(uAddr, uLocked * ARB_FEE_BPS / 10000n / 2n)).wait();
+    await passCoolingOff(economy);
     await (await uProject.connect(contractor).signContract()).wait();
     await (await uProject.connect(backer).voteToReleasePayment()).wait();
     await (await uProject.connect(contractor).withdrawAsContractor()).wait();
