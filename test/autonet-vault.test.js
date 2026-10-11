@@ -106,7 +106,7 @@ describe("AutonetVault", function () {
             const quoted = await vault.quote(await usdc.getAddress(), pay);
             expect(quoted).to.equal(atnUnits("2")); // 2 ATN in base units (2e6)
 
-            await vault.connect(buyer).buy(await usdc.getAddress(), pay);
+            await (await vault.connect(buyer).buy(await usdc.getAddress(), pay)).wait();
             expect(await atn.balanceOf(buyer.address)).to.equal(atnUnits("2"));
         });
 
@@ -127,7 +127,7 @@ describe("AutonetVault", function () {
             const pay = ethers.parseEther("3"); // 3 DAI
             expect(await vault.quote(daiAddr, pay)).to.equal(atnUnits("3"));
 
-            await vault.connect(buyer).buy(daiAddr, pay);
+            await (await vault.connect(buyer).buy(daiAddr, pay)).wait();
             expect(await atn.balanceOf(buyer.address)).to.equal(atnUnits("3"));
         });
 
@@ -135,15 +135,15 @@ describe("AutonetVault", function () {
             // 50,000 USDC -> 100,000 ATN. CoinOffering would need a cap raise;
             // the vault has none.
             const pay = ethers.parseUnits("50000", USDC_DECIMALS);
-            await vault.connect(buyer).buy(await usdc.getAddress(), pay);
+            await (await vault.connect(buyer).buy(await usdc.getAddress(), pay)).wait();
             expect(await atn.balanceOf(buyer.address)).to.equal(atnUnits("100000"));
             expect(await vault.totalMinted()).to.equal(atnUnits("100000"));
         });
 
         it("accumulates totalMinted / totalRaised across buys", async function () {
             const pay = ethers.parseUnits("10", USDC_DECIMALS);
-            await vault.connect(buyer).buy(await usdc.getAddress(), pay);
-            await vault.connect(buyer).buy(await usdc.getAddress(), pay);
+            await (await vault.connect(buyer).buy(await usdc.getAddress(), pay)).wait();
+            await (await vault.connect(buyer).buy(await usdc.getAddress(), pay)).wait();
             expect(await vault.totalMinted()).to.equal(atnUnits("40")); // 2 * (10*2)
             expect(await vault.totalRaised(await usdc.getAddress())).to.equal(pay * 2n);
         });
@@ -194,7 +194,7 @@ describe("AutonetVault", function () {
             const vaultAddr = await vault.getAddress();
             const pay = ethers.parseUnits("123", USDC_DECIMALS);
 
-            await vault.connect(buyer).buy(await usdc.getAddress(), pay);
+            await (await vault.connect(buyer).buy(await usdc.getAddress(), pay)).wait();
 
             expect(await usdc.balanceOf(vaultAddr)).to.equal(0n);
             expect(await usdc.balanceOf(registryAddr)).to.equal(pay);
@@ -212,7 +212,7 @@ describe("AutonetVault", function () {
             // credited; this asserts the no-fee invariant the whitelist relies on.
             const registryAddr = await registry.getAddress();
             const pay = ethers.parseUnits("77", USDC_DECIMALS);
-            await vault.connect(buyer).buy(await usdc.getAddress(), pay);
+            await (await vault.connect(buyer).buy(await usdc.getAddress(), pay)).wait();
             expect(await usdc.balanceOf(registryAddr)).to.equal(pay);
             expect(await vault.totalRaised(await usdc.getAddress())).to.equal(pay);
         });
