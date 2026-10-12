@@ -110,7 +110,7 @@ contract StandardFactoryNonTransferable {
             params.name,
             params.symbol,
             payable(registryAddr),
-            address(this), // Temporary admin
+            timelockAddr, // Governs reward epochs and minters
             params.initialMembers,
             tokenAmounts,
             false  // ALWAYS NON-TRANSFERABLE

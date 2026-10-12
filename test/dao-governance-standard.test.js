@@ -75,6 +75,10 @@ describe("Standard DAO Governance", function () {
     });
 
     describe("Token & Delegation", function () {
+        it("binds the token to the DAO timelock so governance can run reward epochs", async function () {
+            expect(await token.timelockAddress()).to.equal(await timelock.getAddress());
+        });
+
         it("should have correct initial token balances", async function () {
             expect(await token.balanceOf(member1.address)).to.equal(ethers.parseEther("100"));
             expect(await token.balanceOf(member2.address)).to.equal(ethers.parseEther("50"));
