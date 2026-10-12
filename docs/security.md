@@ -34,7 +34,7 @@ An internal audit and a test plan exist; both are kept private.
 | Reward claims cut short | Jurisdiction earmarks (reward epochs) cannot be released with `withdrawEarmarkedFunds`; only `reclaimEarmarkedFunds`, after the grace period | `Registry.rewardEarmark` |
 | Double withdrawal | Contractor payout is zeroed before transfer; backers are marked `contributorSettled`; the arbitration stake is reclaimable once and only if it did not pay the arbiter | projects |
 | Non-standard ERC20s (no return value) | `Registry`, `Economy`, `ERC20Project`, `AutonetVault`, `CoinOffering` use `SafeERC20` | see caveats |
-| Reentrancy | `Registry` (`transferETH`, `transferERC20`, `disburseEarmarked`), `AutonetVault.buy`, `CoinOffering.buy` and `EvolutionProposal` stake paths are `nonReentrant`. Project clones have no guard and follow checks-effects-interactions | `test/autonet-vault.test.js`, `test/coin-offering.test.js` (with `ReentrantPaymentToken`) |
+| Reentrancy | `Registry` (`transferETH`, `transferERC20`, `disburseEarmarked`), `AutonetVault.buy`, `CoinOffering.buy` are `nonReentrant`. Project clones have no guard and follow checks-effects-interactions | `test/autonet-vault.test.js`, `test/coin-offering.test.js` (with `ReentrantPaymentToken`) |
 
 ### Autonet satellites
 
@@ -43,7 +43,7 @@ An internal audit and a test plan exist; both are kept private.
 | Vault custody risk | Payment moves buyer to Registry in one `safeTransferFrom`; the vault holds neither funds nor ATN | `AutonetVault.buy` |
 | Unbacked ATN | ATN is minted only on the external Substrate, which gates `mintFromVault` to the vault address fixed in its constructor | Substrate (autonet repo) |
 | Parity mispricing | Parity is a Registry key editable only by the timelock; the vault and CO can be paused by their admin (the timelock) | `Registry`, `pause()` |
-| REP double count | `AutonetRepClaim` and `ReputationMirror` mint only the delta over a per-agent watermark on monotonic Substrate ledgers | `claimedEarnings`, `syncedReputation` |
+| REP double count | `AutonetRepClaim` mints only the delta over a per-agent watermark on monotonic Substrate ledgers | `claimedEarnings` |
 | CO oversells | `saleCap` enforced on every buy and cannot be set below `totalMinted` | `CoinOffering` |
 
 ## Known caveats
@@ -52,4 +52,3 @@ An internal audit and a test plan exist; both are kept private.
 - Standard DAOs created by factory builds that passed `address(this)` as the RepToken timelock (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) cannot call `startNewRewardEpoch` or `setDelegateShareBps`. The current source passes the real timelock; economy DAOs are unaffected. See [technical-reference.md](technical-reference.md#reptoken).
 - The standard factories remain the Registry `wrapper` of the DAOs they deploy and so keep registry edit rights; the factory exposes no function that uses them after deployment.
 - Timelock delay can be configured to zero (test networks do this), which removes the review window; the cooling-off floor then shrinks to the voting delay plus period plus the one-day buffer.
-- `EvolutionProposal` is not production-ready (unchecked transfers, admin can recover staked ATN, Registry writes revert against a real Registry). See [autonet.md](autonet.md#evolutionproposal-experimental).

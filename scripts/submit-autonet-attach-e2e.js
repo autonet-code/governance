@@ -7,7 +7,7 @@
  * (poll state, no sleep-guessing) -> queue -> execute -> verify.
  *
  * Signer key is loaded from C:\code\autonet\.env (PRIVATE_KEY). It is NEVER
- * printed/echoed/logged. Modeled on scripts/submit-flagday-proposal.js but
+ * printed/echoed/logged. Modeled on the 2026-07-10 flag-day proposal but
  * standalone (raw ethers provider, so it does not depend on hardhat's config.js
  * PRIVATE_KEY). Run:  node scripts/submit-autonet-attach-e2e.js
  */

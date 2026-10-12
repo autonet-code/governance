@@ -13,7 +13,7 @@ The specification of the On-Chain Jurisdiction contracts. For the overview, star
 | [`economy.md`](economy.md) | The trustless economy: project lifecycle, cooling-off, escrow, platform fees, backer voting, arbitration, appeals, reputation accrual. |
 | [`immediate-release.md`](immediate-release.md) | Releasing part of a contribution to the contractor at signing. |
 | [`registry-settings.md`](registry-settings.md) | Registry keys the economy and RepToken read, including the parity convention. |
-| [`autonet.md`](autonet.md) | Jurisdiction-side Autonet satellites: AutonetVault, AutonetRepClaim, CoinOffering, the deprecated ReputationMirror, and the experimental training contracts. |
+| [`autonet.md`](autonet.md) | Jurisdiction-side Autonet satellites: AutonetVault, AutonetRepClaim and CoinOffering, the genesis flow, and the integration tests against the real autonet contracts. |
 | [`security.md`](security.md) | Threat model and the on-chain mitigations for each threat. |
 | [`technical-reference.md`](technical-reference.md) | Functions, parameters, constants, events and access control per contract. |
 | [`deployments.md`](deployments.md) | Deployed addresses, deploy scripts, networks, and the local end-to-end harness. |

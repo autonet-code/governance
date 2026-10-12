@@ -11,13 +11,10 @@ Related: [architecture.md](architecture.md), [governance.md](governance.md), [re
 | Contract | Role | Status (from code and scripts) |
 |----------|------|-------------------------------|
 | `AutonetVault` | Sells Substrate ATN for whitelisted ERC20s; payment goes to the Registry | **Live.** Deployed on Shadownet and registered under `jurisdiction.autonet.vault` (`scripts/submit-autonet-registry-keys.js`) |
-| `AutonetRepClaim` | Mints REP 1:1 against ATN an agent provably earned on the Substrate | **Live.** The "flag-day" proposal (`scripts/submit-flagday-proposal.js`) grants it minter rights; registered under `jurisdiction.autonet.rep_claim` |
-| `ReputationMirror` | Mints REP to owners of agents in proportion to Substrate reputation | **Deprecated** (`@custom:deprecated` in source). Substrate no longer mints reputation, so there is nothing to mirror. The flag-day proposal revokes its minter grant |
+| `AutonetRepClaim` | Mints REP 1:1 against ATN an agent provably earned on the Substrate | **Live.** Granted minter rights by proposal (the 2026-07-10 flag-day proposal on Shadownet); registered under `jurisdiction.autonet.rep_claim` |
 | `CoinOffering` | Sells the jurisdiction's own transferable governance token (ATNB) under a DAO-set cap | **Tested in isolation** (`deployCOLocal.js`, `deployTestCOShadownet.js`, `deployTestCOBaseSepolia.js`). Not part of the Autonet genesis flow |
-| `CapabilityScorecard` | Per-module capability scores and training reward multipliers | **Experimental.** Unit tests only, no deploy script |
-| `EvolutionProposal` | Stake-to-propose network improvements, evaluated by RPB nodes | **Experimental.** Unit tests only (against a permissive mock registry), no deploy script |
 
-> `scripts/deploy-autonet-jurisdiction.js` deploys `AutonetRepClaim` (empty genesis seed) in its genesis step and prints the `setMinter` calldata for the grant proposal. Jurisdictions that already granted a mirror swap the grant by proposal (see [Minter swap](#minter-swap-mirror-to-claim)).
+> `scripts/deploy-autonet-jurisdiction.js` deploys `AutonetRepClaim` (empty genesis seed) in its genesis step and prints the `setMinter` calldata for the grant proposal. Jurisdictions that still have the retired ReputationMirror as a minter revoke it by proposal (see [Minter swap](#minter-swap-from-the-retired-mirror)).
 
 ## Parity: one registry key, one formula
 
@@ -78,18 +75,9 @@ Trust assumptions:
 - `claim(agent)`: permissionless trigger. Mints `(base - watermark) * 1e12` REP **to the agent** (never the caller) and advances the watermark. Reverts `NothingToClaim` on zero delta. Emits `RepClaimed(agent, earningsDelta, repMinted)`.
 - `claimable(agent)`, `earningsBase(agent)`: views.
 - Constants: `ATN_BASE = 1e6`, `REP_DECIMALS = 1e18`, `REP_PER_ATN_BASE = 1e12`. Hardcoded 1:1 in whole tokens; no rate knob, no admin, no pause.
-- Constructor optionally mints a genesis REP seed (`genesisHolders`, `genesisAmounts`). That requires the contract to already be a minter, so in practice pass an empty seed and mint the seed by proposal (the flag-day proposal does `RepToken.mint(DEV_WALLET, 1000e18)`).
+- Constructor optionally mints a genesis REP seed (`genesisHolders`, `genesisAmounts`). That requires the contract to already be a minter, so in practice pass an empty seed and mint the seed by proposal (the Shadownet flag-day proposal minted `1000e18` to a dev wallet).
 
 Trust assumptions: the Substrate's earnings ledgers are honest and monotonic; RepToken grants this contract minter rights. There is no baseline: an agent's first claim covers all earnings recorded on the Substrate up to that point.
-
-## ReputationMirror (deprecated)
-
-`contracts/ReputationMirror.sol`. Kept in-tree for history and existing deployments.
-
-- `sync(agents[])`: permissionless. For each agent reads `substrate.agentReputation(agent)`; the first sync records a baseline and accrues nothing; later syncs accrue `delta * repPerReputation / 1e18` to `pending[getAgentOwner(agent)]`. Ownerless agents advance their cursor but accrue nothing.
-- `claim(owner)`: mints `pending[owner]` to the owner.
-- `setRepPerReputation(rate)`: timelock only. The timelock is read from `RepToken.timelockAddress()` at construction.
-- Principle: "mirror, don't bridge". No token moves between the Substrate and RepToken.
 
 ## CoinOffering
 
@@ -101,20 +89,6 @@ Trust assumptions: the Substrate's earnings ledgers are honest and monotonic; Re
 - Delegation is handled by the token: with `RepToken.setDefaultDelegate(executionDelegate)` set, buyers are auto-delegated on first receipt and can later self-delegate. Inventory holders can be excluded with `setAutoDelegateExempt`.
 
 The contract header still describes a "DAO mints inventory to the CO" model. The code mints on demand to the buyer; there is no inventory.
-
-## CapabilityScorecard (experimental)
-
-`contracts/CapabilityScorecard.sol`. Per-module scores (0 to 10000 bps) with target scores; `updateScore` uses a moving average capped at 20 samples; `getRewardMultiplier` interpolates linearly from `maxMultiplier` (30000, score 0) to `minMultiplier` (5000, score at or above target); unknown modules return 10000. Admin registers modules and evaluators. `autonetAddress` refers to the deleted `Autonet.sol`.
-
-## EvolutionProposal (experimental)
-
-`contracts/EvolutionProposal.sol`. Proposals are submitted with an ATN stake (`minStake = 100e18`), evaluated by whitelisted RPB evaluators (quorum 3, 60% confidence-weighted approval, 3-day period), funded for a trial, then adopted (stake returned, trial rewards by contribution weight) or rejected (stake minus 5% fee refunded). Prompt versions are written to the Registry by `updateRPBPrompt` (timelock only).
-
-Known gaps before this can go live:
-- It treats ATN as an 18-decimal ERC20 with `transferFrom`; Substrate ATN is 6-decimal.
-- Raw `transfer`/`transferFrom` without return-value checks on refunds and rewards (no SafeERC20).
-- `updateRPBPrompt` calls `Registry.editRegistry`, which only the Registry owner (timelock) or wrapper may call, so it reverts against a real Registry. Tests use a permissive mock.
-- `recoverTokens` lets the admin withdraw any ATN held, including live stakes.
 
 ## Genesis choreography
 
@@ -130,29 +104,26 @@ Known gaps before this can go live:
 | 6 | governance | Grant REP minter rights (`RepToken.setMinter(...)`). The deployer can never do this directly: RepToken admin goes RepTokenFactory to TrustlessFactory to Timelock |
 | 7 | governance | Whitelist payment tokens with `Registry.editRegistry("jurisdiction.parity.<token>", "<value>")` if not folded in at step 1 |
 
-Timing env vars are seconds (`VOTING_DELAY_SECS`, `VOTING_PERIOD_SECS`, `TIMELOCK_DELAY_SECS`); the script converts to the factories' minute unit, rounding up. Test networks use `0 / 120 / 0`. On local networks with a mock Substrate, a single run with `SUBSTRATE_ADDRESS` set does everything.
+Timing env vars are seconds (`VOTING_DELAY_SECS`, `VOTING_PERIOD_SECS`, `TIMELOCK_DELAY_SECS`); the script converts to the factories' minute unit, rounding up. Test networks use `0 / 120 / 0`. On local networks a single run with `SUBSTRATE_ADDRESS` set does everything (the Substrate stand-in there does not gate the minter).
 
-Helper scripts for the governance steps: `submit-genesis-proposals.js`, `vote-genesis.js`, `execute-genesis-proposals.js`, `submit-autonet-registry-keys.js` (self-describing keys `jurisdiction.autonet.substrate|vault|rep_claim`), `submit-flagday-proposal.js`.
+Helper scripts for the governance steps: `vote-genesis.js`, `execute-genesis-proposals.js`, `submit-autonet-registry-keys.js` (self-describing keys `jurisdiction.autonet.substrate|vault|rep_claim`).
 
-### Minter swap (mirror to claim)
+### Minter swap (from the retired mirror)
 
-One proposal, executed by the timelock:
+`ReputationMirror` (removed from this repo; it read reputation the Substrate no longer mints) was the minter on early Shadownet jurisdictions. Swap it in one proposal:
 
 1. `RepToken.setMinter(<AutonetRepClaim>, true)`
 2. `RepToken.setMinter(<ReputationMirror>, false)`
-3. (flag-day extras) `RepToken.mint(<dev wallet>, 1000e18)` and the USDC parity key
 
-`scripts/deploy-autonet-rep-claim.js` prints the calldata.
+`scripts/deploy-autonet-rep-claim.js` prints the calldata (`MIRROR_ADDR` adds the revoke).
 
 ## Tests
 
 | File | Covers |
 |------|--------|
-| `test/autonet-genesis.test.js` | Pre-finalize setMinter impossible, parity folding, nonce prediction, vault buy against a mock Substrate, timelock grant, fast 0/120/0 lifecycle |
+| `test/autonet-integration.test.js` | A jurisdiction wired to the **real** autonet contracts: Substrate on the predicted vault address with the Registry as treasury and the timelock as governor, minter grant and parity by proposal, vault sale, service-fee split, REP from service and tool-pool earnings, service fee retuned by proposal, payment-channel settlement, CharterAnchor by proposal, vault pause |
 | `test/autonet-vault.test.js` | Parity math (6 to 6, 18 to 6), uncapped, dust, de-whitelisting, routing, pause, admin, reentrancy |
 | `test/autonet-rep-claim.test.js` | 1e12 scaling, summed base, watermark idempotency, permissionless trigger, genesis seed, no mint without grant |
-| `test/reputation-mirror.test.js` | Baseline, deltas, ownerless agents, rate changes |
 | `test/coin-offering.test.js` | Cap, auto-delegation, reclaiming votes, 6 to 18 parity |
-| `test/capability-scorecard.test.js`, `test/evolution-proposal.test.js` | Experimental contracts |
 
-Mocks live in `contracts/test/` (`MockSubstrate`, `MockSubstrateEarnings`, `MockGenesisSubstrate`, `MockAutonetATN`).
+The real contracts come from `test/fixtures/autonet/` (ABI and bytecode, with the source commit in `SOURCE.json`). Refresh them after changing the autonet contracts: compile in the autonet repo, then `node scripts/sync-autonet-artifacts.js [path to autonet]`. The unit tests still use two small stand-ins in `contracts/test/` (`MockSubstrateEarnings`, `MockAutonetATN`).

@@ -40,8 +40,7 @@ A **jurisdiction** is a set of contracts sharing one Timelock as its on-chain id
    |
    |  minters / readers
    v
-Satellites: CoinOffering, AutonetRepClaim, AutonetVault, EvolutionProposal,
-            CapabilityScorecard, ReputationMirror (retired)
+Satellites: CoinOffering, AutonetRepClaim, AutonetVault
 ```
 
 ### Who controls what
@@ -74,9 +73,6 @@ All live in this repo and are deployed by scripts, not factories. Each needs a g
 | `CoinOffering` | Sells a transferable RepToken for payment tokens priced by a Registry parity; payment goes straight to the Registry; mints to buyers as a RepToken minter |
 | `AutonetVault` | Same shape, but mints ATN on the external Autonet `Substrate` contract; payment to the Registry |
 | `AutonetRepClaim` | RepToken minter: mints REP against a user's ratified ATN earnings on `Substrate` |
-| `EvolutionProposal` | ATN-staked improvement proposals; reads Registry config, Timelock-gated settings |
-| `CapabilityScorecard` | Standalone module scores and reward multipliers; own admin and evaluators |
-| `ReputationMirror` | Retired in favour of `AutonetRepClaim`; kept for history |
 
 `Substrate` and the ATN token live in the separate Autonet repo. Details in [autonet.md](autonet.md).
 

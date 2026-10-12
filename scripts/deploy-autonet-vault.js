@@ -1,5 +1,5 @@
 // Deploy an AutonetVault satellite for a jurisdiction DAO and print the
-// governance wiring it needs. Modeled on scripts/deploy-reputation-mirror.js:
+// governance wiring it needs. Modeled on scripts/deploy-autonet-rep-claim.js:
 // deploy the satellite, then PRINT the calldata the DAO timelock must execute —
 // this script does NOT perform live grants (the timelock only acts through
 // governance).
