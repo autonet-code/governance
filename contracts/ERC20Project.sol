@@ -5,8 +5,6 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./IEconomy.sol";
 import "./IGovernedEconomy.sol";
-import "@openzeppelin/contracts/governance/utils/IVotes.sol";
-import "@openzeppelin/contracts/governance/IGovernor.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
 contract ERC20Project is Initializable {
@@ -52,6 +50,7 @@ contract ERC20Project is Initializable {
     address public daoTimelock;
     address public daoGovernor;
     
+    // Appeal is no longer entered (appeals run on the DAO side); kept so stage numbers stay stable
     enum Stage { Open, Pending, Ongoing, Dispute, Appealable, Appeal, Closed }
     Stage public stage;
 
@@ -87,7 +86,6 @@ contract ERC20Project is Initializable {
     event ProjectClosed(address by);
     event ContractSigned(address contractor);
     event ArbitrationDecision(address arbiter, uint256 percent, string rulingHash);
-    event ArbitrationAppealed(address indexed appealer, uint256 indexed proposalId);
     event ArbitrationFinalized(address indexed finalizer);
     event DaoOverruled(address indexed timelock, uint256 percent, string rulingHash);
     event AuthorPaid(address author, uint256 amount);
@@ -361,49 +359,23 @@ contract ERC20Project is Initializable {
         originalRulingHash = rulingHash;
         arbiterHasRuled = true;
         stage = Stage.Appealable;
-        appealEnds = block.timestamp + IGovernedEconomy(address(economy)).appealPeriod();
+        appealEnds = block.timestamp + IGovernedEconomy(address(economy)).effectiveAppealPeriod();
 
         emit ArbitrationDecision(msg.sender, percent, rulingHash);
     }
 
-    function appeal(uint256 proposalId, address[] calldata targets) external {
-        IGovernedEconomy governedEconomy = IGovernedEconomy(address(economy));
-        
-        require(
-            stage == Stage.Appealable ||
-            (stage == Stage.Dispute && block.timestamp > disputeStarted + governedEconomy.appealPeriod()),
-            "Appeal not allowed at this time"
-        );
-
-        if (stage == Stage.Appealable) {
-            require(block.timestamp <= appealEnds, "Appeal initiation period has ended");
-        }
-        
-        address repTokenAddress = governedEconomy.repTokenAddress();
-        uint256 threshold = governedEconomy.projectThreshold();
-        uint256 votingPower = IVotes(repTokenAddress).getVotes(msg.sender);
-        require(votingPower >= threshold, "Insufficient voting power to appeal");
-
-        IGovernor.ProposalState propState = IGovernor(daoGovernor).state(proposalId);
-        require(
-            propState == IGovernor.ProposalState.Pending ||
-            propState == IGovernor.ProposalState.Active ||
-            propState == IGovernor.ProposalState.Succeeded ||
-            propState == IGovernor.ProposalState.Queued,
-            "Invalid proposal state"
-        );
-
-        require(targets.length > 0 && targets[0] == address(this), "Proposal does not target this project");
-
-        stage = Stage.Appeal;
-        appealEnds = block.timestamp + governedEconomy.appealPeriod();
-        emit ArbitrationAppealed(msg.sender, proposalId);
-    }
-
+    // Appeals happen on the DAO side: an overrule proposal calls this when it executes. The appeal
+    // window always fits a full proposal lifecycle (Economy.effectiveAppealPeriod), so no on-chain
+    // registration is needed to hold off finalization. A silent arbiter can be overruled once the
+    // dispute has gone unruled for the appeal period.
     function daoOverrule(uint256 percent, string memory rulingHash) public {
         require(msg.sender == daoTimelock, "Only the DAO Timelock can overrule");
-        require(stage == Stage.Appeal, "DAO can only overrule during appeal stage");
-        require(block.timestamp <= appealEnds, "Appeal period has ended");
+        IGovernedEconomy governedEconomy = IGovernedEconomy(address(economy));
+        require(
+            (stage == Stage.Appealable && block.timestamp <= appealEnds) ||
+            (stage == Stage.Dispute && block.timestamp > disputeStarted + governedEconomy.appealPeriod()),
+            "DAO can only overrule an open ruling or a silent arbiter"
+        );
         require(percent <= 100, "Resolution needs to be a number between 0 and 100");
 
         _finalizeDispute(percent, rulingHash);
@@ -412,7 +384,7 @@ contract ERC20Project is Initializable {
 
     function finalizeArbitration() public {
         require(
-            stage == Stage.Appealable || stage == Stage.Appeal,
+            stage == Stage.Appealable,
             "Project not in a finalizable stage"
         );
         require(block.timestamp > appealEnds, "Appeal/Finalization period has not ended yet");

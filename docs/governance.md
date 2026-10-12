@@ -242,10 +242,10 @@ All are `dao.propose([target], [0], [calldata], description)`.
 | Arm the spend cap | Registry | `setSpendCap(token, cap)` |
 | Grant a minter | RepToken | `setMinter(contract, true)` |
 | Economy parameter | Economy | `setPlatformFee(bps)` etc. (see [economy.md](economy.md)) |
-| Overrule arbitration | Project | `daoOverrule(percent, rulingHash)` (project must be in `Appeal`) |
+| Overrule arbitration | Project | `daoOverrule(percent, rulingHash)` (inside the appeal window, or on a silent arbiter) |
 | Veto a project | Project | `daoVeto()` |
 
-To overrule an arbiter, a member with at least `projectThreshold` votes first files the proposal, then calls `project.appeal(proposalId, targets)` while it is live; see [economy.md](economy.md).
+An appeal is just this proposal: nothing is registered on the project. The appeal window always fits a full proposal lifecycle plus two days; see [economy.md](economy.md).
 
 ## Known caveats
 

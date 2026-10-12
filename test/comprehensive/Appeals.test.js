@@ -101,9 +101,8 @@ describe("Comprehensive Appeals Tests", function () {
             expect(await project.stage()).to.equal(4); // Appealable
             expect(await project.originalDisputeResolution()).to.equal(30);
 
-            // Wait for appeal period and finalize
-            const appealPeriod = await economy.appealPeriod();
-            await time.increase(appealPeriod + 1n);
+            // Wait for the appeal window (floored at a proposal lifecycle) and finalize
+            await time.increaseTo((await project.appealEnds()) + 1n);
             await project.finalizeArbitration();
 
             expect(await project.stage()).to.equal(6); // Closed
@@ -163,14 +162,7 @@ describe("Comprehensive Appeals Tests", function () {
             await project.connect(contractor).disputeAsContractor();
             await project.connect(arbiter).arbitrate(30, "ruling_hash");
 
-            // Need to enter Appeal stage first (via appeal function or wait)
-            // File appeal
-            await mockGovernor.setProposalState(1); // Active
-            await project.connect(backer1).appeal(1, [await project.getAddress()]);
-
-            expect(await project.stage()).to.equal(5); // Appeal
-
-            // DAO overrules with 70%
+            // DAO overrule proposal executes while the ruling is open: 70%
             await project.connect(timelock).daoOverrule(70, "new_ruling");
 
             expect(await project.stage()).to.equal(6); // Closed
@@ -208,7 +200,7 @@ describe("Comprehensive Appeals Tests", function () {
             ).to.be.revertedWith("Only the DAO Timelock can overrule");
         });
 
-        it("should NOT allow overrule outside appeal stage", async function() {
+        it("should NOT allow overrule after the appeal window closes", async function() {
             const project = await createERC20Project();
             const amount = ethers.parseEther("1000");
 
@@ -227,10 +219,10 @@ describe("Comprehensive Appeals Tests", function () {
             await project.connect(contractor).disputeAsContractor();
             await project.connect(arbiter).arbitrate(30, "ruling_hash");
 
-            // In Appealable stage, not Appeal stage
+            await time.increaseTo((await project.appealEnds()) + 1n);
             await expect(
                 project.connect(timelock).daoOverrule(70, "new_ruling")
-            ).to.be.revertedWith("DAO can only overrule during appeal stage");
+            ).to.be.revertedWith("DAO can only overrule an open ruling or a silent arbiter");
         });
     });
 

@@ -46,6 +46,8 @@ contract Economy is IEconomy {
     uint public constant MAX_ARBITRATION_FEE_BPS = 2500; // 25% of the locked value
     // Margin after a full proposal lifecycle so a passed veto can be executed before signing
     uint public constant COOLING_OFF_BUFFER = 1 days;
+    // An appeal window fits a full proposal plus a day to propose and a day to execute
+    uint public constant APPEAL_BUFFER = 2 days;
 
     // Configures the economy until the DAO addresses are set; after that only the timelock can.
     address public admin;
@@ -168,6 +170,12 @@ contract Economy is IEconomy {
     function effectiveCoolingOffPeriod() external view returns (uint) {
         uint floor = proposalLifecycle() + COOLING_OFF_BUFFER;
         return coolingOffPeriod > floor ? coolingOffPeriod : floor;
+    }
+
+    // The DAO overrules by proposal, so the window to do it never drops below one proposal lifecycle
+    function effectiveAppealPeriod() external view returns (uint) {
+        uint floor = proposalLifecycle() + APPEAL_BUFFER;
+        return appealPeriod > floor ? appealPeriod : floor;
     }
 
     function _readUint(address target, string memory signature) private view returns (uint) {

@@ -501,13 +501,6 @@ describe("Arbitration Fund Accounting", function () {
             // Arbiter rules 30%
             await project.connect(arbiter).arbitrate(30, "ruling_hash");
 
-            // Setup mocks for appeal
-            await mockRepToken.mint(backer1.address, PROJECT_THRESHOLD);
-            await mockGovernor.setProposalState(1); // Active state
-
-            // Appeal
-            await project.connect(backer1).appeal(123, [await project.getAddress()]);
-
             // DAO overrules to 80%
             await project.connect(timelock).daoOverrule(80, "dao_ruling");
 

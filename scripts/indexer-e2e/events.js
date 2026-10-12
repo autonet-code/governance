@@ -157,7 +157,7 @@ async function main() {
     await wait(p2.connect(bob).voteToDispute());
     await wait(p2.connect(carol).voteToDispute()); // 70% quorum
     await wait(p2.connect(arbiter).arbitrate(60, "ruling-p2"));
-    await advance(86401);
+    await advance(Number(await p2.appealEnds()) - (await ethers.provider.getBlock("latest")).timestamp + 1);
     await wait(p2.finalizeArbitration());
     await wait(p2.connect(contractor).withdrawAsContractor());
     await wait(p2.connect(bob).withdrawAsContributor());
@@ -166,7 +166,7 @@ async function main() {
         events: ["NewProject", "SetParties", "SendFunds", "ContractSigned", "BackerVoteCast", "ProjectDisputed",
                  "ArbitrationDecision", "ArbitrationFinalized", "ProjectClosed", "ContractorPaid", "AuthorPaid", "ContributorWithdrawn"] };
 
-    // P3 native: contractor disputes, arbiter rules, a DAO member appeals, the DAO overrules
+    // P3 native: contractor disputes, arbiter rules, the DAO appeals by proposal and overrules
     const p3 = await newProject("P3 appeal", true);
     await wait(p3.connect(bob).sendFunds({ value: E(5) }));
     await coolingOff();
@@ -177,7 +177,6 @@ async function main() {
     const desc = "E2E: overrule P3";
     const pr = await wait(ecoGov.connect(deployer).propose([await p3.getAddress()], [0], [overrule], desc));
     const appealId = eventArgs(pr, "ProposalCreated").proposalId;
-    await wait(p3.connect(deployer).appeal(appealId, [await p3.getAddress()]));
     await advance(Number(await ecoGov.votingDelay()) + 1);
     await wait(ecoGov.connect(deployer).castVote(appealId, 1));
     await advance(Number(await ecoGov.votingPeriod()) + 1);
@@ -185,8 +184,9 @@ async function main() {
     await advance(61); // economy timelock delay is 1 minute
     await wait(ecoGov.execute([await p3.getAddress()], [0], [overrule], ethers.id(desc)));
     manifest.projects.p3 = { address: await p3.getAddress(), stage: "closed", backers: [bob.address], disputeResolution: 30,
+        appealProposalId: appealId.toString(),
         events: ["NewProject", "SendFunds", "ContractSigned", "ProjectDisputed", "ArbitrationDecision",
-                 "ArbitrationAppealed", "DaoOverruled", "ProjectClosed"] };
+                 "ProposalCreated", "DaoOverruled", "ProjectClosed"] };
 
     // P4 native: contractor reimburses
     const p4 = await newProject("P4 reimburse", true);

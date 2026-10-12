@@ -22,8 +22,8 @@ See also: [architecture.md](architecture.md) for how the suite is wired, [govern
 | Backer | Anyone who funds | Fund, withdraw before signing, vote release/dispute with locked funds, withdraw refund after close | Refund per outcome; REP for what they spent |
 | Contractor | Named by author | Sign, dispute, reimburse (cancel), withdraw | Payouts net of platform and author fees; stake back if no arbitration |
 | Arbiter | Named by author | Rule 0 to 100% while in Dispute | Arbitration fee net of platform fee, only if they ruled |
-| DAO (Timelock) | The jurisdiction | Veto any non-closed project, overrule an appealed ruling, set parameters | Platform fees and forfeited arbitration fees go to the Registry (treasury) |
-| DAO member | REP holder with votes `>= projectThreshold` | Open an appeal | |
+| DAO (Timelock) | The jurisdiction | Veto any non-closed project, overrule a ruling inside the appeal window (or a silent arbiter), set parameters | Platform fees and forfeited arbitration fees go to the Registry (treasury) |
+| DAO member | Anyone who can propose in the Governor | Appeal by proposing a `daoOverrule` | |
 
 ## Stages
 
@@ -34,8 +34,8 @@ Open --setParties--> Pending --signContract--> Ongoing
                                                  |-- backers reach dispute quorum -+
                                                  '-- disputeAsContractor() --------+--> Dispute
 Dispute --arbitrate--> Appealable --finalizeArbitration (after appeal window)--> Closed
-Dispute (arbiter silent past appealPeriod) --appeal--> Appeal
-Appealable --appeal--> Appeal --daoOverrule (Timelock)--> Closed
+Dispute (arbiter silent past appealPeriod) --daoOverrule (Timelock)--> Closed
+Appealable (inside the appeal window) --daoOverrule (Timelock)--> Closed
                              '--finalizeArbitration (after window)--> Closed
 Dispute --arbitrationPeriodExpired (150 days)--> Closed (full refund, no fee)
 any stage except Closed --daoVeto (Timelock)--> Closed (full refund of what is still held)
@@ -54,10 +54,10 @@ If the contractor and arbiter are both passed to `createProject`, the project st
 | `voteToReleasePayment()` / `voteToDispute()` | Backer with locked funds | Ongoing | Weight = backer's locked amount; switching sides moves the weight. Closes or disputes when quorum is reached |
 | `disputeAsContractor()` | Contractor | Ongoing | Moves to Dispute |
 | `reimburse()` | Contractor | Ongoing | Closes with 0% to contractor (backers get locked funds back) |
-| `arbitrate(percent, rulingHash)` | Arbiter | Dispute | Records ruling, opens the appeal window (`appealPeriod`), moves to Appealable |
+| `arbitrate(percent, rulingHash)` | Arbiter | Dispute | Records ruling, opens the appeal window (`effectiveAppealPeriod`), moves to Appealable |
 | `appeal(proposalId, targets)` | Holder of `getVotes >= projectThreshold` | Appealable (inside window), or Dispute once `appealPeriod` has passed with no ruling | Requires a live Governor proposal (Pending, Active, Succeeded, Queued) and `targets[0] == project`. Moves to Appeal, restarts the window |
-| `daoOverrule(percent, rulingHash)` | Timelock | Appeal, inside window | Finalizes with the DAO's percentage |
-| `finalizeArbitration()` | Anyone | Appealable or Appeal, after window | Finalizes with the arbiter's ruling (0% if the arbiter never ruled) |
+| `daoOverrule(percent, rulingHash)` | Timelock (an executed proposal) | Appealable inside the window, or Dispute once `appealPeriod` has passed with no ruling | Finalizes with the DAO's percentage |
+| `finalizeArbitration()` | Anyone | Appealable, after window | Finalizes with the arbiter's ruling (0% if the arbiter never ruled) |
 | `arbitrationPeriodExpired()` | Anyone | Dispute, 150 days after dispute | Closes with full refund of locked funds, no arbitration fee |
 | `daoVeto()` | Timelock | Any but Closed | Closes with 0% to contractor |
 | `withdrawAsContractor()` | Contractor | Closed | Pays `availableToContractor` through the fee path |
@@ -89,8 +89,8 @@ The floor means a veto proposal made when the parties are set can run its full c
 | Arbitration fee | `totalLocked * arbitrationFeeBps / 10000`, fixed at signing. Set at deployment (`EconomyParams.arbitrationFeeBps`), changeable by `setArbitrationFee`, at most 25% |
 | Contractor stake | `arbitrationFee / 2`, paid at signing (Native: `msg.value >= stake`; ERC20: exactly `stake` pulled) |
 | Backers' share | `arbitrationFee - arbitrationFee / 2`, taken from the locked pool only if arbitration is finalized |
-| Appeal window | `appealPeriod`, default 7 days. Restarts when an appeal is filed |
-| Arbiter exclusive window | An appeal from Dispute (arbiter silent) is only allowed after `disputeStarted + appealPeriod` |
+| Appeal window | `effectiveAppealPeriod = max(appealPeriod, proposalLifecycle() + 2 days)`, default 7 days, fixed at the ruling |
+| Arbiter exclusive window | The DAO can only rule on a silent arbiter's dispute after `disputeStarted + appealPeriod` |
 | Arbitration timeout | `ARBITRATION_TIMEOUT = 150 days` |
 
 On finalization (`finalizeArbitration` or `daoOverrule`):
@@ -101,9 +101,9 @@ availableToContractor = pool * percent / 100
 backer exit           = pool * (100 - percent) / 100 * backerLocked / totalLocked
 ```
 
-The full arbitration fee (stake plus backers' share) goes to the arbiter through the fee path (platform fee, no author fee) if the arbiter ruled. If the arbiter never ruled (appeal from Dispute, DAO did not overrule), the whole fee goes to the Registry and the stake is lost. A veto or the 150-day timeout skips arbitration accounting: nobody pays the fee and the contractor reclaims the stake.
+The full arbitration fee (stake plus backers' share) goes to the arbiter through the fee path (platform fee, no author fee) if the arbiter ruled. If the arbiter never ruled (the DAO ruled from Dispute), the whole fee goes to the Registry and the stake is lost. A veto or the 150-day timeout skips arbitration accounting: nobody pays the fee and the contractor reclaims the stake.
 
-The DAO's appeal flow: a member creates a Governor proposal calling `project.daoOverrule(percent, hash)`, calls `appeal(proposalId, targets)` while it is live, and the proposal must execute before the restarted window ends; otherwise anyone can finalize with the arbiter's ruling. See [governance.md](governance.md) for proposal timing.
+The appeal flow lives entirely in the DAO: a member creates a Governor proposal calling `project.daoOverrule(percent, reasoning)`; if it passes and executes before the window closes, it replaces the ruling, otherwise anyone can finalize with the arbiter's ruling. The project is never notified of the proposal. Because the window always fits a full proposal plus two days, a proposal made early in the window can always finish. The indexer spots proposals that call `daoOverrule` on a project and sets `appealProposalId` on it, so trustless.business can show the appeal as underway (display only). See [governance.md](governance.md) for proposal timing.
 
 ## Money flows
 
@@ -216,6 +216,6 @@ Projects: `SetParties`, `SendFunds(who, amount, immediateBps)`, `ContractSigned`
 |------|--------|
 | `test/project-lifecycle.test.js` | Happy path (ERC20), dispute path (native), vote switching, `projectThreshold` |
 | `test/arbitration-accounting.test.js` | Every outcome's payouts, immediate release with disputes, multiple backers, zero leftover balance |
-| `test/appeals.test.js` | Appeal, overrule, finalize after window, inactive arbiter escalation, `receive()`, ERC20 sweep |
+| `test/appeals.test.js` | Direct DAO overrule, finalize after window, late and early overrule rejected, silent-arbiter ruling, `receive()`, ERC20 sweep |
 | `test/backer-spending.test.js` | `spentBy`, no double counting, reimburse, pre-signing veto refund, one listing per backed project |
 | `test/security.test.js` | Factory binding, cooling-off lifecycle floor, platform fee floor, wash-trading cost |

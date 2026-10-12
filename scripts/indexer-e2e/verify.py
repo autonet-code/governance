@@ -93,6 +93,9 @@ for key, p in manifest["projects"].items():
     if "disputeResolution" in p:
         check(f"[{key}] disputeResolution", str(data.get("disputeResolution")) == str(p["disputeResolution"]),
               f"got {data.get('disputeResolution')!r}")
+    if "appealProposalId" in p:
+        check(f"[{key}] appeal proposal linked", str(data.get("appealProposalId")) == p["appealProposalId"],
+              f"got {data.get('appealProposalId')!r}")
     backer_ids = [b.id.lower() for b in snap.reference.collection("backers").stream()]
     for b in p["backers"]:
         check(f"[{key}] backer {b[:8]} doc", b.lower() in backer_ids, f"backers={backer_ids}")

@@ -85,20 +85,12 @@ describe("Appeals and Advanced Fund Handling", function () {
             arbitrationFee = result.arbitrationFee;
         });
 
-        it("should allow a valid DAO member to appeal and the DAO to overrule", async function() {
+        it("lets the DAO overrule an open ruling directly, with no on-chain appeal step", async function() {
             // 1. Arbiter rules, moving to Appealable
             await project.connect(arbiter).arbitrate(60, "arbiter_ruling");
             expect(await project.stage()).to.equal(4); // Appealable
 
-            // 2. Setup mocks for a valid appeal
-            await mockRepToken.mint(daoMember.address, PROJECT_THRESHOLD);
-            await mockGovernor.setProposalState(1); // Active state
-
-            // 3. DAO Member successfully appeals
-            await project.connect(daoMember).appeal(123, [await project.getAddress()]);
-            expect(await project.stage()).to.equal(5); // Appeal
-
-            // 4. DAO Timelock overrules the arbiter
+            // 2. The DAO's overrule proposal executes and calls the project
             const daoRuling = 25; // DAO is less generous
             await project.connect(timelock).daoOverrule(daoRuling, "dao_ruling");
             expect(await project.stage()).to.equal(6); // Closed
@@ -112,54 +104,21 @@ describe("Appeals and Advanced Fund Handling", function () {
             expect(await testToken.balanceOf(arbiter.address)).to.equal(arbiterNet);
         });
 
-        it("should finalize the arbiter's ruling if the appeal initiation period expires", async function() {
+        it("finalizes the arbiter's ruling once the appeal window closes, and blocks a late overrule", async function() {
             await project.connect(arbiter).arbitrate(70, "original_ruling");
             expect(await project.stage()).to.equal(4); // Appealable
 
-            const appealPeriod = await economy.appealPeriod();
-            await time.increase(appealPeriod + 1n);
+            await expect(project.connect(user1).finalizeArbitration())
+                .to.be.revertedWith("Appeal/Finalization period has not ended yet");
+            await time.increaseTo((await project.appealEnds()) + 1n);
 
-            // Attempt to appeal should fail
-            await mockRepToken.mint(daoMember.address, PROJECT_THRESHOLD);
-            await mockGovernor.setProposalState(1);
-            await expect(project.connect(daoMember).appeal(123, [await project.getAddress()]))
-                .to.be.revertedWith("Appeal initiation period has ended");
+            await expect(project.connect(timelock).daoOverrule(10, "too_late"))
+                .to.be.revertedWith("DAO can only overrule an open ruling or a silent arbiter");
 
             // Anyone can now finalize
             await project.connect(user1).finalizeArbitration();
             expect(await project.stage()).to.equal(6); // Closed
             expect(await project.disputeResolution()).to.equal(70);
-        });
-
-        it("should finalize the arbiter's ruling if the DAO fails to act after an appeal", async function() {
-            await project.connect(arbiter).arbitrate(80, "original_ruling");
-            await mockRepToken.mint(daoMember.address, PROJECT_THRESHOLD);
-            await mockGovernor.setProposalState(1);
-            await project.connect(daoMember).appeal(123, [await project.getAddress()]);
-            expect(await project.stage()).to.equal(5); // Appeal
-
-            const appealPeriod = await economy.appealPeriod();
-            await time.increase(appealPeriod + 1n);
-
-            // DAO tries to overrule too late
-            await expect(project.connect(timelock).daoOverrule(10, "too_late"))
-                .to.be.revertedWith("Appeal period has ended");
-
-            // Finalize with original ruling
-            await project.connect(user1).finalizeArbitration();
-            expect(await project.stage()).to.equal(6); // Closed
-            expect(await project.disputeResolution()).to.equal(80);
-        });
-
-        it("should prevent appeals from members with insufficient voting power", async function() {
-            await project.connect(arbiter).arbitrate(50, "ruling");
-
-            // Mint just under the required threshold
-            await mockRepToken.mint(daoMember.address, PROJECT_THRESHOLD - 1n);
-            await mockGovernor.setProposalState(1);
-
-            await expect(project.connect(daoMember).appeal(123, [await project.getAddress()]))
-                .to.be.revertedWith("Insufficient voting power to appeal");
         });
     });
 
@@ -174,7 +133,7 @@ describe("Appeals and Advanced Fund Handling", function () {
             arbitrationFee = result.arbitrationFee;
         });
 
-        it("should allow the DAO to escalate a dispute if the arbiter is inactive", async function() {
+        it("lets the DAO overrule a silent arbiter after the appeal period", async function() {
             // 1. Verify we are in the Dispute stage
             expect(await project.stage()).to.equal(3); // Dispute
 
@@ -182,15 +141,7 @@ describe("Appeals and Advanced Fund Handling", function () {
             const appealPeriod = await economy.appealPeriod();
             await time.increase(appealPeriod + 1n);
 
-            // 3. Setup mocks for a valid appeal
-            await mockRepToken.mint(daoMember.address, PROJECT_THRESHOLD);
-            await mockGovernor.setProposalState(1);
-
-            // 4. DAO member successfully appeals from the Dispute stage
-            await project.connect(daoMember).appeal(456, [await project.getAddress()]);
-            expect(await project.stage()).to.equal(5); // Appeal
-
-            // 5. DAO overrules and closes the project
+            // 3. DAO overrules and closes the project
             await project.connect(timelock).daoOverrule(10, "dao_intervention");
             expect(await project.stage()).to.equal(6); // Closed
 
@@ -213,12 +164,8 @@ describe("Appeals and Advanced Fund Handling", function () {
             expect(await project.stage()).to.equal(3);
 
             // 2. DO NOT fast-forward time. The arbiter is still within their window.
-            await mockRepToken.mint(daoMember.address, PROJECT_THRESHOLD);
-            await mockGovernor.setProposalState(1);
-
-            // 3. Attempting to appeal now must fail
-            await expect(project.connect(daoMember).appeal(789, [await project.getAddress()]))
-                .to.be.revertedWith("Appeal not allowed at this time");
+            await expect(project.connect(timelock).daoOverrule(10, "too_early"))
+                .to.be.revertedWith("DAO can only overrule an open ruling or a silent arbiter");
         });
     });
 

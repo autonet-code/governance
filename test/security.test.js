@@ -119,6 +119,10 @@ describe("Security", function () {
             expect(lifecycle).to.be.gt(60n);
             const floor = lifecycle + (await econ.COOLING_OFF_BUFFER());
             expect(await econ.effectiveCoolingOffPeriod()).to.equal(floor);
+            // The DAO overrules by proposal, so the appeal window fits a lifecycle plus two days
+            const appealFloor = lifecycle + (await econ.APPEAL_BUFFER());
+            const appealPeriod = await econ.appealPeriod();
+            expect(await econ.effectiveAppealPeriod()).to.equal(appealPeriod > appealFloor ? appealPeriod : appealFloor);
 
             // Parties named at creation: the contractor still has to wait out the full lifecycle
             const receipt = await (await econ.connect(member).createProject(

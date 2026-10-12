@@ -37,7 +37,7 @@ An economy DAO adds a marketplace. Anyone can open a project; backers fund it in
 2. **Immediate release.** Backers may release part of their contribution (up to a DAO-set cap, 20% by default) to the contractor at signing, as operating capital. The rest stays in escrow. ([spec →](docs/immediate-release.md))
 3. **Backer consensus.** When backers holding 70% of the stake agree, funds release to the contractor or the project moves to dispute.
 4. **Arbitration.** In a dispute the arbiter rules on a split. If the arbiter never acts, the project can be closed after 150 days.
-5. **Appeal.** A member with enough voting power can appeal a ruling to governance within the appeal period (7 days by default), or appeal a dispute the arbiter leaves unruled past that period; the DAO can then overrule the arbiter by proposal.
+5. **Appeal.** Appeals happen in the DAO: a member proposes a different ruling, and if the proposal passes it overrules the arbiter. The appeal window (7 days by default) is never shorter than a full proposal lifecycle plus two days, so the project never needs to be told an appeal exists. A dispute the arbiter leaves unruled past that period can be settled the same way.
 
 Every payout (immediate release, escrow release, the arbiter's fee) pays a platform fee to the jurisdiction's treasury. The DAO tunes it, but only between 1% and 50%: a jurisdiction can neither run its economy for free nor confiscate it. ([full spec →](docs/economy.md))
 
@@ -59,7 +59,7 @@ Guarantees that depend on an operator's good behaviour are not guarantees. The s
 | Flash-loan voting | Snapshot-based voting power |
 | Contractor signs before the DAO can react | Cooling-off floored at a full proposal lifecycle plus one day |
 | Fee capture or a free-riding economy | Platform fee bounded to 1% to 50%; author and arbitration fees capped at 25% |
-| Bad arbitration | Appeal to governance; DAO overrule |
+| Bad arbitration | DAO overrule by proposal, inside an appeal window that always fits a proposal |
 | Abandoned projects | 150-day arbitration timeout |
 | Hijacked DAO deployment | Per-deployer pending deployments in the factories |
 | Economy administered by a key | Admin hands over to governance (`transferAdmin`) |

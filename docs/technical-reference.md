@@ -162,6 +162,7 @@ modifier onlyGovernance() {
 ```solidity
 function proposalLifecycle() public view returns (uint)          // governor.votingDelay() + votingPeriod() + timelock.getMinDelay()
 function effectiveCoolingOffPeriod() external view returns (uint) // max(coolingOffPeriod, proposalLifecycle() + COOLING_OFF_BUFFER)
+function effectiveAppealPeriod() external view returns (uint)     // max(appealPeriod, proposalLifecycle() + APPEAL_BUFFER)
 ```
 
 Projects use `effectiveCoolingOffPeriod()`, so the DAO always has time to pass a veto before the contractor can sign. Unreadable targets count as 0.
@@ -183,7 +184,7 @@ Projects use `effectiveCoolingOffPeriod()`, so the DAO always has time to pass a
 
 `contracts/NativeProject.sol`, `contracts/ERC20Project.sol`. Escrow clones, initialized by the Economy. ERC20Project uses `SafeERC20` for all token movements. Neither inherits `ReentrancyGuard`; state is updated before every external transfer.
 
-Stages: `Open, Pending, Ongoing, Dispute, Appealable, Appeal, Closed`.
+Stages: `Open, Pending, Ongoing, Dispute, Appealable, Appeal, Closed`. `Appeal` is no longer entered (appeals run on the DAO side); it stays so stage numbers are stable.
 
 | Function | Caller | Stage | Notes |
 |----------|--------|-------|-------|
@@ -193,10 +194,9 @@ Stages: `Open, Pending, Ongoing, Dispute, Appealable, Appeal, Closed`.
 | `signContract()` | contractor | Pending, after cooling-off | Stakes half the arbitration fee (`totalLocked * arbitrationFeeBps / 10000`); releases immediate funds with fees |
 | `voteToReleasePayment()`, `voteToDispute()` | backers with locked funds | Ongoing | Weight = locked amount; quorum `backersVoteQuorumBps` of `totalLocked` |
 | `disputeAsContractor()`, `reimburse()` | contractor | Ongoing | |
-| `arbitrate(uint256 percent, string rulingHash)` | arbiter | Dispute | Opens the appeal window |
-| `appeal(uint256 proposalId, address[] targets)` | votes `>= projectThreshold` | Appealable, or Dispute after `appealPeriod` | Proposal must be live and `targets[0]` this project |
-| `daoOverrule(uint256 percent, string rulingHash)` | timelock | Appeal | |
-| `finalizeArbitration()` | anyone | Appealable/Appeal after window | |
+| `arbitrate(uint256 percent, string rulingHash)` | arbiter | Dispute | Opens the appeal window (`effectiveAppealPeriod`) |
+| `daoOverrule(uint256 percent, string rulingHash)` | timelock | Appealable inside the window, or Dispute after `appealPeriod` | |
+| `finalizeArbitration()` | anyone | Appealable after window | |
 | `arbitrationPeriodExpired()` | anyone | Dispute after `ARBITRATION_TIMEOUT` | Closes with full refund |
 | `daoVeto()` | timelock | any but Closed | Full refund of locked funds (and immediate if unsigned) |
 | `withdrawAsContractor()` | contractor | Closed | Pays with fees |
@@ -300,7 +300,6 @@ event ImmediateFundsReleased(address contractor, uint256 amount);
 event BackerVoteCast(address indexed voter, uint256 votingPower, bool forDispute);
 event ProjectDisputed(address by);
 event ArbitrationDecision(address arbiter, uint256 percent, string rulingHash);
-event ArbitrationAppealed(address indexed appealer, uint256 indexed proposalId);
 event ArbitrationFinalized(address indexed finalizer);
 event DaoOverruled(address indexed timelock, uint256 percent, string rulingHash);
 event VetoedByDao(address indexed timelock);
@@ -351,6 +350,7 @@ event SpendWindowReset(address indexed token, uint256 windowStart);
 | `MIN_PLATFORM_FEE_BPS` / `MAX_PLATFORM_FEE_BPS` | `100` (1%) / `5000` (50%) | Economy |
 | `MAX_AUTHOR_FEE_BPS` / `MAX_ARBITRATION_FEE_BPS` | `2500` (25%) each | Economy |
 | `COOLING_OFF_BUFFER` | `1 days`, added to the proposal lifecycle floor | Economy |
+| `APPEAL_BUFFER` | `2 days`, added to the proposal lifecycle for `effectiveAppealPeriod` | Economy |
 | `NATIVE_CURRENCY` / `NATIVE_TOKEN` | `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` | Economy / Registry |
 | `MAX_DELEGATE_SHARE_BPS` | `2500` | RepToken |
 | `PARITY_ONE` | `1e18` | RepToken, CoinOffering, AutonetVault |

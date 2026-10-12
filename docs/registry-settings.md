@@ -15,8 +15,8 @@ Setters are `onlyGovernance`: the Economy's `admin` until `setDaoAddresses` runs
 | `arbitrationFeeBps` | bps of `totalLocked` | `EconomyParams.arbitrationFeeBps` in `configureAndFinalize` | at most 2500 (`MAX_ARBITRATION_FEE_BPS`) | `setArbitrationFee(uint)` | Once, at signing |
 | `coolingOffPeriod` | seconds | 120 | none; effective value is `max(coolingOffPeriod, proposalLifecycle() + 1 day)` | `setCoolingOffPeriod(uint)` | Once, when parties are set |
 | `backersVoteQuorumBps` | bps of `totalLocked` | 7000 (70%) | 5000 to 9900 | `setBackersVoteQuorum(uint)` | On each backer vote |
-| `projectThreshold` | REP (18 decimals) | 0 | none | `setProjectThreshold(uint)` | REP balance to create a project; voting power to appeal |
-| `appealPeriod` | seconds | 604800 (7 days) | none | `setAppealPeriod(uint)` | At ruling and appeal; also the arbiter's exclusive window |
+| `projectThreshold` | REP (18 decimals) | 0 | none | `setProjectThreshold(uint)` | REP balance to create a project |
+| `appealPeriod` | seconds | 604800 (7 days) | none | `setAppealPeriod(uint)` | At ruling (floored at `proposalLifecycle() + 2 days`); also the arbiter's exclusive window |
 | `maxImmediateBps` | bps per contribution | 2000 (20%) | 0 to 5000 | `setMaxImmediateBps(uint)` | On each contribution |
 | implementations | addresses | unset | none | `setImplementations(native, erc20)` | New projects only |
 
