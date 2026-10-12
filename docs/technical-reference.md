@@ -60,7 +60,7 @@ State: `admin`, `isTransferable` (immutable), `registryAddress` (immutable), `ti
 | `startNewRewardEpoch(uint256 budget, address paymentToken)` | `timelockAddress` only |
 | `transfer`, `transferFrom` | revert `"RepToken: Reputation is non-transferable"` unless `isTransferable` |
 
-> **StandardFactory caveat.** The current source of the standard factories passes the DAO's timelock as `_timelockAddress`. Earlier builds passed `address(this)`, so DAOs created by those factories (including the Shadownet factories deployed 2026-10-11, until they are redeployed) have the factory as their immutable `timelockAddress`. In those DAOs, functions gated to `timelockAddress` only (`startNewRewardEpoch`, `setDelegateShareBps`) are unreachable; admin-or-timelock functions still work because `admin` is handed to the timelock. Economy DAOs (TrustlessFactory) always passed the real timelock.
+> **StandardFactory caveat.** The current source of the standard factories passes the DAO's timelock as `_timelockAddress`. Earlier builds passed `address(this)`, so DAOs created by those factories (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) have the factory as their immutable `timelockAddress`. In those DAOs, functions gated to `timelockAddress` only (`startNewRewardEpoch`, `setDelegateShareBps`) are unreachable; admin-or-timelock functions still work because `admin` is handed to the timelock. Economy DAOs (TrustlessFactory) always passed the real timelock.
 
 ### Reputation from the Economy
 

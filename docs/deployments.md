@@ -6,23 +6,23 @@ Addresses, build commands, deploy scripts and the local end-to-end harnesses. AP
 
 ### Etherlink Shadownet (chainId 127823)
 
-Deployed 2026-10-11. **The source of truth is Firestore `contracts/Etherlink-Shadownet`** (in both `homebase-6907d` and `trustless-58262`); the web apps and the indexer read factory and implementation addresses from there. The old Ghostnet testnet (chainId 128123) is retired.
+Deployed 2026-10-12. **The source of truth is Firestore `contracts/Etherlink-Shadownet`** (in both `homebase-6907d` and `trustless-58262`); the web apps and the indexer read factory and implementation addresses from there. The old Ghostnet testnet (chainId 128123) is retired.
 
 | Contract | Firestore field | Address |
 |----------|-----------------|---------|
-| StandardFactory | `wrapper` | `0x18A6cFc4E2e99C7f164Fc0857Bc2985D8CF629a2` |
-| StandardFactoryTransferable | `wrapper_t` | `0xfA5Df76fEF1c434dfAb764F837C6b2cf42A6685D` |
-| StandardFactoryWrapped | `wrapper_w` | `0x7BCFa3C390C9f004b0e43019094f4f6208e97c2D` |
-| TrustlessFactory | `wrapper_trustless` | `0xE748fD0cE8aCFE3c187C6e16ABB6Ba6341Dd380F` |
-| NativeProject implementation | `nativeProjectImpl` | `0x422E09547f732f7aE1177Be0C42B6d3903fc9f3A` |
-| ERC20Project implementation | `erc20ProjectImpl` | `0xc873836843DA3C03D8A4aD08e99C3009b88fD179` |
-| InfrastructureFactory | | `0xBb334a55096cDf2B7C46406c119eB989CCA4fbEb` |
-| DAOFactory | | `0x432583bdEc29722d0593b1F3E198B793A5b9423F` |
-| RepTokenFactory | | `0xDa57341ee91Fc987E4F56c560bf71dfAC705eF73` |
-| EconomyFactory | | `0x36d6364E7191C31272a2D456D02178f58a457373` |
-| WrappedRepTokenFactory | | `0x61597CeDA571c910430b4Bad89F8f5939C91201E` |
+| StandardFactory | `wrapper` | `0xefAC8Ca9bCd7E1F37A54F747Ab08d5673700d1eD` |
+| StandardFactoryTransferable | `wrapper_t` | `0x0DC3b6BD1235623B8dBC69b309763C6B7786a7e9` |
+| StandardFactoryWrapped | `wrapper_w` | `0xCB49E8CEdCa19607916d572Be9Fd91C08565A6Fc` |
+| TrustlessFactory | `wrapper_trustless` | `0x87381e16517d5a0753Bb6B6451eBda13B142058C` |
+| NativeProject implementation | `nativeProjectImpl` | `0xE6F163d1a0c70De26242683C0B9536553293a4Ac` |
+| ERC20Project implementation | `erc20ProjectImpl` | `0x0516f98318A0E76649Da090d77c2f2fd911E3E9E` |
+| InfrastructureFactory | | `0x8C732210719Dd972A663f524c0662AeF684e9236` |
+| DAOFactory | | `0xB570BC9847465e137aDD2Bb249008fb774935567` |
+| RepTokenFactory | | `0x2818BB935B8CFBB26821bbc8391a6ec92CC4D9ef` |
+| EconomyFactory | | `0x468F9Da8c0A8bB10ff8C82536652a4350C696451` |
+| WrappedRepTokenFactory | | `0x632c396c3cF475e062dfcdefE770157D1c0f63ba` |
 
-The project implementations were redeployed after the factory suite (for `ArbitrationStakeReclaimed`), so they differ from the ones in `deployments/etherlink-shadownet-full-suite.json`. Economies created through the web app take implementation addresses from Firestore, so project-only changes do not need a factory redeploy.
+Everything was deployed together by `scripts/deployFullFactorySuiteShadownet.js` (output in `deployments/etherlink-shadownet-full-suite.json`). Economies created through the web app take implementation addresses from Firestore, so project-only changes do not need a factory redeploy.
 
 Autonet satellites on Shadownet (vault, REP claim, Substrate) are recorded in each jurisdiction's own Registry under `jurisdiction.autonet.substrate`, `jurisdiction.autonet.vault` and `jurisdiction.autonet.rep_claim`. Read them from there rather than from `deployments/autonet-jurisdiction-ets.json`, which records an earlier (2026-07-08) attachment with different addresses.
 

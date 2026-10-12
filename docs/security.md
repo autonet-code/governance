@@ -49,7 +49,7 @@ An internal audit and a test plan exist; both are kept private.
 ## Known caveats
 
 - Fee-on-transfer payment tokens would short the treasury in the vault and CO; they are excluded socially when governance sets parity.
-- Standard DAOs created by factory builds that passed `address(this)` as the RepToken timelock (including the Shadownet standard factories deployed 2026-10-11, until redeployed) cannot call `startNewRewardEpoch` or `setDelegateShareBps`. The current source passes the real timelock; economy DAOs are unaffected. See [technical-reference.md](technical-reference.md#reptoken).
+- Standard DAOs created by factory builds that passed `address(this)` as the RepToken timelock (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) cannot call `startNewRewardEpoch` or `setDelegateShareBps`. The current source passes the real timelock; economy DAOs are unaffected. See [technical-reference.md](technical-reference.md#reptoken).
 - The standard factories remain the Registry `wrapper` of the DAOs they deploy and so keep registry edit rights; the factory exposes no function that uses them after deployment.
 - Timelock delay can be configured to zero (test networks do this), which removes the review window; the cooling-off floor then shrinks to the voting delay plus period plus the one-day buffer.
 - `EvolutionProposal` is not production-ready (unchecked transfers, admin can recover staked ATN, Registry writes revert against a real Registry). See [autonet.md](autonet.md#evolutionproposal-experimental).
