@@ -193,7 +193,7 @@ async function predictVault(deployer, network) {
 // prediction holds on a RESUME run), then AutonetRepClaim (needs the external
 // Substrate address). Returns addresses + the timelock grant calldata.
 async function deployGenesisSatellites(deployer, params) {
-  const { substrateAddr, atnAddr, registryAddr, timelockAddr, repTokenAddr } = params;
+  const { substrateAddr, atnAddr, registryAddr, timelockAddr, repTokenAddr, economyAddr } = params;
   const out = { vault: null, repClaim: null };
 
   // ── AutonetVault ──────────────────────────────────────────────────────────
@@ -237,8 +237,26 @@ async function deployGenesisSatellites(deployer, params) {
     const grantCalldata = rep.interface.encodeFunctionData(
       "setMinter", [claimAddr, true]);
     out.repClaim = { address: claimAddr, grantCalldata };
+
+    // ── ToolBond ────────────────────────────────────────────────────────────
+    // ATN stakes behind tools that replace a core harness part. The arbiter
+    // defaults to the timelock (the DAO rules itself until it appoints one).
+    // Amounts are ATN base units (1 ATN = 1e6).
+    const economy = await ethers.getContractAt("Economy", economyAddr);
+    const arbiterWindow = BigInt(process.env.TOOLBOND_ARBITER_WINDOW_SECS || 7 * 86400);
+    const unbondDelay = arbiterWindow + (await economy.effectiveAppealPeriod()) + 86400n;
+    const Bond = await ethers.getContractFactory("ToolBond");
+    const toolBond = await Bond.deploy(
+      substrateAddr, economyAddr, timelockAddr,
+      process.env.TOOLBOND_ARBITER || timelockAddr,
+      process.env.TOOLBOND_MIN_STAKE || 100_000_000n,
+      process.env.TOOLBOND_COUNTER_BOND || 10_000_000n,
+      arbiterWindow, unbondDelay);
+    await toolBond.waitForDeployment();
+    out.toolBond = { address: await toolBond.getAddress() };
+    console.log(`  ToolBond:          ${out.toolBond.address}`);
   } else {
-    console.log("  AutonetRepClaim:   SKIPPED (set SUBSTRATE_ADDRESS to deploy it)");
+    console.log("  AutonetRepClaim, ToolBond: SKIPPED (set SUBSTRATE_ADDRESS to deploy them)");
   }
   return out;
 }
@@ -295,6 +313,7 @@ function printGenesisChecklist(ctx) {
        npx hardhat run scripts/deploy-autonet-jurisdiction.js --network <net>
        ${vault ? `AutonetVault:     ${vault.address}` : ""}
        ${repClaim ? `AutonetRepClaim:  ${repClaim.address}` : ""}
+       ${ctx.toolBond ? `ToolBond:         ${ctx.toolBond.address}` : ""}
 
  5. [AUTONET REPO] Deploy CharterAnchor governed by THIS jurisdiction.
        CharterAnchor.governor is an IMMUTABLE constructor arg with NO transfer
@@ -331,7 +350,7 @@ async function resumeGenesis(deployer, network) {
     throw new Error("RESUME=1 requires SUBSTRATE_ADDRESS=0x... (the deployed autonet Substrate)");
   }
   const info = loadJurisdiction(network);
-  const { registry, timelock, repToken } = info.dao;
+  const { registry, timelock, repToken, economy } = info.dao;
 
   console.log("=== GENESIS RESUME (phase 2): AutonetVault + AutonetRepClaim ===");
   console.log(`  jurisdiction: ${info.jurisdiction} (${network.name})`);
@@ -341,12 +360,14 @@ async function resumeGenesis(deployer, network) {
     registryAddr: registry,
     timelockAddr: timelock,
     repTokenAddr: repToken,
+    economyAddr: economy,
   });
 
   info.substrate = substrateAddr;
   info.vault = { autonetVault: sat.vault.address, atn: substrateAddr };
   if (sat.repClaim) {
     info.repClaim = { autonetRepClaim: sat.repClaim.address, substrate: substrateAddr };
+    info.toolBond = sat.toolBond.address;
   }
   fs.writeFileSync(jurisdictionJsonPath(network), JSON.stringify(info, null, 2));
   console.log(`  Deployment JSON updated: ${jurisdictionJsonPath(network)}`);
@@ -358,6 +379,7 @@ async function resumeGenesis(deployer, network) {
     repTokenAddr: repToken,
     vault: sat.vault,
     repClaim: sat.repClaim,
+    toolBond: sat.toolBond,
     substrateAddr,
   });
 }
@@ -664,6 +686,7 @@ async function main() {
       registryAddr,
       timelockAddr,
       repTokenAddr,
+      economyAddr,
     });
     console.log();
   } else {
@@ -695,6 +718,7 @@ async function main() {
     repClaim: satellites.repClaim
       ? { autonetRepClaim: satellites.repClaim.address, substrate: SUBSTRATE_ADDRESS }
       : null,
+    toolBond: satellites.toolBond ? satellites.toolBond.address : null,
   };
 
   // Save jurisdiction deployment
@@ -731,6 +755,7 @@ async function main() {
     repTokenAddr,
     vault: satellites.vault,
     repClaim: satellites.repClaim,
+    toolBond: satellites.toolBond,
     substrateAddr: SUBSTRATE_ADDRESS,
   });
 }

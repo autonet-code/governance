@@ -12,6 +12,7 @@ Related: [architecture.md](architecture.md), [governance.md](governance.md), [re
 |----------|------|-------------------------------|
 | `AutonetVault` | Sells Substrate ATN for whitelisted ERC20s; payment goes to the Registry | **Live.** Deployed on Shadownet and registered under `jurisdiction.autonet.vault` (`scripts/submit-autonet-registry-keys.js`) |
 | `AutonetRepClaim` | Mints REP 1:1 against ATN an agent provably earned on the Substrate | **Live.** Granted minter rights by proposal (the 2026-07-10 flag-day proposal on Shadownet); registered under `jurisdiction.autonet.rep_claim` |
+| `ToolBond` | ATN stakes behind tools that replace a core harness part; slashed to the accuser if the tool is ruled malicious | **New (2026-10-12).** Deployed by the genesis script; the harness loads core-replacing tools only while `isBonded` |
 | `CoinOffering` | Sells the jurisdiction's own transferable governance token (ATNB) under a DAO-set cap | **Tested in isolation** (`deployCOLocal.js`, `deployTestCOShadownet.js`, `deployTestCOBaseSepolia.js`). Not part of the Autonet genesis flow |
 
 > `scripts/deploy-autonet-jurisdiction.js` deploys `AutonetRepClaim` (empty genesis seed) in its genesis step and prints the `setMinter` calldata for the grant proposal. Jurisdictions that still have the retired ReputationMirror as a minter revoke it by proposal (see [Minter swap](#minter-swap-from-the-retired-mirror)).
@@ -79,6 +80,20 @@ Only registered Substrate agents can claim (`NotAgent` otherwise): earnings paid
 
 Trust assumptions: the Substrate's earnings ledgers are honest and monotonic; RepToken grants this contract minter rights. There is no baseline: an agent's first claim covers all earnings recorded on the Substrate up to that point.
 
+## ToolBond
+
+`contracts/ToolBond.sol`. Publishing a tool that replaces a core harness part (a tool whose manifest claims `capabilities.provides` over a built-in name: shell and file tools today, loop-policy parts later) requires ATN at stake. The harness loads such a tool only while `isBonded(digest)`. This reuses the dispute half of the trustless projects (arbiter ruling, appeal window, DAO overrule, silent-arbiter fallback) without the escrow.
+
+- `bond(digest, amount)`: only `Substrate.toolAuthor(digest)`; pulls ATN (approve first). Topping up cancels a pending unbond. `isBonded` needs `stake >= minStake`, no pending unbond and no past slash.
+- `requestUnbond`, then `withdraw` after `unbondDelay`: the tool stops counting at once but stays slashable until then, and no withdrawal while a dispute is open. `unbondDelay` must be at least `arbiterWindow` plus the appeal window, so an author cannot leave the moment an accusation looks likely.
+- `accuse(digest, evidenceCid)`: registered Substrate agents only; posts `counterBond`. One dispute per tool at a time. Evidence is the pinned manifest digest plus a daemon-signed trace of the run (inputs, sandboxed network and file activity, outputs); the signed trace counts even when a replay no longer reproduces because the attacker's server went quiet.
+- `rule(digest, malicious)`: the arbiter. Opens the appeal window `Economy.effectiveAppealPeriod()` (never shorter than a proposal lifecycle plus 2 days).
+- `daoOverrule(digest, malicious)`: the timelock, by proposal, within the appeal window or once the arbiter has been silent past `arbiterWindow`. `finalize(digest)`: anyone, after the appeal window. `expire(digest)`: anyone, after `DISPUTE_TIMEOUT` (150 days) without a decision; both bonds return.
+- Malicious: the whole stake pays the accuser through `Substrate.payForService`, so the bounty is the accuser's service earnings and can be claimed as REP (auditing earns voice, not only money); the counter-bond returns and the digest can never be bonded again. Not malicious: the counter-bond goes to the author.
+- `setParams(arbiter, minStake, counterBond, arbiterWindow, unbondDelay)`: timelock only. The genesis script defaults the arbiter to the timelock, 100 ATN stake, 10 ATN counter-bond, a 7-day arbiter window (env `TOOLBOND_*` overrides).
+
+Stakes are flat for now; scaling them with a tool's usage is a later step. Bonds are only as sound as ATN itself, which depends on the Substrate's anchor authority.
+
 ## CoinOffering
 
 `contracts/CoinOffering.sol`. Sells ATNB (a transferable RepToken used as the governance token) for whitelisted ERC20s.
@@ -124,6 +139,7 @@ Helper scripts for the governance steps: `vote-genesis.js`, `execute-genesis-pro
 | `test/autonet-integration.test.js` | A jurisdiction wired to the **real** autonet contracts: Substrate on the predicted vault address with the Registry as treasury and the timelock as governor, minter grant and parity by proposal, vault sale, service-fee split, REP from service and tool-pool earnings, service fee retuned by proposal, payment-channel settlement, CharterAnchor by proposal, vault pause |
 | `test/autonet-vault.test.js` | Parity math (USDC and DAI into ATN at jurisdiction-unit parity), uncapped, dust, de-whitelisting, routing, pause, admin, reentrancy |
 | `test/autonet-rep-claim.test.js` | Against the real Substrate: 1e12 scaling, summed base, watermark idempotency, permissionless trigger, registered agents only, genesis seed, no mint without grant |
+| `test/tool-bond.test.js` | Against the real Substrate: author-only bonding, minimum stake, unbond delay and dispute lock, registered accusers with counter-bond, malicious and benign rulings, bounty as service earnings, DAO overrule window, silent arbiter, expiry, parameter floor |
 | `test/coin-offering.test.js` | Cap, auto-delegation, reclaiming votes, 6 to 18 parity |
 
 The real contracts come from `test/fixtures/autonet/` (ABI and bytecode, with the source commit in `SOURCE.json`). Refresh them after changing the autonet contracts: compile in the autonet repo, then `node scripts/sync-autonet-artifacts.js [path to autonet]`. The vault unit test still uses a small stand-in, `contracts/test/MockAutonetATN.sol`.

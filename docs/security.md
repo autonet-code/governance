@@ -44,6 +44,7 @@ An internal audit and a test plan exist; both are kept private.
 | Unbacked ATN | ATN is minted only on the external Substrate, which gates `mintFromVault` to the vault address fixed in its constructor | Substrate (autonet repo) |
 | Parity mispricing | Parity is a Registry key editable only by the timelock; the vault and CO can be paused by their admin (the timelock) | `Registry`, `pause()` |
 | REP double count | `AutonetRepClaim` mints only the delta over a per-agent watermark on monotonic Substrate ledgers | `claimedEarnings` |
+| Malicious core-replacing tool | The harness loads it only while bonded; a registered accuser with evidence gets the author's stake if the arbiter (or the DAO, by proposal) rules it malicious; a stake stays slashable for a full ruling plus appeal after unbonding | `ToolBond` |
 | CO oversells | `saleCap` enforced on every buy and cannot be set below `totalMinted` | `CoinOffering` |
 
 ## Known caveats
