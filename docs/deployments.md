@@ -6,21 +6,21 @@ Addresses, build commands, deploy scripts and the local end-to-end harnesses. AP
 
 ### Etherlink Shadownet (chainId 127823)
 
-Deployed 2026-10-12. **The source of truth is Firestore `contracts/Etherlink-Shadownet`** (in both `homebase-6907d` and `trustless-58262`); the web apps and the indexer read factory and implementation addresses from there. The old Ghostnet testnet (chainId 128123) is retired.
+Deployed 2026-10-13. **The source of truth is Firestore `contracts/Etherlink-Shadownet`** (in both `homebase-6907d` and `trustless-58262`); the web apps and the indexer read factory and implementation addresses from there. The old Ghostnet testnet (chainId 128123) is retired.
 
 | Contract | Firestore field | Address |
 |----------|-----------------|---------|
-| StandardFactory | `wrapper` | `0xefAC8Ca9bCd7E1F37A54F747Ab08d5673700d1eD` |
-| StandardFactoryTransferable | `wrapper_t` | `0x0DC3b6BD1235623B8dBC69b309763C6B7786a7e9` |
-| StandardFactoryWrapped | `wrapper_w` | `0xCB49E8CEdCa19607916d572Be9Fd91C08565A6Fc` |
-| TrustlessFactory | `wrapper_trustless` | `0x87381e16517d5a0753Bb6B6451eBda13B142058C` |
-| NativeProject implementation | `nativeProjectImpl` | `0xE6F163d1a0c70De26242683C0B9536553293a4Ac` |
-| ERC20Project implementation | `erc20ProjectImpl` | `0x0516f98318A0E76649Da090d77c2f2fd911E3E9E` |
-| InfrastructureFactory | | `0x8C732210719Dd972A663f524c0662AeF684e9236` |
-| DAOFactory | | `0xB570BC9847465e137aDD2Bb249008fb774935567` |
-| RepTokenFactory | | `0x2818BB935B8CFBB26821bbc8391a6ec92CC4D9ef` |
-| EconomyFactory | | `0x468F9Da8c0A8bB10ff8C82536652a4350C696451` |
-| WrappedRepTokenFactory | | `0x632c396c3cF475e062dfcdefE770157D1c0f63ba` |
+| StandardFactory | `wrapper` | `0x60E813F889c4c29eB4FB8614fa37fFA7587e305B` |
+| StandardFactoryTransferable | `wrapper_t` | `0xAffB86fD7C552c1313C5ACF17fCCA38f3846319A` |
+| StandardFactoryWrapped | `wrapper_w` | `0xd8dfad1Aae03BF9b193eE362e7764CEa2c7A0f1B` |
+| TrustlessFactory | `wrapper_trustless` | `0xd3aDda8626C18ec4E85985cc6B489d96D836C07f` |
+| NativeProject implementation | `nativeProjectImpl` | `0x97969B2dE8C60A94Dc2Ee6019aD7E3C5Ef119E4B` |
+| ERC20Project implementation | `erc20ProjectImpl` | `0x0f607F4dFD86EA3FA0155576b1d22EaA8A72A0Fa` |
+| InfrastructureFactory | | `0xC32Dd770Aad25d3693fA8C36f7E6D9Fc9874F667` |
+| DAOFactory | | `0xE6c4A9c8cb7a5872Ac9Bdd2b6916b75576Dd263F` |
+| RepTokenFactory | | `0x42998c90EE035F3FB89C222b519C4553bE886ed7` |
+| EconomyFactory | | `0x5675e32c042eeeF863F7B06FB3cEbb48D1175FDb` |
+| WrappedRepTokenFactory | | `0x4d14Fd053337D467C625057780d1b258F84FF4Aa` |
 
 Everything was deployed together by `scripts/deployFullFactorySuiteShadownet.js` (output in `deployments/etherlink-shadownet-full-suite.json`). Economies created through the web app take implementation addresses from Firestore, so project-only changes do not need a factory redeploy.
 
