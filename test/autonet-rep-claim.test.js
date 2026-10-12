@@ -1,10 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-function autonet(name, signer) {
-    const a = require(`./fixtures/autonet/${name}.json`);
-    return new ethers.ContractFactory(a.abi, a.bytecode, signer);
-}
+const { autonet, mintLeaf, submitAnchor } = require("./helpers/autonet");
 
 // AutonetRepClaim: REP as pull claims on autonet earnings (docs/tool_substrate.md
 // "Decision (2026-07-10): fees-only emission + REP-from-earnings"). Reads the two
@@ -12,7 +9,9 @@ function autonet(name, signer) {
 // serviceEarnings), mints the watermarked delta to the AGENT 1:1 in whole-token
 // terms (ATN base 1e6 -> REP 1e18, so x1e12). Hardcoded rate, no knob, no admin.
 // Runs against the real Substrate (test/fixtures/autonet). The deployer is its vault
-// minter so tests can fund payers; tool-pool earnings come from single-leaf anchors.
+// minter so tests can fund payers. Tool-pool earnings come from single-leaf anchors signed
+// by agentA (the genesis signer while no REP exists, its own votes afterwards); each mint
+// is backed by fees burned in the window before.
 describe("AutonetRepClaim", function () {
     let claim, substrate, repToken, registry;
     let deployer, timelock, agentA, agentB, stranger, gen1, gen2;
@@ -22,11 +21,14 @@ describe("AutonetRepClaim", function () {
     const ONE_ATN = 1_000_000n; // 1e6 base units
 
     let epoch = 0;
-    // Tool-pool earnings: anchor an epoch whose mint root is the single leaf (agent, amount)
+    // Tool-pool earnings: burn enough fees to fund the pool, close that window, then anchor a
+    // single-leaf root paying (agent, amount)
     async function earnPool(agent, amount) {
-        const id = `epoch-${++epoch}`;
-        const leaf = ethers.keccak256(ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["address", "uint256"], [agent.address, amount])));
-        await substrate.submitAnchor(id, ethers.id(id), await substrate.latestEpochRoot(), await substrate.latestAnchorHash(), "", ethers.ZeroHash, leaf);
+        await substrate.mintFromVault(deployer.address, amount * 40n);
+        await substrate.payForService(stranger.address, amount * 40n, ethers.id(`burn-${epoch}`)); // 2.5% fee, all burned
+        await submitAnchor(substrate, [agentA], `window-${++epoch}`);
+        const id = `epoch-${epoch}`;
+        await submitAnchor(substrate, [agentA], id, mintLeaf(agent.address, amount));
         await substrate.connect(agent).recordTrainingForEpoch(amount, ethers.id(id), []);
     }
     // Service earnings: the deployer pays the agent; the agent's earnings grow by the net
@@ -71,12 +73,15 @@ describe("AutonetRepClaim", function () {
         [deployer, timelock, agentA, agentB, stranger, gen1, gen2] =
             await ethers.getSigners();
 
-        // No treasury, deployer as vault minter, no governor (fee frozen at 2.5%)
-        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, ethers.ZeroAddress);
+        repToken = await deployRepToken();
+        // No treasury, deployer as vault minter, no governor (fee frozen at 2.5%), agentA the genesis signer
+        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, ethers.ZeroAddress,
+            await repToken.getAddress(), 5000, [agentA.address], 1);
         await substrate.connect(agentA).registerAgent(ethers.id("a"), "0x01");
         await substrate.connect(agentB).registerAgent(ethers.id("b"), "0x02");
 
-        repToken = await deployRepToken();
+        await repToken.connect(agentA).delegate(agentA.address);
+        await repToken.connect(agentB).delegate(agentB.address);
 
         // Default: no genesis seed. setMinter happens inside deployClaim.
         claim = await deployClaim([], []);

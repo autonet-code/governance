@@ -299,10 +299,15 @@ function printGenesisChecklist(ctx) {
        NONCE CAVEAT: after predicting, send NO txs from the deployer until step 4.
 
  3. ${done(!!substrateAddr)} [AUTONET REPO] Deploy Substrate with the predicted vault:
-       - implement IAutonetATN.mintFromVault(address to, uint256 amount)
-         (amounts are ATN base units, 1e6-scaled)
-       - VAULT_MINTER = <predicted vault> as a CONSTRUCTOR arg — Substrate has
-         no admin keys, so this CANNOT be granted post-deploy.
+       scripts/deploy_substrate.js there, constructor (all immutable, no admin keys):
+         treasury = ${registryAddr}  (Registry)
+         vaultMinter = <predicted vault>
+         governor = ${timelockAddr}  (Timelock, retunes the service fee)
+         REP_TOKEN = ${repTokenAddr}  (anchor signatures are weighed in its votes)
+         ANCHOR_QUORUM_BPS (5000 = more than half of REP votes must sign)
+         GENESIS_SIGNERS / GENESIS_QUORUM (only used while no REP exists)
+       Anchor signers are registered agents: REP held by members only counts
+       once delegated to an agent.
        CIRCULAR-ADDRESS NOTE: Substrate needs the vault address at construction
        and the vault needs Substrate's address at construction. Neither calls
        the other in its constructor, so the cycle is broken by deploying

@@ -2,10 +2,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
-function autonet(name, signer) {
-    const a = require(`./fixtures/autonet/${name}.json`);
-    return new ethers.ContractFactory(a.abi, a.bytecode, signer);
-}
+const { autonet } = require("./helpers/autonet");
 
 // ToolBond against the real Substrate. The deployer is the Substrate's vault minter so it can fund
 // accounts with ATN; a plain signer stands in for the timelock; a standalone Economy supplies the
@@ -34,7 +31,7 @@ describe("ToolBond", function () {
 
     beforeEach(async function () {
         [deployer, timelock, arbiter, author, accuser, outsider] = await ethers.getSigners();
-        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, ethers.ZeroAddress);
+        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, ethers.ZeroAddress, ethers.ZeroAddress, 5000, [deployer.address], 1);
         economy = await (await ethers.getContractFactory("Economy")).deploy(250);
         bond = await (await ethers.getContractFactory("ToolBond")).deploy(
             await substrate.getAddress(), await economy.getAddress(), timelock.address,

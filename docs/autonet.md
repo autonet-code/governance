@@ -78,7 +78,7 @@ Trust assumptions:
 
 Only registered Substrate agents can claim (`NotAgent` otherwise): earnings paid to other addresses, such as a VentureVault, never become REP.
 
-Trust assumptions: the Substrate's earnings ledgers are honest and monotonic; RepToken grants this contract minter rights. There is no baseline: an agent's first claim covers all earnings recorded on the Substrate up to that point.
+Trust assumptions: the Substrate's earnings ledgers are honest and monotonic; RepToken grants this contract minter rights. Since autonet `c390bd8` the Substrate enforces this on chain: an anchor needs EIP-712 signatures from registered agents holding more than `anchorQuorumBps` of this RepToken's votes (read at the previous anchor's timestamp), and an epoch can mint at most the service fees burned in the window before it. REP held by members counts toward that quorum only once delegated to a registered agent, so delegating to an agent hands it both anchor and governance weight. There is no baseline: an agent's first claim covers all earnings recorded on the Substrate up to that point.
 
 ## ToolBond
 
@@ -113,7 +113,7 @@ The contract header still describes a "DAO mints inventory to the CO" model. The
 |------|-------|------------------|
 | 1 | this repo | `npx hardhat run scripts/deploy-autonet-jurisdiction.js --network ets`. Deploys and finalizes the suite (timelock owns Registry, RepToken, Economy). Optional `PARITY_TOKENS` / `PARITY_VALUES` fold parity keys into `configureAndFinalize` so no proposal is needed. Writes `deployments/autonet-jurisdiction-<net>.json` |
 | 2 | this repo | `PREDICT_VAULT=1 ...` prints the next CREATE address of the deployer. No transactions |
-| 3 | autonet repo | Deploy Substrate with `VAULT_MINTER=<predicted>`. **The deployer must send no transactions until step 4** or the prediction breaks |
+| 3 | autonet repo | Deploy Substrate (`scripts/deploy_substrate.js`) with treasury = Registry, `VAULT_MINTER=<predicted>`, governor = Timelock, `REP_TOKEN` = this RepToken, `ANCHOR_QUORUM_BPS` and the genesis signer set. **The deployer must send no transactions until step 4** or the prediction breaks |
 | 4 | this repo | `RESUME=1 SUBSTRATE_ADDRESS=0x.. EXPECTED_VAULT=0x.. ...` deploys the vault first (asserts it landed on the predicted address) and then the satellites |
 | 5 | autonet repo | Deploy `CharterAnchor(<timelock>)` (immutable governor) and anchor charter v1 by DAO proposal |
 | 6 | governance | Grant REP minter rights (`RepToken.setMinter(...)`). The deployer can never do this directly: RepToken admin goes RepTokenFactory to TrustlessFactory to Timelock |
