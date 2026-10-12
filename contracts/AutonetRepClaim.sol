@@ -16,6 +16,7 @@ pragma solidity ^0.8.20;
 interface ISubstrateEarnings {
     function agentMintTotal(address agent) external view returns (uint256);
     function serviceEarnings(address agent) external view returns (uint256);
+    function isRegistered(address agent) external view returns (bool);
 }
 
 /// @notice Minimal mint surface of RepToken this rail needs. RepToken.mint is
@@ -106,6 +107,7 @@ contract AutonetRepClaim {
     error ZeroAddress();
     error LengthMismatch();
     error NothingToClaim();
+    error NotAgent();
 
     /// @param _substrate       autonet Substrate.sol address (earnings source).
     /// @param _repToken        RepToken address (mint target). This contract must
@@ -158,6 +160,7 @@ contract AutonetRepClaim {
     /// @notice The REP an agent could mint right now (18-decimal), = the unclaimed
     ///         ATN-base delta scaled by 1e12. Zero if nothing new was earned.
     function claimable(address agent) external view returns (uint256) {
+        if (!substrate.isRegistered(agent)) return 0;
         uint256 base = earningsBase(agent);
         uint256 watermark = claimedEarnings[agent];
         if (base <= watermark) return 0;
@@ -171,8 +174,13 @@ contract AutonetRepClaim {
     ///         Reverts NothingToClaim on a zero delta (matches the economy's
     ///         "no-op" pull convention as an explicit revert, per this repo's
     ///         ReputationMirror.claim style).
+    ///         Only registered Substrate agents can claim: earnings paid to any
+    ///         other address (a VentureVault, a payment router) would otherwise
+    ///         become REP that nobody can use but that still counts toward the
+    ///         supply and quorum.
     function claim(address agent) external {
         if (agent == address(0)) revert ZeroAddress();
+        if (!substrate.isRegistered(agent)) revert NotAgent();
 
         uint256 base = earningsBase(agent);
         uint256 watermark = claimedEarnings[agent];

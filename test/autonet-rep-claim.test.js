@@ -1,11 +1,18 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
+function autonet(name, signer) {
+    const a = require(`./fixtures/autonet/${name}.json`);
+    return new ethers.ContractFactory(a.abi, a.bytecode, signer);
+}
+
 // AutonetRepClaim: REP as pull claims on autonet earnings (docs/tool_substrate.md
 // "Decision (2026-07-10): fees-only emission + REP-from-earnings"). Reads the two
 // cumulative ATN-base earnings ledgers on Substrate (agentMintTotal +
 // serviceEarnings), mints the watermarked delta to the AGENT 1:1 in whole-token
 // terms (ATN base 1e6 -> REP 1e18, so x1e12). Hardcoded rate, no knob, no admin.
+// Runs against the real Substrate (test/fixtures/autonet). The deployer is its vault
+// minter so tests can fund payers; tool-pool earnings come from single-leaf anchors.
 describe("AutonetRepClaim", function () {
     let claim, substrate, repToken, registry;
     let deployer, timelock, agentA, agentB, stranger, gen1, gen2;
@@ -13,6 +20,20 @@ describe("AutonetRepClaim", function () {
     // ATN base unit -> REP scaling: 1 ATN (1e6 base) == 1 whole REP (1e18).
     const REP_PER_ATN_BASE = 10n ** 12n;
     const ONE_ATN = 1_000_000n; // 1e6 base units
+
+    let epoch = 0;
+    // Tool-pool earnings: anchor an epoch whose mint root is the single leaf (agent, amount)
+    async function earnPool(agent, amount) {
+        const id = `epoch-${++epoch}`;
+        const leaf = ethers.keccak256(ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["address", "uint256"], [agent.address, amount])));
+        await substrate.submitAnchor(id, ethers.id(id), await substrate.latestEpochRoot(), await substrate.latestAnchorHash(), "", ethers.ZeroHash, leaf);
+        await substrate.connect(agent).recordTrainingForEpoch(amount, ethers.id(id), []);
+    }
+    // Service earnings: the deployer pays the agent; the agent's earnings grow by the net
+    async function earnService(agent, gross) {
+        await substrate.mintFromVault(deployer.address, gross);
+        await substrate.payForService(agent.address, gross, ethers.id(`req-${epoch++}`));
+    }
 
     async function deployRepToken() {
         const Registry = await ethers.getContractFactory("Registry");
@@ -50,8 +71,10 @@ describe("AutonetRepClaim", function () {
         [deployer, timelock, agentA, agentB, stranger, gen1, gen2] =
             await ethers.getSigners();
 
-        const MockSubstrate = await ethers.getContractFactory("MockSubstrateEarnings");
-        substrate = await MockSubstrate.deploy();
+        // No treasury, deployer as vault minter, no governor (fee frozen at 2.5%)
+        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, ethers.ZeroAddress);
+        await substrate.connect(agentA).registerAgent(ethers.id("a"), "0x01");
+        await substrate.connect(agentB).registerAgent(ethers.id("b"), "0x02");
 
         repToken = await deployRepToken();
 
@@ -68,7 +91,7 @@ describe("AutonetRepClaim", function () {
 
     it("claims tool-pool earnings, scaling ATN base 1e6 -> REP 1e18 (x1e12)", async function () {
         // Agent earned 5 ATN of tool-pool distributions.
-        await substrate.setAgentMintTotal(agentA.address, 5n * ONE_ATN);
+        await earnPool(agentA, 5n * ONE_ATN);
 
         const expectedRep = 5n * ONE_ATN * REP_PER_ATN_BASE; // == 5e18
         expect(await claim.claimable(agentA.address)).to.equal(expectedRep);
@@ -83,24 +106,24 @@ describe("AutonetRepClaim", function () {
     });
 
     it("sums tool-pool and service earnings as the claim base", async function () {
-        await substrate.setAgentMintTotal(agentA.address, 3n * ONE_ATN);
-        await substrate.setServiceEarnings(agentA.address, 7n * ONE_ATN);
+        await earnPool(agentA, 3n * ONE_ATN);
+        await earnService(agentA, 8n * ONE_ATN); // 7.8 ATN net of the 2.5% fee
 
-        const expectedRep = 10n * ONE_ATN * REP_PER_ATN_BASE; // 10 ATN -> 10 REP
-        expect(await claim.earningsBase(agentA.address)).to.equal(10n * ONE_ATN);
+        const expectedRep = 10_800_000n * REP_PER_ATN_BASE; // 10.8 ATN -> 10.8 REP
+        expect(await claim.earningsBase(agentA.address)).to.equal(10_800_000n);
         await claim.claim(agentA.address);
         expect(await repToken.balanceOf(agentA.address)).to.equal(expectedRep);
     });
 
     it("scales sub-ATN earnings exactly (no truncation)", async function () {
         // 0.5 ATN = 500_000 base -> 0.5e18 REP.
-        await substrate.setServiceEarnings(agentA.address, 500_000n);
+        await earnPool(agentA, 500_000n);
         await claim.claim(agentA.address);
         expect(await repToken.balanceOf(agentA.address)).to.equal(ethers.parseEther("0.5"));
     });
 
     it("watermark idempotency: a second claim with no new earnings mints nothing", async function () {
-        await substrate.setAgentMintTotal(agentA.address, 4n * ONE_ATN);
+        await earnPool(agentA, 4n * ONE_ATN);
         await claim.claim(agentA.address);
         expect(await repToken.balanceOf(agentA.address)).to.equal(ethers.parseEther("4"));
 
@@ -113,13 +136,13 @@ describe("AutonetRepClaim", function () {
     });
 
     it("earnings added between claims mint exactly the delta", async function () {
-        await substrate.setAgentMintTotal(agentA.address, 2n * ONE_ATN);
+        await earnPool(agentA, 2n * ONE_ATN);
         await claim.claim(agentA.address);
         expect(await repToken.balanceOf(agentA.address)).to.equal(ethers.parseEther("2"));
 
-        // +3 tool-pool, +1 service = +4 ATN delta.
-        await substrate.setAgentMintTotal(agentA.address, 5n * ONE_ATN);
-        await substrate.setServiceEarnings(agentA.address, 1n * ONE_ATN);
+        // +3 and +1 tool-pool = +4 ATN delta
+        await earnPool(agentA, 3n * ONE_ATN);
+        await earnPool(agentA, 1n * ONE_ATN);
 
         await expect(claim.claim(agentA.address))
             .to.emit(claim, "RepClaimed")
@@ -130,7 +153,7 @@ describe("AutonetRepClaim", function () {
     });
 
     it("permissionless trigger: anyone claims FOR an agent, REP mints to the agent", async function () {
-        await substrate.setServiceEarnings(agentA.address, 9n * ONE_ATN);
+        await earnPool(agentA, 9n * ONE_ATN);
         // stranger triggers; REP mints to agentA, not stranger.
         await claim.connect(stranger).claim(agentA.address);
         expect(await repToken.balanceOf(agentA.address)).to.equal(ethers.parseEther("9"));
@@ -138,8 +161,8 @@ describe("AutonetRepClaim", function () {
     });
 
     it("agents claim independently (separate watermarks)", async function () {
-        await substrate.setAgentMintTotal(agentA.address, 11n * ONE_ATN);
-        await substrate.setServiceEarnings(agentB.address, 22n * ONE_ATN);
+        await earnPool(agentA, 11n * ONE_ATN);
+        await earnPool(agentB, 22n * ONE_ATN);
         await claim.claim(agentA.address);
         await claim.claim(agentB.address);
         expect(await repToken.balanceOf(agentA.address)).to.equal(ethers.parseEther("11"));
@@ -151,6 +174,14 @@ describe("AutonetRepClaim", function () {
         expect(await claim.claimable(agentB.address)).to.equal(0);
         await expect(claim.claim(agentB.address))
             .to.be.revertedWithCustomError(claim, "NothingToClaim");
+    });
+
+    it("earnings paid to an address that is not a registered agent never become REP", async function () {
+        // e.g. revenue paid to a VentureVault or any other contract
+        await earnService(stranger, 10n * ONE_ATN);
+        expect(await substrate.serviceEarnings(stranger.address)).to.be.gt(0);
+        expect(await claim.claimable(stranger.address)).to.equal(0);
+        await expect(claim.claim(stranger.address)).to.be.revertedWithCustomError(claim, "NotAgent");
     });
 
     it("reverts a claim for the zero agent", async function () {
@@ -197,7 +228,7 @@ describe("AutonetRepClaim", function () {
         const ungranted = await Claim.connect(deployer).deploy(
             await substrate.getAddress(), await repToken.getAddress(), [], []
         );
-        await substrate.setServiceEarnings(agentA.address, 3n * ONE_ATN);
+        await earnPool(agentA, 3n * ONE_ATN);
         await expect(ungranted.claim(agentA.address))
             .to.be.revertedWith("RepToken: Not authorized to mint");
         expect(await repToken.balanceOf(agentA.address)).to.equal(0);

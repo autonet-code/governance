@@ -316,8 +316,8 @@ function printGenesisChecklist(ctx) {
  7. [DAO GOVERNANCE] Whitelist vault payment tokens (if not folded into
     finalize with PARITY_TOKENS/PARITY_VALUES on the phase-1 run):
        Registry.editRegistry("jurisdiction.parity.<lowercase token>", "<parity>")
-       parity is 18-dec fixed point and ATN is 6-DECIMAL — bake the decimal
-       adjustment into the value (1 USDC(6d)->1 ATN(6d): 1e18; 1 DAI(18d)->1 ATN(6d): 1e6).
+       parity is the jurisdiction-wide value in 18-dec REP units; 1 ATN prices
+       like 1 REP (1 USDC(6d) -> 1 REP or 1 ATN: 1e30; 1 DAI(18d): 1e18).
 
  After 1-7 the jurisdiction is fully wired: vault sells ATN for whitelisted
  tokens (payment -> Registry treasury, ATN minted on Substrate), rep claim turns

@@ -47,37 +47,30 @@ interface IAutonetATN {
  *     immutable (constructor arg). No auto-delegation, no governance-power
  *     concerns — ATN is a network credit, not this DAO's governance token.
  *
- * PARITY (identical convention to CO / RepToken)
- * ----------------------------------------------
+ * PARITY (one meaning across the jurisdiction)
+ * ---------------------------------------------
  * Price is NOT set here. The vault reads the registry key
  *   "jurisdiction.parity.<lowercaseTokenHex>"
- * an 18-decimal fixed-point multiplier where 1e18 == 1:1. Absent / "0" means the
- * token is NOT whitelisted. The formula matches CO exactly:
+ * the same key RepToken and CoinOffering read: an 18-decimal fixed-point
+ * multiplier from payment-token base units to 18-decimal jurisdiction units
+ * (REP base units). Absent / "0" means the token is NOT whitelisted.
  *
- *   atnOut = paymentAmount * parity / 1e18
+ * ATN prices like REP: 1 ATN (1e6 base units, Substrate has no decimals())
+ * equals 1 REP (1e18), the same 1:1 AutonetRepClaim uses. So the vault converts
+ * jurisdiction units to ATN base units by dividing by REP_PER_ATN_BASE (1e12):
  *
- * DECIMALS — READ THIS
- * --------------------
- * Substrate ATN is 6-DECIMAL: on-chain amounts are ATN × 1e6, and Substrate
- * deliberately does NOT expose ERC20 `decimals()` (autonet Substrate.sol §"no
- * name/symbol/decimals"). So the vault CANNOT and DOES NOT query the target
- * token's decimals — it treats `atnOut` as already being in ATN base units
- * (1e6-scaled), and the decimal adjustment is BAKED INTO THE PARITY VALUE that
- * governance sets, exactly as CO does for its 18-dec target. The only thing that
- * changes vs CO is the target scale used to derive the parity:
+ *   atnOut = paymentAmount * parity / 1e18 / 1e12
  *
- *   Price 1 USDC (6 dec) -> 1 ATN (6 dec), i.e. atnOut base == paymentAmount base:
- *     parity = 1e18            (1e6 * 1e18 / 1e18 = 1e6 base ATN = 1 ATN) ✓
+ * One parity therefore means the same thing everywhere: a USDC parity of 1e30
+ * makes 1 USDC worth 1 REP when earned in a project, 1 ATNB in the coin
+ * offering and 1 ATN from this vault.
  *
- *   Price 1 USDC (6 dec) -> 2 ATN (6 dec):
- *     parity = 2e18            (1e6 * 2e18 / 1e18 = 2e6 base ATN = 2 ATN) ✓
+ *   1 USDC (6 dec) -> 1 ATN:  parity = 1e30   (1e6 * 1e30 / 1e30 = 1e6 = 1 ATN)
+ *   1 USDC (6 dec) -> 2 ATN:  parity = 2e30
+ *   1 DAI (18 dec) -> 1 ATN:  parity = 1e18   (1e18 * 1e18 / 1e30 = 1e6 = 1 ATN)
  *
- *   Price 1 DAI (18 dec) -> 1 ATN (6 dec):
- *     parity = 1e6             (1e18 * 1e6 / 1e18 = 1e6 base ATN = 1 ATN) ✓
- *
- * Because ATN has FEWER decimals than a typical payment token, integer-floor
- * dust is more likely at the low end — a payment that yields < 1 base unit of
- * ATN reverts with DustAmount (never a silent 0).
+ * A payment that yields < 1 ATN base unit reverts with DustAmount (never a
+ * silent 0).
  *
  * GOVERNANCE
  * ----------
@@ -96,6 +89,8 @@ contract AutonetVault is ReentrancyGuard, Pausable {
 
     /// @notice Parity fixed-point scale. parity == PARITY_ONE means 1:1.
     uint256 internal constant PARITY_ONE = 1e18;
+    /// @notice REP base units per ATN base unit (1 ATN = 1e6, 1 REP = 1e18).
+    uint256 public constant REP_PER_ATN_BASE = 1e12;
 
     /// @notice The EXTERNAL Autonet network ATN token (Substrate). Minted via
     ///         IAutonetATN.mintFromVault. 6-decimal (1e6-scaled) — see header.
@@ -194,7 +189,7 @@ contract AutonetVault is ReentrancyGuard, Pausable {
         uint256 parity = _readParity(paymentToken);
         if (parity == 0) revert TokenNotRegistered(paymentToken);
 
-        atnOut = (paymentAmount * parity) / PARITY_ONE;
+        atnOut = (paymentAmount * parity) / (PARITY_ONE * REP_PER_ATN_BASE);
         if (atnOut == 0) revert DustAmount();
 
         // Effects
@@ -226,7 +221,7 @@ contract AutonetVault is ReentrancyGuard, Pausable {
 
     /**
      * @notice Read the registry-settled parity for a payment token (18-dec
-     *         fixed-point multiplier; 1e18 == 1:1), or 0 if not whitelisted.
+     *         fixed-point multiplier into REP base units), or 0 if not whitelisted.
      */
     function getParity(address paymentToken) external view returns (uint256) {
         return _readParity(paymentToken);
@@ -243,7 +238,7 @@ contract AutonetVault is ReentrancyGuard, Pausable {
     {
         uint256 parity = _readParity(paymentToken);
         if (parity == 0 || paymentAmount == 0) return 0;
-        atnOut = (paymentAmount * parity) / PARITY_ONE;
+        atnOut = (paymentAmount * parity) / (PARITY_ONE * REP_PER_ATN_BASE);
     }
 
     function _readParity(address paymentToken) internal view returns (uint256) {

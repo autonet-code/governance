@@ -8,13 +8,11 @@ describe("AutonetVault", function () {
     const USDC_DECIMALS = 6;
     const ATN_DECIMALS = 6; // Substrate ATN is 1e6-scaled.
 
-    // Parity is an 18-decimal fixed-point multiplier (1e18 == 1:1), the SAME
-    // convention CoinOffering / RepToken use. atnOut = paymentAmount * parity / 1e18.
-    //
-    // TARGET IS 6-DECIMAL. To price 1 USDC (6 dec) -> 2 ATN (6 dec):
-    //   atnOut base must be 2e6 for paymentAmount base 1e6.
-    //   1e6 * parity / 1e18 = 2e6  =>  parity = 2e18.
-    const PARITY = ethers.parseEther("2"); // 2e18  (1 USDC -> 2 ATN, both 6-dec)
+    // Parity is the jurisdiction-wide multiplier into 18-decimal REP units (the
+    // same key RepToken and CoinOffering read); 1 ATN prices like 1 REP, so
+    // atnOut = paymentAmount * parity / 1e18 / 1e12.
+    // 1 USDC (6 dec) -> 2 ATN: 1e6 * parity / 1e30 = 2e6  =>  parity = 2e30.
+    const PARITY = 2n * 10n ** 30n;
 
     function parityKey(tokenAddr) {
         return `jurisdiction.parity.${tokenAddr.toLowerCase()}`;
@@ -111,12 +109,11 @@ describe("AutonetVault", function () {
         });
 
         it("computes parity math correctly for an 18-dec payment -> 6-dec ATN", async function () {
-            // DAI-like 18-dec payment token, priced 1 DAI -> 1 ATN.
-            // atnOut base 1e6 for paymentAmount base 1e18 => parity = 1e6.
+            // DAI-like 18-dec payment token, priced 1 DAI -> 1 ATN (= 1 REP): parity 1e18.
             const TestERC20 = await ethers.getContractFactory("TestERC20");
             const dai = await TestERC20.deploy("Dai", "DAI", 18, 0);
             const daiAddr = await dai.getAddress();
-            const daiParity = 10n ** 6n; // 1e6
+            const daiParity = 10n ** 18n;
             await registry
                 .connect(dao)
                 .editRegistry(parityKey(daiAddr), daiParity.toString());
@@ -180,10 +177,10 @@ describe("AutonetVault", function () {
 
         it("reverts when payment is too small to yield any ATN base unit (dust)", async function () {
             // Set parity so small that 1 base unit of USDC floors to 0 ATN.
-            // parity = 1e6 -> 1 base USDC * 1e6 / 1e18 = 0 (floor) -> dust.
+            // parity = 1e18 -> 1 base USDC * 1e18 / 1e30 = 0 (floor) -> dust.
             await registry
                 .connect(dao)
-                .editRegistry(parityKey(await usdc.getAddress()), (10n ** 6n).toString());
+                .editRegistry(parityKey(await usdc.getAddress()), (10n ** 18n).toString());
             await expect(
                 vault.connect(buyer).buy(await usdc.getAddress(), 1)
             ).to.be.revertedWithCustomError(vault, "DustAmount");

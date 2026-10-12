@@ -30,11 +30,11 @@
 //
 // PARITY / DECIMALS REMINDER
 // --------------------------
-// atnOut = paymentAmount * parity / 1e18, and ATN is 6-DECIMAL (1e6-scaled).
-// The decimal adjustment is baked into the parity value:
-//   1 USDC (6d) -> 1 ATN (6d):  parity = 1e18
-//   1 USDC (6d) -> 2 ATN (6d):  parity = 2e18
-//   1 DAI  (18d) -> 1 ATN (6d): parity = 1e6
+// Parity is the jurisdiction-wide value into 18-decimal REP units; 1 ATN prices
+// like 1 REP, so atnOut = paymentAmount * parity / 1e18 / 1e12:
+//   1 USDC (6d) -> 1 ATN:  parity = 1e30
+//   1 USDC (6d) -> 2 ATN:  parity = 2e30
+//   1 DAI  (18d) -> 1 ATN: parity = 1e18
 
 const { ethers } = require("hardhat");
 

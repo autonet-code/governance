@@ -24,28 +24,26 @@ Related: [architecture.md](architecture.md), [governance.md](governance.md), [re
 jurisdiction.parity.<lowercase 0x token address>      (native currency: 0xeeee...eeee)
 ```
 
-The value is a decimal string holding an **18-decimal fixed-point multiplier** (`1e18` = 1:1 in base units). All three contracts compute:
+The value is a decimal string holding an **18-decimal fixed-point multiplier from payment-token base units into jurisdiction units** (REP base units, 18 decimals). One parity means the same thing everywhere:
 
 ```
-out = paymentAmount * parity / 1e18
+RepToken, CoinOffering:  out = paymentAmount * parity / 1e18               (REP / ATNB, 18 dec)
+AutonetVault:            out = paymentAmount * parity / 1e18 / 1e12         (ATN, 6 dec)
 ```
+
+1 ATN (1e6 base units) prices like 1 REP (1e18), the same 1:1 that `AutonetRepClaim` uses, so the vault only divides by `REP_PER_ATN_BASE = 1e12`. A USDC parity of `1e30` makes 1 USDC worth 1 REP when earned in a project, 1 ATNB in the coin offering and 1 ATN from the vault.
 
 Absent, empty or `"0"` means the token is not whitelisted (`TokenNotRegistered` in the vault and CO; zero reputation in RepToken). Values are parsed with `Strings.parseUint`, so they must be plain integers (`"1000000000000000000"`, not `"1e18"`).
 
-Decimals are not queried. The adjustment between payment-token decimals and target decimals is baked into the value:
+Decimals are not queried. The payment token's decimals are baked into the value:
 
 ```
-parity = price * 10^(18 + targetDecimals - paymentDecimals)
+parity = price * 10^(36 - paymentDecimals)       (price in REP, ATNB or ATN per payment token)
 ```
 
-| Target | Target decimals | Value for price `p` | Example |
-|--------|-----------------|---------------------|---------|
-| REP / ATNB (RepToken) | 18 | `p * 10^(36 - paymentDecimals)` | 1 USDC (6 dec) to 1 REP: `1e30`. Native 18-dec at 1:1: `1e18` |
-| Substrate ATN | 6 | `p * 10^(24 - paymentDecimals)` | 1 USDC to 1 ATN: `1e18`. 1 DAI (18 dec) to 1 ATN: `1e6`. 1 USDC to 2 ATN: `2e18` |
+Examples: 1 USDC (6 dec) to 1 unit: `1e30`; 1 USDC to 2 units: `2e30`; 1 DAI or native (18 dec) to 1 unit: `1e18`. This is the form werule writes (`ValueIndexItem.toRegistryValue`, mirrored in `scripts/e2eLocal.js`).
 
-The `10^(36 - decimals)` form is what werule writes (`ValueIndexItem.toRegistryValue`, mirrored in `scripts/e2eLocal.js`). It is only correct for 18-decimal targets.
-
-**Shared-key caveat.** A jurisdiction that runs both an Economy (REP target, 18 dec) and an AutonetVault (ATN target, 6 dec) on the same Registry has a single parity per payment token. Setting USDC to `1e18` so that 1 USDC buys 1 ATN (as the flag-day proposal does) also means a USDC economy payout of 1 USDC yields `1e6` wei of REP (10^-12 REP). In the Autonet jurisdiction this is intentional in effect (REP comes from ATN earnings via `AutonetRepClaim`), but it is a coupling to keep in mind when whitelisting tokens.
+Jurisdictions attached before 2026-10-12 set vault parities 1e12 lower (the vault did not scale then); re-set them when moving to the current vault.
 
 Integer flooring: a payment that floors to zero output reverts with `DustAmount` in the vault and CO. ATN has fewer decimals than most payment tokens, so dust is more likely there.
 
@@ -76,6 +74,8 @@ Trust assumptions:
 - `claimable(agent)`, `earningsBase(agent)`: views.
 - Constants: `ATN_BASE = 1e6`, `REP_DECIMALS = 1e18`, `REP_PER_ATN_BASE = 1e12`. Hardcoded 1:1 in whole tokens; no rate knob, no admin, no pause.
 - Constructor optionally mints a genesis REP seed (`genesisHolders`, `genesisAmounts`). That requires the contract to already be a minter, so in practice pass an empty seed and mint the seed by proposal (the Shadownet flag-day proposal minted `1000e18` to a dev wallet).
+
+Only registered Substrate agents can claim (`NotAgent` otherwise): earnings paid to other addresses, such as a VentureVault, never become REP.
 
 Trust assumptions: the Substrate's earnings ledgers are honest and monotonic; RepToken grants this contract minter rights. There is no baseline: an agent's first claim covers all earnings recorded on the Substrate up to that point.
 
@@ -122,8 +122,8 @@ Helper scripts for the governance steps: `vote-genesis.js`, `execute-genesis-pro
 | File | Covers |
 |------|--------|
 | `test/autonet-integration.test.js` | A jurisdiction wired to the **real** autonet contracts: Substrate on the predicted vault address with the Registry as treasury and the timelock as governor, minter grant and parity by proposal, vault sale, service-fee split, REP from service and tool-pool earnings, service fee retuned by proposal, payment-channel settlement, CharterAnchor by proposal, vault pause |
-| `test/autonet-vault.test.js` | Parity math (6 to 6, 18 to 6), uncapped, dust, de-whitelisting, routing, pause, admin, reentrancy |
-| `test/autonet-rep-claim.test.js` | 1e12 scaling, summed base, watermark idempotency, permissionless trigger, genesis seed, no mint without grant |
+| `test/autonet-vault.test.js` | Parity math (USDC and DAI into ATN at jurisdiction-unit parity), uncapped, dust, de-whitelisting, routing, pause, admin, reentrancy |
+| `test/autonet-rep-claim.test.js` | Against the real Substrate: 1e12 scaling, summed base, watermark idempotency, permissionless trigger, registered agents only, genesis seed, no mint without grant |
 | `test/coin-offering.test.js` | Cap, auto-delegation, reclaiming votes, 6 to 18 parity |
 
-The real contracts come from `test/fixtures/autonet/` (ABI and bytecode, with the source commit in `SOURCE.json`). Refresh them after changing the autonet contracts: compile in the autonet repo, then `node scripts/sync-autonet-artifacts.js [path to autonet]`. The unit tests still use two small stand-ins in `contracts/test/` (`MockSubstrateEarnings`, `MockAutonetATN`).
+The real contracts come from `test/fixtures/autonet/` (ABI and bytecode, with the source commit in `SOURCE.json`). Refresh them after changing the autonet contracts: compile in the autonet repo, then `node scripts/sync-autonet-artifacts.js [path to autonet]`. The vault unit test still uses a small stand-in, `contracts/test/MockAutonetATN.sol`.

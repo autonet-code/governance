@@ -26,8 +26,8 @@ describe("Autonet integration (real Substrate, ServiceMarket, CharterAnchor)", f
 
     const ATN = (n) => ethers.parseUnits(String(n), 6);
     const USDC = (n) => ethers.parseUnits(String(n), 6);
-    // Vault parity: 1 USDC (6 dec) -> 2 ATN (6 dec)
-    const PARITY = ethers.parseEther("2");
+    // Jurisdiction parity: 1 USDC (6 dec) is worth 2 REP (18 dec), so it buys 2 ATN (6 dec)
+    const PARITY = 2n * 10n ** 30n;
 
     async function govern(targets, calldatas, description) {
         const values = targets.map(() => 0);
@@ -108,8 +108,9 @@ describe("Autonet integration (real Substrate, ServiceMarket, CharterAnchor)", f
 
         expect(await substrate.balanceOf(buyer.address)).to.equal(ATN(1000));
         expect(await usdc.balanceOf(registryAddr)).to.equal(USDC(500));
-        // Bought ATN is money, not earnings: no REP claim
-        await expect(repClaim.claim(buyer.address)).to.be.revertedWithCustomError(repClaim, "NothingToClaim");
+        // Bought ATN is money, not earnings: no REP claim (and the buyer is no agent)
+        expect(await repClaim.earningsBase(buyer.address)).to.equal(0);
+        await expect(repClaim.claim(buyer.address)).to.be.revertedWithCustomError(repClaim, "NotAgent");
     });
 
     it("splits the service fee: half to the Registry, half burned, net to the provider", async function () {
