@@ -34,7 +34,7 @@ describe("TrustlessFactory Deployment", function () {
             initialAmounts: [ethers.parseEther("100"), ethers.parseEther("50")],
         };
         const govParams = {
-            name: "My Trustless DAO", timelockDelay: timelockDelay, votingPeriod: 5,
+            name: "My Trustless DAO", votingDelay: timelockDelay, votingPeriod: 5,
             proposalThreshold: ethers.parseEther("1"), quorumFraction: 4,
         };
         

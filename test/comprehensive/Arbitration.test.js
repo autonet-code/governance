@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("../helpers/coolingOff");
 
 /**
  * Comprehensive Arbitration Tests
@@ -56,6 +57,7 @@ describe("Comprehensive Arbitration Tests", function () {
 
         const coolingOff = await economy.coolingOffPeriod();
         await time.increase(coolingOff + 1n);
+        await passCoolingOff(project);
         await project.connect(contractor).signContract();
 
         return { immediate, locked, arbitrationFee };
@@ -196,6 +198,7 @@ describe("Comprehensive Arbitration Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // 0% ruling - all to backers
@@ -307,6 +310,7 @@ describe("Comprehensive Arbitration Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract({ value: contractorStake });
 
             await project.connect(contractor).disputeAsContractor();
@@ -348,6 +352,7 @@ describe("Comprehensive Arbitration Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // 33% ruling
@@ -391,6 +396,7 @@ describe("Comprehensive Arbitration Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // 67% ruling

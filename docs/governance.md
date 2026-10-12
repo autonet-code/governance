@@ -96,7 +96,7 @@ Voting delay and period are always minutes (the Governor converts). Timelock del
 |---|---|---|
 | `StandardFactory`, `StandardFactoryNonTransferable`, `StandardFactoryTransferable` | Last four entries of `initialAmounts` (appended after the member amounts) | `executionDelay`, passed straight through, seconds |
 | `StandardFactoryWrapped` | `governanceSettings[4]` | `executionDelay`, seconds |
-| `TrustlessFactory` | `GovParams`: note that the field named `timelockDelay` is used as the **voting delay** (minutes) | `deployInfrastructure(timelockDelayInMinutes, ...)`, minutes |
+| `TrustlessFactory` | `GovParams.votingDelay` (minutes) | `deployInfrastructure(timelockDelayInMinutes, ...)`, minutes |
 
 ## RepToken
 

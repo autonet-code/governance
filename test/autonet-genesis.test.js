@@ -70,7 +70,7 @@ describe("Autonet genesis flow (contracts-side)", function () {
                     initialAmounts: [ethers.parseEther("1000")],
                 },
                 {
-                    name: "Autonet DAO", timelockDelay: 1, votingPeriod: 5,
+                    name: "Autonet DAO", votingDelay: 1, votingPeriod: 5,
                     proposalThreshold: ethers.parseEther("1"), quorumFraction: 4,
                 }
             )
@@ -288,7 +288,7 @@ describe("Autonet genesis flow — fast governance timing (0/120/0)", function (
         const infraEvent = infraReceipt.logs.find((l) => l.eventName === "InfrastructureDeployed");
         ({ economy: economyAddr, registry: registryAddr, timelock: timelockAddr } = infraEvent.args);
 
-        // VOTING_DELAY_SECS=0 -> timelockDelay (the governor votingDelay!) = 0 min.
+        // VOTING_DELAY_SECS=0 -> timelockDelay (now named votingDelay) = 0 min.
         // VOTING_PERIOD_SECS=120 -> votingPeriod = 2 min (x60 in HomebaseDAO = 120s).
         const daoTokenReceipt = await (
             await trustlessFactory.deployDAOToken(
@@ -300,7 +300,7 @@ describe("Autonet genesis flow — fast governance timing (0/120/0)", function (
                     initialAmounts: [ethers.parseEther("1000")],
                 },
                 {
-                    name: "Autonet DAO", timelockDelay: 0, votingPeriod: 2,
+                    name: "Autonet DAO", votingDelay: 0, votingPeriod: 2,
                     proposalThreshold: ethers.parseEther("10"), quorumFraction: 4,
                 }
             )

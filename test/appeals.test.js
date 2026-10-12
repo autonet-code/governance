@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("./helpers/coolingOff");
 
 describe("Appeals and Advanced Fund Handling", function () {
     let economy, nativeProjectImpl, erc20ProjectImpl, testToken, mockRepToken, mockGovernor;
@@ -28,6 +29,7 @@ describe("Appeals and Advanced Fund Handling", function () {
         // Contractor stakes half the arbitration fee and signs
         const arbitrationFee = (fundingAmount * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
         await testToken.connect(contractor).approve(projectAddress, arbitrationFee / 2n);
+        await passCoolingOff(project);
         await project.connect(contractor).signContract();
 
         // Dispute it

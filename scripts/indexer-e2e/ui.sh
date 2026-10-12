@@ -1,6 +1,6 @@
 #!/bin/bash
 # UI write flows against a fresh local stack. Needs the Firestore emulator (port 8080) and
-# chromedriver (port 4444) running. Restarts the hardhat node so chain time matches the browser.
+# chromedriver (port 4444) running. Restarts the hardhat node a day behind the browser clock (see below).
 # Usage: scripts/indexer-e2e/ui.sh <indexer dir> <app dir> <integration test>
 set -e
 INDEXER_DIR="${1:?indexer dir}"; APP_DIR="${2:?app dir}"; TEST="${3:?integration test}"
@@ -13,7 +13,10 @@ stop_indexer() {
 }
 
 stop_indexer; kill_port 8545
-(cd "$CONTRACTS" && npx hardhat node > "$HERE/out/node.log" 2>&1 &)
+# The chain starts a day behind the browser: the app counts cooling-off down against the browser
+# clock, and the UI test jumps the chain forward by the one-day buffer right before signing.
+INITIAL_DATE=$(python -c "import datetime as d;print((d.datetime.now(d.timezone.utc)-d.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+(cd "$CONTRACTS" && HARDHAT_INITIAL_DATE="$INITIAL_DATE" npx hardhat node > "$HERE/out/node.log" 2>&1 &)
 until curl -s -X POST -H "content-type: application/json" --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' http://127.0.0.1:8545 > /dev/null; do sleep 1; done
 for project in homebase-6907d trustless-58262; do
     curl -s -X DELETE "http://127.0.0.1:8080/emulator/v1/projects/$project/databases/(default)/documents" > /dev/null

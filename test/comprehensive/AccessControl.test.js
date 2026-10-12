@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("../helpers/coolingOff");
 
 /**
  * Comprehensive Access Control Tests
@@ -113,12 +114,14 @@ describe("Comprehensive Access Control Tests", function () {
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
 
+            await passCoolingOff(project);
             await expect(
                 project.connect(randomUser).signContract()
             ).to.be.revertedWith("Only the designated contractor can sign the contract");
 
             // Contractor can sign
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
         });
 
@@ -137,9 +140,11 @@ describe("Comprehensive Access Control Tests", function () {
             await time.increase(coolingOff + 1n);
 
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Project is now Ongoing - trying to sign again should fail
+            await passCoolingOff(project);
             await expect(
                 project.connect(contractor).signContract()
             ).to.be.revertedWith("The project can only be signed while in `pending` stage.");
@@ -172,6 +177,7 @@ describe("Comprehensive Access Control Tests", function () {
             await time.increase(coolingOff + 1n);
 
             // Now should succeed
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
             expect(await project.stage()).to.equal(2); // Ongoing
         });
@@ -192,6 +198,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await expect(
@@ -232,6 +239,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await expect(
@@ -267,6 +275,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await expect(
@@ -294,6 +303,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -319,6 +329,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // In Ongoing stage, not Dispute
@@ -340,6 +351,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -365,6 +377,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -392,6 +405,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await expect(
@@ -420,6 +434,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
             expect(await project.stage()).to.equal(2); // Ongoing
 
@@ -440,6 +455,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
             expect(await project.stage()).to.equal(2); // Ongoing
 
@@ -491,6 +507,7 @@ describe("Comprehensive Access Control Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await testToken.connect(backer2).approve(await project.getAddress(), amount);

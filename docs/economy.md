@@ -70,11 +70,11 @@ If the contractor and arbiter are both passed to `createProject`, the project st
 `coolingOffPeriodEnds = now + economy.effectiveCoolingOffPeriod()`, set by `setParties` or at creation when parties are named. 
 
 ```
-effectiveCoolingOffPeriod = max(coolingOffPeriod, proposalLifecycle())
+effectiveCoolingOffPeriod = max(coolingOffPeriod, proposalLifecycle() + COOLING_OFF_BUFFER)   // buffer = 1 day
 proposalLifecycle         = governor.votingDelay() + governor.votingPeriod() + timelock.getMinDelay()
 ```
 
-The floor means a veto proposal made when the parties are set can run its full course before the contractor can sign. The value is fixed per project when cooling-off starts; later parameter changes do not affect it. Note the margin is zero: the veto must be proposed at the moment cooling-off starts, and becomes executable in the same second the contractor may sign (`signContract` requires `now > coolingOffPeriodEnds`). A DAO that wants reaction time sets `coolingOffPeriod` above the lifecycle. Funding during Pending does not extend cooling-off, and backers can still withdraw in full until the contract is signed.
+The floor means a veto proposal made when the parties are set can run its full course, and someone has a day to execute it, before the contractor can sign. The value is fixed per project when cooling-off starts; later parameter changes do not affect it. A DAO that wants more reaction time sets `coolingOffPeriod` above the floor. Funding during Pending does not extend cooling-off, and backers can still withdraw in full until the contract is signed.
 
 ### Backer votes
 
@@ -86,7 +86,7 @@ The floor means a veto proposal made when the parties are set can run its full c
 
 | Item | Value |
 |------|-------|
-| Arbitration fee | `totalLocked * arbitrationFeeBps / 10000`, fixed at signing. Set at Economy deployment (`deployInfrastructure(..., arbitrationFeeBps)`), changeable by `setArbitrationFee` |
+| Arbitration fee | `totalLocked * arbitrationFeeBps / 10000`, fixed at signing. Set at deployment (`EconomyParams.arbitrationFeeBps`), changeable by `setArbitrationFee`, at most 25% |
 | Contractor stake | `arbitrationFee / 2`, paid at signing (Native: `msg.value >= stake`; ERC20: exactly `stake` pulled) |
 | Backers' share | `arbitrationFee - arbitrationFee / 2`, taken from the locked pool only if arbitration is finalized |
 | Appeal window | `appealPeriod`, default 7 days. Restarts when an appeal is filed |
@@ -189,9 +189,9 @@ createERC20Project(name, contractor, arbiter, termsHash, repo, description, toke
 | Setter | Bounds | Default |
 |--------|--------|---------|
 | `setPlatformFee(bps)` | 100 to 5000 | 100 |
-| `setAuthorFee(bps)` | none | 100 |
+| `setAuthorFee(bps)` | at most 2500 | 100 |
 | `setArbitrationFee(bps)` | none | constructor argument |
-| `setCoolingOffPeriod(s)` | none (floored by lifecycle at use) | 120 |
+| `setCoolingOffPeriod(s)` | none (floored at lifecycle + 1 day at use) | 120 |
 | `setBackersVoteQuorum(bps)` | 5000 to 9900 | 7000 |
 | `setProjectThreshold(n)` | none | 0 |
 | `setAppealPeriod(s)` | none | 604800 (7 days) |

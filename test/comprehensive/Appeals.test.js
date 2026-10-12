@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("../helpers/coolingOff");
 
 /**
  * Comprehensive Appeals Tests
@@ -90,6 +91,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute and arbitrate
@@ -127,6 +129,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -153,6 +156,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Arbitrate with 30%
@@ -192,6 +196,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -216,6 +221,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -243,6 +249,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Veto before dispute
@@ -275,6 +282,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Close via reimburse
@@ -310,6 +318,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -337,6 +346,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Close via reimburse (no arbitration)
@@ -362,6 +372,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute and arbitrate
@@ -390,6 +401,7 @@ describe("Comprehensive Appeals Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).reimburse();

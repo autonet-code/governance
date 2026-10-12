@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("./helpers/coolingOff");
 
 // Regression tests for the factory hijack and zero-cost REP farming fixed in Oct 2026.
 describe("Security", function () {
@@ -14,7 +15,7 @@ describe("Security", function () {
             initialAmounts: [ethers.parseEther("100")],
         });
         const govParams = (name) => ({
-            name, timelockDelay: 1, votingPeriod: 5,
+            name, votingDelay: 1, votingPeriod: 5,
             proposalThreshold: ethers.parseEther("1"), quorumFraction: 4,
         });
         const economyParams = {
@@ -102,7 +103,7 @@ describe("Security", function () {
             )).to.be.revertedWith("Protected");
         });
 
-        it("keeps project cooling-off at least as long as a full proposal lifecycle, even with parties set at creation", async function () {
+        it("keeps project cooling-off at least a full proposal lifecycle plus a day, even with parties set at creation", async function () {
             const { economy, registry, timelock } = await deployInfra(victim);
             const { repToken, dao } = await deployDaoToken(victim, registry, timelock, "Victim DAO");
             await trustlessFactory.connect(victim).configureAndFinalize(
@@ -116,7 +117,8 @@ describe("Security", function () {
             const lifecycle = (await gov.votingDelay()) + (await gov.votingPeriod()) + (await tl.getMinDelay());
             expect(await econ.coolingOffPeriod()).to.equal(60n);
             expect(lifecycle).to.be.gt(60n);
-            expect(await econ.effectiveCoolingOffPeriod()).to.equal(lifecycle);
+            const floor = lifecycle + (await econ.COOLING_OFF_BUFFER());
+            expect(await econ.effectiveCoolingOffPeriod()).to.equal(floor);
 
             // Parties named at creation: the contractor still has to wait out the full lifecycle
             const receipt = await (await econ.connect(member).createProject(
@@ -127,7 +129,20 @@ describe("Security", function () {
             await expect(project.connect(attacker).signContract({ value: ethers.parseEther("0.025") }))
                 .to.be.revertedWith("Contract signing is blocked during the cooling-off period.");
             await time.increase(lifecycle);
+            await expect(project.connect(attacker).signContract({ value: ethers.parseEther("0.025") }))
+                .to.be.revertedWith("Contract signing is blocked during the cooling-off period.");
+            await time.increase(floor - lifecycle);
+            await passCoolingOff(project);
             await project.connect(attacker).signContract({ value: ethers.parseEther("0.025") });
+        });
+
+        it("bounds the author and arbitration fees", async function () {
+            const econ = await (await ethers.getContractFactory("Economy")).deploy(500);
+            await expect(econ.setAuthorFee(2501)).to.be.revertedWith("Author fee too high");
+            await expect(econ.setArbitrationFee(2501)).to.be.revertedWith("Arbitration fee too high");
+            await econ.setAuthorFee(2500);
+            await econ.setArbitrationFee(2500);
+            await expect((await ethers.getContractFactory("Economy")).deploy(2501)).to.be.revertedWith("Arbitration fee too high");
         });
     });
 
@@ -186,6 +201,7 @@ describe("Security", function () {
                 await project.connect(alice).sendFundsWithImmediate(amount, 2000); // 20% immediate
                 const stake = ((amount * 8000n / 10000n) * 500n / 10000n) / 2n;
                 await testToken.connect(aliceAlt).approve(addr, stake);
+                await passCoolingOff(project);
                 await project.connect(aliceAlt).signContract();
                 await project.connect(aliceAlt).reimburse();
                 await project.connect(alice).withdrawAsContributor();

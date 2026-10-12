@@ -1,5 +1,6 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
+const { passCoolingOff } = require("./helpers/coolingOff");
 
 // Backers' spending is read from closed projects, so REP accrues without a withdrawal.
 describe("Backer spending", function () {
@@ -42,6 +43,7 @@ describe("Backer spending", function () {
         await project.connect(backer).sendFundsWithImmediate(2000, { value: amount });
         expect(await spentNative(backer.address)).to.equal(0n);
 
+        await passCoolingOff(project);
         await project.connect(contractor).signContract({ value: ethers.parseEther("0.2") });
         expect(await spentNative(backer.address)).to.equal(0n); // not closed yet
 
@@ -55,6 +57,7 @@ describe("Backer spending", function () {
     it("does not double count when the backer also withdraws", async function () {
         const project = await createProject();
         await project.connect(backer).sendFunds({ value: ethers.parseEther("10") });
+        await passCoolingOff(project);
         await project.connect(contractor).signContract({ value: ethers.parseEther("0.25") });
         await project.connect(contractor).reimburse(); // full refund: nothing spent
 
@@ -67,6 +70,7 @@ describe("Backer spending", function () {
     it("counts only the immediate portion when the contractor reimburses", async function () {
         const project = await createProject();
         await project.connect(backer).sendFundsWithImmediate(2000, { value: ethers.parseEther("10") });
+        await passCoolingOff(project);
         await project.connect(contractor).signContract({ value: ethers.parseEther("0.2") });
         await project.connect(contractor).reimburse();
 

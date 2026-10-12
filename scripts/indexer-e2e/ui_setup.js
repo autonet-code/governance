@@ -18,7 +18,7 @@ async function main() {
     const infra = eventArgs(await wait(tf.deployInfrastructure(1, 500)), "InfrastructureDeployed");
     const tok = eventArgs(await wait(tf.deployDAOToken(infra.registry, infra.timelock,
         { name: "UI Economy", symbol: "UIE", initialMembers: [deployer.address, alice.address], initialAmounts: [E(1000), E(500)] },
-        { name: "UI Economy DAO", timelockDelay: 0, votingPeriod: 1, proposalThreshold: 0, quorumFraction: 4 })), "DAOTokenDeployed");
+        { name: "UI Economy DAO", votingDelay: 0, votingPeriod: 1, proposalThreshold: 0, quorumFraction: 4 })), "DAOTokenDeployed");
     await wait(tf.configureAndFinalize(
         { implAddresses: [dep.nativeProjectImpl, dep.erc20ProjectImpl],
           contractAddresses: [infra.economy, infra.registry, infra.timelock, tok.repToken, tok.dao] },

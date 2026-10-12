@@ -33,7 +33,7 @@ A jurisdiction is a DAO built on [OpenZeppelin's Governor](https://docs.openzepp
 
 An economy DAO adds a marketplace. Anyone can open a project; backers fund it into an escrow contract; a contractor and an arbiter are named; the contractor signs by staking half the arbitration fee. From then on the money moves only by rule:
 
-1. **Cooling-off.** Before the contractor can sign, the jurisdiction always has time to veto: the cooling-off period is never shorter than one full proposal lifecycle (voting delay + voting period + timelock delay), whatever the DAO configures. A veto refunds backers in full.
+1. **Cooling-off.** Before the contractor can sign, the jurisdiction always has time to veto: the cooling-off period is never shorter than one full proposal lifecycle (voting delay + voting period + timelock delay) plus a day to execute the result, whatever the DAO configures. A veto refunds backers in full.
 2. **Immediate release.** Backers may release part of their contribution (up to a DAO-set cap, 20% by default) to the contractor at signing, as operating capital. The rest stays in escrow. ([spec →](docs/immediate-release.md))
 3. **Backer consensus.** When backers holding 70% of the stake agree, funds release to the contractor or the project moves to dispute.
 4. **Arbitration.** In a dispute the arbiter rules on a split. If the arbiter never acts, the project can be closed after 150 days.
@@ -57,8 +57,8 @@ Guarantees that depend on an operator's good behaviour are not guarantees. The s
 |------|-------------|
 | Vote buying | Non-transferable reputation by default |
 | Flash-loan voting | Snapshot-based voting power |
-| Contractor signs before the DAO can react | Cooling-off floored at one full proposal lifecycle |
-| Fee capture or a free-riding economy | Platform fee bounded to 1% to 50% |
+| Contractor signs before the DAO can react | Cooling-off floored at a full proposal lifecycle plus one day |
+| Fee capture or a free-riding economy | Platform fee bounded to 1% to 50%; author and arbitration fees capped at 25% |
 | Bad arbitration | Appeal to governance; DAO overrule |
 | Abandoned projects | 150-day arbitration timeout |
 | Hijacked DAO deployment | Per-deployer pending deployments in the factories |

@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("../helpers/coolingOff");
 
 /**
  * Edge Case Tests
@@ -93,6 +94,7 @@ describe("Edge Case Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute and arbitrate at 33%
@@ -138,6 +140,7 @@ describe("Edge Case Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // 33% ruling with 3 backers
@@ -185,6 +188,7 @@ describe("Edge Case Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // 47% ruling (prime number)
@@ -371,6 +375,7 @@ describe("Edge Case Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -406,6 +411,7 @@ describe("Edge Case Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Try to contribute after signing - should fail
@@ -439,6 +445,7 @@ describe("Edge Case Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract({ value: contractorStake });
 
             await project.connect(contractor).disputeAsContractor();
@@ -483,6 +490,7 @@ describe("Edge Case Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Both vote to dispute
@@ -530,6 +538,7 @@ describe("Edge Case Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Vote once - this is 50% of total, doesn't trigger dispute
@@ -560,9 +569,11 @@ describe("Edge Case Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Try to sign again
+            await passCoolingOff(project);
             await expect(
                 project.connect(contractor).signContract()
             ).to.be.revertedWith("The project can only be signed while in `pending` stage.");

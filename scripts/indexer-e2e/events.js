@@ -95,7 +95,7 @@ async function main() {
     const infraEv = eventArgs(await wait(tf.deployInfrastructure(1, 500)), "InfrastructureDeployed");
     const tokEv = eventArgs(await wait(tf.deployDAOToken(infraEv.registry, infraEv.timelock,
         { name: "E2E Economy", symbol: "ECO", initialMembers: [deployer.address, alice.address], initialAmounts: [E(1000), E(500)] },
-        { name: "E2E Economy DAO", timelockDelay: 0, votingPeriod: 1, proposalThreshold: 0, quorumFraction: 4 })), "DAOTokenDeployed");
+        { name: "E2E Economy DAO", votingDelay: 0, votingPeriod: 1, proposalThreshold: 0, quorumFraction: 4 })), "DAOTokenDeployed");
     const usdc = await (await ethers.getContractFactory("TestERC20")).deploy("Test USDC", "USDC", 6, 10n ** 15n);
     await usdc.waitForDeployment();
     const usdcAddr = await usdc.getAddress();

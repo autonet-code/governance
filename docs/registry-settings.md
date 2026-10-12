@@ -6,14 +6,14 @@ Related: [economy.md](economy.md) (what the parameters do in the project lifecyc
 
 ## Economy contract parameters
 
-Setters are `onlyGovernance`: the Economy's `admin` until `setDaoAddresses` runs, the Timelock after. The TrustlessFactory sets the initial values (except `arbitrationFeeBps` and `maxImmediateBps`) inside `configureAndFinalize`, then sets the DAO addresses.
+Setters are `onlyGovernance`: the Economy's `admin` until `setDaoAddresses` runs, the Timelock after. The TrustlessFactory sets the initial values (except `maxImmediateBps`) inside `configureAndFinalize`, then sets the DAO addresses.
 
 | Parameter | Unit | Default | Bounds | Setter | Read by projects |
 |-----------|------|---------|--------|--------|------------------|
 | `platformFeeBps` | bps | 100 (1%) | 100 (`MIN_PLATFORM_FEE_BPS`) to 5000 | `setPlatformFee(uint)` | On every fee-path payout |
-| `authorFeeBps` | bps of payout after platform fee | 100 (1%) | none | `setAuthorFee(uint)` | On every contractor payout |
-| `arbitrationFeeBps` | bps of `totalLocked` | constructor argument (`deployInfrastructure(timelockDelayMinutes, arbitrationFeeBps)`) | none | `setArbitrationFee(uint)` | Once, at signing |
-| `coolingOffPeriod` | seconds | 120 | none; effective value is `max(coolingOffPeriod, proposalLifecycle())` | `setCoolingOffPeriod(uint)` | Once, when parties are set |
+| `authorFeeBps` | bps of payout after platform fee | 100 (1%) | at most 2500 (`MAX_AUTHOR_FEE_BPS`) | `setAuthorFee(uint)` | On every contractor payout |
+| `arbitrationFeeBps` | bps of `totalLocked` | `EconomyParams.arbitrationFeeBps` in `configureAndFinalize` | at most 2500 (`MAX_ARBITRATION_FEE_BPS`) | `setArbitrationFee(uint)` | Once, at signing |
+| `coolingOffPeriod` | seconds | 120 | none; effective value is `max(coolingOffPeriod, proposalLifecycle() + 1 day)` | `setCoolingOffPeriod(uint)` | Once, when parties are set |
 | `backersVoteQuorumBps` | bps of `totalLocked` | 7000 (70%) | 5000 to 9900 | `setBackersVoteQuorum(uint)` | On each backer vote |
 | `projectThreshold` | REP (18 decimals) | 0 | none | `setProjectThreshold(uint)` | REP balance to create a project; voting power to appeal |
 | `appealPeriod` | seconds | 604800 (7 days) | none | `setAppealPeriod(uint)` | At ruling and appeal; also the arbiter's exclusive window |
@@ -24,7 +24,7 @@ Fixed constants on projects: `ARBITRATION_TIMEOUT = 150 days`.
 
 `proposalLifecycle()` is `governor.votingDelay() + governor.votingPeriod() + timelock.getMinDelay()`; `effectiveCoolingOffPeriod()` exposes the result. Both use seconds (the Governor clock is timestamp based).
 
-`EconomyParams.arbitrationFeeBps` in `configureAndFinalize` is ignored: the fee comes from `deployInfrastructure`.
+`deployInfrastructure` also takes an arbitration fee for the Economy constructor; `configureAndFinalize` then sets `EconomyParams.arbitrationFeeBps`, which is the value that sticks.
 
 ### Example proposal
 

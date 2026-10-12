@@ -73,7 +73,7 @@ async function main() {
 
   const govParams = {
     name: "Test Economy DAO Governor",
-    timelockDelay: 1, // 1 block
+    votingDelay: 1, // minutes
     votingPeriod: 50400, // ~1 week
     proposalThreshold: ethers.parseEther("10"),
     quorumFraction: 4 // 4%
@@ -204,7 +204,7 @@ async function main() {
       },
       governance: {
         name: govParams.name,
-        timelockDelay: govParams.timelockDelay,
+        votingDelay: govParams.votingDelay,
         votingPeriod: govParams.votingPeriod,
         proposalThreshold: govParams.proposalThreshold.toString(),
         quorumFraction: govParams.quorumFraction

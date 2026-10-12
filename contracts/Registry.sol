@@ -4,11 +4,13 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import {IJurisdictionData} from "./IJurisdictionData.sol"; // <-- ADDED IMPORT
 
 contract Registry is IERC721Receiver, ReentrancyGuard {
+    using SafeERC20 for IERC20;
 
     mapping (string => string) private reg;
     string[] private keys;
@@ -182,7 +184,8 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
         require(address(this).balance >= amount, "Insufficient balance");
         _requireUnreserved(NATIVE_TOKEN, amount);
         _meterSpend(NATIVE_TOKEN, amount);
-        to.transfer(amount);
+        (bool sent, ) = to.call{value: amount}("");
+        require(sent, "Native transfer failed");
         emit TransferredETH(to, amount);
     }
 
@@ -193,8 +196,7 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
     ) external _treasuryOps nonReentrant {
         _requireUnreserved(token, amount);
         _meterSpend(token, amount);
-        bool success = IERC20(token).transfer(to, amount);
-        require(success, "ERC20 transfer failed");
+        IERC20(token).safeTransfer(to, amount);
         emit TransferredERC20(token, to, amount);
     }
 
@@ -312,8 +314,7 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
             (bool sent, ) = payable(recipient).call{value: amount}("");
             require(sent, "Native transfer failed during disbursement");
         } else {
-            bool success = IERC20(tokenAddress).transfer(recipient, amount);
-            require(success, "ERC20 transfer failed during disbursement");
+            IERC20(tokenAddress).safeTransfer(recipient, amount);
         }
         emit EarmarkedFundsDisbursed(recipient, purpose, amount);
     }

@@ -32,7 +32,7 @@ An internal audit and a test plan exist; both are kept private.
 | Harmful project | The timelock can `daoVeto` any non-closed project; backers get their locked funds back (and immediate funds if unsigned) | `daoVeto`, `_closedExit` |
 | Fake ledger writes | `updateEarnings`, `updateSpendings`, `registerBacker`, `registerProjectRoles` accept calls only from clones the Economy deployed (`isProjectContract`) | `Economy.sol` |
 | Double withdrawal | Contractor payout is zeroed before transfer; backers are marked `contributorSettled`; the arbitration stake is reclaimable once and only if it did not pay the arbiter | projects |
-| Non-standard ERC20s (no return value) | `ERC20Project`, `AutonetVault`, `CoinOffering` use `SafeERC20` | see caveats |
+| Non-standard ERC20s (no return value) | `Registry`, `Economy`, `ERC20Project`, `AutonetVault`, `CoinOffering` use `SafeERC20` | see caveats |
 | Reentrancy | `Registry` (`transferETH`, `transferERC20`, `disburseEarmarked`), `AutonetVault.buy`, `CoinOffering.buy` and `EvolutionProposal` stake paths are `nonReentrant`. Project clones have no guard and follow checks-effects-interactions | `test/autonet-vault.test.js`, `test/coin-offering.test.js` (with `ReentrantPaymentToken`) |
 
 ### Autonet satellites
@@ -47,11 +47,9 @@ An internal audit and a test plan exist; both are kept private.
 
 ## Known caveats
 
-- **Registry and Economy do not use SafeERC20.** `Registry.transferERC20`, `Registry.disburseEarmarked` and `Economy.withdrawTokens` call `IERC20.transfer` and require a `true` return. A token that returns nothing (USDT-style) can enter the treasury (ERC20Project pays fees with `safeTransfer`) but cannot leave it through these paths.
-- Native transfers in `Registry.transferETH` and `Economy.withdrawNative` use `transfer` (2300 gas), which fails for recipients with non-trivial `receive` logic.
 - Fee-on-transfer payment tokens would short the treasury in the vault and CO; they are excluded socially when governance sets parity.
 - Standard DAOs created by factory builds that passed `address(this)` as the RepToken timelock (including the Shadownet standard factories deployed 2026-10-11, until redeployed) cannot call `startNewRewardEpoch` or `setDelegateShareBps`. The current source passes the real timelock; economy DAOs are unaffected. See [technical-reference.md](technical-reference.md#reptoken).
 - The standard factories remain the Registry `wrapper` of the DAOs they deploy and so keep registry edit rights; the factory exposes no function that uses them after deployment.
-- Timelock delay can be configured to zero (test networks do this), which removes the review window; the cooling-off floor then shrinks to the voting delay plus period.
+- Timelock delay can be configured to zero (test networks do this), which removes the review window; the cooling-off floor then shrinks to the voting delay plus period plus the one-day buffer.
 - `EvolutionProposal` is not production-ready (unchecked transfers, admin can recover staked ATN, Registry writes revert against a real Registry). See [autonet.md](autonet.md#evolutionproposal-experimental).
 - Excess `msg.value` sent to `NativeProject.signContract` above half the arbitration fee is not tracked or refundable.

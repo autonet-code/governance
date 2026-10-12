@@ -51,7 +51,7 @@ async function main() {
     const infra = eventArgs(await (await factory.deployInfrastructure(1, ARB_FEE_BPS)).wait(), "InfrastructureDeployed");
     const daoTok = eventArgs(await (await factory.deployDAOToken(infra.registry, infra.timelock,
         { name: "E2E", symbol: "E2E", initialMembers: [deployer.address], initialAmounts: [ethers.parseEther("100")] },
-        { name: "E2E DAO", timelockDelay: 1, votingPeriod: 5, proposalThreshold: 0, quorumFraction: 4 })).wait(), "DAOTokenDeployed");
+        { name: "E2E DAO", votingDelay: 1, votingPeriod: 5, proposalThreshold: 0, quorumFraction: 4 })).wait(), "DAOTokenDeployed");
     await (await factory.configureAndFinalize(
         {
             implAddresses: [await nativeImpl.getAddress(), await erc20Impl.getAddress()],
@@ -69,7 +69,7 @@ async function main() {
     const economy = await ethers.getContractAt("Economy", infra.economy);
     const repToken = await ethers.getContractAt("RepToken", daoTok.repToken);
     check("economy admin can no longer configure", await economy.timelockAddress(), infra.timelock);
-    check("cooling-off covers the proposal lifecycle", await economy.effectiveCoolingOffPeriod(), await economy.proposalLifecycle());
+    check("cooling-off covers the proposal lifecycle plus the buffer", await economy.effectiveCoolingOffPeriod(), (await economy.proposalLifecycle()) + (await economy.COOLING_OFF_BUFFER()));
 
     const fees = (amount) => {
         const platform = amount * PLATFORM_FEE_BPS / 10000n;

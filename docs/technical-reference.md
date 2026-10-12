@@ -148,9 +148,9 @@ modifier onlyGovernance() {
 | Function | Bounds | Event |
 |----------|--------|-------|
 | `setImplementations(address _native, address _erc20)` | none | none |
-| `setPlatformFee(uint)` | `MIN_PLATFORM_FEE_BPS (100) <= x <= 5000` | `PlatformFeeSet` |
-| `setAuthorFee(uint)` | none | `AuthorFeeSet` |
-| `setArbitrationFee(uint)` | none | `ArbitrationFeeSet` |
+| `setPlatformFee(uint)` | `MIN_PLATFORM_FEE_BPS (100) <= x <= MAX_PLATFORM_FEE_BPS (5000)` | `PlatformFeeSet` |
+| `setAuthorFee(uint)` | at most `MAX_AUTHOR_FEE_BPS` (2500) | `AuthorFeeSet` |
+| `setArbitrationFee(uint)` | at most `MAX_ARBITRATION_FEE_BPS` (2500) | `ArbitrationFeeSet` |
 | `setCoolingOffPeriod(uint)` | none (floored at read time, below) | `CoolingOffPeriodSet` |
 | `setBackersVoteQuorum(uint)` | `5000..9900` | `BackersVoteQuorumSet` |
 | `setProjectThreshold(uint)` | none | `ProjectThresholdSet` |
@@ -161,7 +161,7 @@ modifier onlyGovernance() {
 
 ```solidity
 function proposalLifecycle() public view returns (uint)          // governor.votingDelay() + votingPeriod() + timelock.getMinDelay()
-function effectiveCoolingOffPeriod() external view returns (uint) // max(coolingOffPeriod, proposalLifecycle())
+function effectiveCoolingOffPeriod() external view returns (uint) // max(coolingOffPeriod, proposalLifecycle() + COOLING_OFF_BUFFER)
 ```
 
 Projects use `effectiveCoolingOffPeriod()`, so the DAO always has time to pass a veto before the contractor can sign. Unreadable targets count as 0.
@@ -243,9 +243,9 @@ function configureAndFinalize(AddressParams calldata, EconomyParams calldata,
 | Struct | Fields |
 |--------|--------|
 | `TokenParams` | `name, symbol, initialMembers[], initialAmounts[]` (token is always non-transferable) |
-| `GovParams` | `name, timelockDelay` (**the governor voting delay in minutes**, misnamed), `votingPeriod` (minutes), `proposalThreshold, quorumFraction` |
+| `GovParams` | `name, votingDelay` (minutes), `votingPeriod` (minutes), `proposalThreshold, quorumFraction` |
 | `AddressParams` | `implAddresses[2]` = [native, erc20]; `contractAddresses[5]` = [economy, registry, timelock, repToken, dao] |
-| `EconomyParams` | `arbitrationFeeBps` (ignored; the fee is set in step 1), `initialPlatformFeeBps` (must be `>= 100`), `initialAuthorFeeBps, initialCoolingOffPeriod, initialBackersQuorumBps, initialProjectThreshold, initialAppealPeriod` |
+| `EconomyParams` | `arbitrationFeeBps` (at most 2500), `initialPlatformFeeBps` (must be `>= 100`), `initialAuthorFeeBps, initialCoolingOffPeriod, initialBackersQuorumBps, initialProjectThreshold, initialAppealPeriod` |
 
 Step 3 sets implementations and parameters, links RepToken and Registry, writes the registry keys, calls `setDaoAddresses` (freezing Economy admin), hands RepToken admin and Registry ownership to the timelock, wires timelock roles, then emits `SuiteConfigured` and `NewDaoCreated` and deletes the pending entry. `maxImmediateBps` is left at its default (2000).
 
@@ -348,7 +348,9 @@ event SpendWindowReset(address indexed token, uint256 windowStart);
 | Constant | Value | Where |
 |----------|-------|-------|
 | `ARBITRATION_TIMEOUT` | `150 days` | projects |
-| `MIN_PLATFORM_FEE_BPS` | `100` (1%); ceiling 5000 in `setPlatformFee` | Economy |
+| `MIN_PLATFORM_FEE_BPS` / `MAX_PLATFORM_FEE_BPS` | `100` (1%) / `5000` (50%) | Economy |
+| `MAX_AUTHOR_FEE_BPS` / `MAX_ARBITRATION_FEE_BPS` | `2500` (25%) each | Economy |
+| `COOLING_OFF_BUFFER` | `1 days`, added to the proposal lifecycle floor | Economy |
 | `NATIVE_CURRENCY` / `NATIVE_TOKEN` | `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` | Economy / Registry |
 | `MAX_DELEGATE_SHARE_BPS` | `2500` | RepToken |
 | `PARITY_ONE` | `1e18` | RepToken, CoinOffering, AutonetVault |

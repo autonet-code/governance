@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("../helpers/coolingOff");
 
 /**
  * Contribution Pattern Tests
@@ -162,6 +163,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute and arbitrate at 50%
@@ -199,6 +201,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -237,6 +240,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -291,6 +295,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // 67% ruling
@@ -345,6 +350,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -394,6 +400,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -448,6 +455,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -502,6 +510,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -547,6 +556,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();
@@ -582,6 +592,7 @@ describe("Contribution Pattern Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             await project.connect(contractor).disputeAsContractor();

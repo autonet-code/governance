@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("./helpers/coolingOff");
 
 /**
  * Arbitration Fund Accounting Tests
@@ -101,6 +102,7 @@ describe("Arbitration Fund Accounting", function () {
             await testToken.connect(backer1).approve(await project.getAddress(), fundingAmount);
             await project.connect(backer1).sendFunds(fundingAmount);
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Backer votes to release (not dispute)
@@ -148,6 +150,7 @@ describe("Arbitration Fund Accounting", function () {
             await testToken.connect(backer1).approve(await project.getAddress(), fundingAmount);
             await project.connect(backer1).sendFunds(fundingAmount);
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Contractor reimburses
@@ -192,6 +195,7 @@ describe("Arbitration Fund Accounting", function () {
             await testToken.connect(backer1).approve(await project.getAddress(), fundingAmount);
             await project.connect(backer1).sendFunds(fundingAmount);
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
             await project.connect(backer1).voteToDispute();
 
@@ -238,6 +242,7 @@ describe("Arbitration Fund Accounting", function () {
             await testToken.connect(backer1).approve(await project.getAddress(), fundingAmount);
             await project.connect(backer1).sendFunds(fundingAmount);
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
             await project.connect(backer1).voteToDispute();
 
@@ -297,6 +302,7 @@ describe("Arbitration Fund Accounting", function () {
 
             // Sign - immediate is released here
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Verify immediate was released
@@ -370,6 +376,7 @@ describe("Arbitration Fund Accounting", function () {
 
             // Sign
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute with 50% ruling
@@ -433,6 +440,7 @@ describe("Arbitration Fund Accounting", function () {
 
             // Sign
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute with 40% ruling
@@ -484,6 +492,7 @@ describe("Arbitration Fund Accounting", function () {
             await testToken.connect(backer1).approve(await project.getAddress(), fundingAmount);
             await project.connect(backer1).sendFunds(fundingAmount);
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute
@@ -540,6 +549,7 @@ describe("Arbitration Fund Accounting", function () {
             await project.connect(backer1).sendFunds({ value: fundingAmount });
 
             // Sign
+            await passCoolingOff(project);
             await project.connect(contractor).signContract({ value: contractorStake });
 
             // Dispute
@@ -567,6 +577,7 @@ describe("Arbitration Fund Accounting", function () {
 
             // Fund and sign
             await project.connect(backer1).sendFunds({ value: fundingAmount });
+            await passCoolingOff(project);
             await project.connect(contractor).signContract({ value: contractorStake });
 
             // Release vote
@@ -596,6 +607,7 @@ describe("Arbitration Fund Accounting", function () {
             await testToken.connect(backer1).approve(await project.getAddress(), fundingAmount);
             await project.connect(backer1).sendFundsWithImmediate(fundingAmount, immediateBps);
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
             await project.connect(backer1).voteToDispute();
             await project.connect(arbiter).arbitrate(90, "ruling_hash");
@@ -623,6 +635,7 @@ describe("Arbitration Fund Accounting", function () {
             await testToken.connect(backer2).approve(await project.getAddress(), funding2);
             await project.connect(backer2).sendFunds(funding2);
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
             await project.connect(backer1).voteToDispute();
             await project.connect(backer2).voteToDispute();

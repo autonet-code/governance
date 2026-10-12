@@ -21,7 +21,7 @@ contract TrustlessFactory {
 
     struct GovParams {
         string name;
-        uint48 timelockDelay;
+        uint48 votingDelay; // minutes
         uint32 votingPeriod;
         uint256 proposalThreshold;
         uint8 quorumFraction;
@@ -130,7 +130,7 @@ contract TrustlessFactory {
         );
 
         uint[] memory daoSettings = new uint[](4);
-        daoSettings[0] = _govParams.timelockDelay;
+        daoSettings[0] = _govParams.votingDelay;
         daoSettings[1] = _govParams.votingPeriod;
         daoSettings[2] = _govParams.proposalThreshold;
         daoSettings[3] = _govParams.quorumFraction;
@@ -163,6 +163,7 @@ contract TrustlessFactory {
         TimelockController timelock = TimelockController(payable(timelockAddr));
 
         economy.setImplementations(_addressParams.implAddresses[0], _addressParams.implAddresses[1]);
+        economy.setArbitrationFee(_economyParams.arbitrationFeeBps);
         economy.setPlatformFee(_economyParams.initialPlatformFeeBps);
         economy.setAuthorFee(_economyParams.initialAuthorFeeBps);
         economy.setCoolingOffPeriod(_economyParams.initialCoolingOffPeriod);
@@ -229,4 +230,4 @@ contract TrustlessFactory {
         );
     }
 }
-// TrustlessFactory.solasdas
+// TrustlessFactory.sol

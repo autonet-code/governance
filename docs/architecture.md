@@ -158,7 +158,7 @@ tx 3  configureAndFinalize(AddressParams, EconomyParams, keys, values)
 
 Binding the build to its deployer fixes a hijack in the earlier design, where shared pending state let anyone call step 2 or 3 against someone else's half-built suite and install their own governor. `test/security.test.js` covers both attempts and an outsider configuring a half-deployed economy.
 
-Note: `GovParams.timelockDelay` is passed to the Governor as the **voting delay** in minutes. The real Timelock delay is the `deployInfrastructure` argument.
+Note: `GovParams.votingDelay` is the Governor's voting delay in minutes. The Timelock delay is the `deployInfrastructure` argument.
 
 ## Off-chain: indexer, Firestore, apps
 

@@ -61,7 +61,7 @@ const TOKEN_SYMBOL = "AREP";
 //   RepToken.CLOCK_MODE() == "mode=timestamp" (RepToken.sol:283), so
 //   GovernorSettings values are SECONDS, not blocks: 50400 × 60 = 3,024,000 s.
 //
-//   The governor's votingDelay rides the SAME ×60: govParams.timelockDelay
+//   The governor's votingDelay rides the SAME ×60: govParams.votingDelay
 //   (misleadingly named — it is the VOTING DELAY, not the timelock's) →
 //   daoSettings[0] → `minsDelay * 1 minutes`. The old hardcoded 1 → 60 s.
 //
@@ -98,7 +98,7 @@ function toFactoryMinutes(name, secs) {
   return secs / 60;
 }
 
-const VOTING_DELAY_SECS = envSeconds("VOTING_DELAY_SECS", 60);        // was govParams.timelockDelay=1 (min)
+const VOTING_DELAY_SECS = envSeconds("VOTING_DELAY_SECS", 60);        // was govParams.votingDelay=1 (min)
 const VOTING_PERIOD_SECS = envSeconds("VOTING_PERIOD_SECS", 604800);  // ~1 week INTENT, correctly expressed
 const TIMELOCK_DELAY_SECS = envSeconds("TIMELOCK_DELAY_SECS", 60);    // was TIMELOCK_DELAY_MINUTES=1
 
@@ -554,11 +554,10 @@ async function main() {
 
   const govParams = {
     name: `${JURISDICTION_NAME} DAO`,
-    // NB: `timelockDelay` here is the GOVERNOR'S VOTING DELAY (misnamed in the
-    // factory struct), NOT the timelock minDelay. Both governor values are in
-    // the factory's MINUTES unit (×60 in HomebaseDAO's constructor, timestamp
-    // clock) — see the units-path note at the constants.
-    timelockDelay: toFactoryMinutes("VOTING_DELAY_SECS", VOTING_DELAY_SECS),
+    // The governor's voting delay (not the timelock minDelay). Both governor values are in
+    // the factory's MINUTES unit (x60 in HomebaseDAO's constructor, timestamp clock); see
+    // the units-path note at the constants.
+    votingDelay: toFactoryMinutes("VOTING_DELAY_SECS", VOTING_DELAY_SECS),
     votingPeriod: toFactoryMinutes("VOTING_PERIOD_SECS", VOTING_PERIOD_SECS),
     proposalThreshold: PROPOSAL_THRESHOLD,
     quorumFraction: QUORUM_FRACTION,

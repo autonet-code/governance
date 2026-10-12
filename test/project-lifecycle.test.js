@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("./helpers/coolingOff");
 
 describe("Project Lifecycle under DAO Governance", function () {
     let economy, nativeProjectImpl, erc20ProjectImpl, testToken, mockRepToken;
@@ -74,6 +75,7 @@ describe("Project Lifecycle under DAO Governance", function () {
             // 3. Contractor signs and stakes half the arbitration fee (Ongoing stage)
             const arbitrationFee = (fundingAmount * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             await testToken.connect(contractor).approve(await project.getAddress(), arbitrationFee / 2n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
             expect(await project.stage()).to.equal(2); // Ongoing
 
@@ -127,6 +129,7 @@ describe("Project Lifecycle under DAO Governance", function () {
             const arbitrationFee = (fundingAmount * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
 
             // Contractor signs and stakes half the arbitration fee
+            await passCoolingOff(project);
             await project.connect(contractor).signContract({ value: arbitrationFee / 2n });
             expect(await project.stage()).to.equal(2); // Ongoing
 
@@ -211,6 +214,7 @@ describe("Project Lifecycle under DAO Governance", function () {
             const totalFunding = amount1 + amount2;
             const arbitrationFee = (totalFunding * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             await testToken.connect(contractor).approve(await project.getAddress(), arbitrationFee / 2n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // 1. Minority user (user1) votes to dispute. Quorum is not met.

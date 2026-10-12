@@ -1,5 +1,6 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
+const { passCoolingOff } = require("./helpers/coolingOff");
 
 describe("DAO-Governed Economy", function () {
     let economy, nativeProjectImpl, erc20ProjectImpl, testToken, mockRepToken;
@@ -120,6 +121,7 @@ describe("DAO-Governed Economy", function () {
 
             // 4. Contractor signs and stakes half the arbitration fee (5% of 10 ETH = 0.5 ETH, half = 0.25 ETH)
             const arbitrationFee = (fundingAmount * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
+            await passCoolingOff(project);
             await project.connect(contractor).signContract({ value: arbitrationFee / 2n });
 
             // 5. Vote to release payment. With 100% of the vote, it should pass the 85% threshold.
@@ -149,6 +151,7 @@ describe("DAO-Governed Economy", function () {
             // 3. Contractor signs and stakes half the arbitration fee
             const arbitrationFee = (fundingAmount * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             await testToken.connect(contractor).approve(projectAddress, arbitrationFee / 2n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
             expect(await project.stage()).to.equal(2); // Ongoing
 
@@ -195,6 +198,7 @@ describe("DAO-Governed Economy", function () {
 
             // Contractor stakes half the arbitration fee
             const nativeArbFee = (nativeFunding * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
+            await passCoolingOff(nativeProject);
             await nativeProject.connect(contractor).signContract({ value: nativeArbFee / 2n });
             await nativeProject.connect(user1).voteToReleasePayment();
             await nativeProject.connect(contractor).withdrawAsContractor();
@@ -216,6 +220,7 @@ describe("DAO-Governed Economy", function () {
             // Contractor stakes half the arbitration fee
             const tokenArbFee = (tokenFunding * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             await testToken.connect(contractor).approve(erc20ProjectAddr, tokenArbFee / 2n);
+            await passCoolingOff(erc20Project);
             await erc20Project.connect(contractor).signContract();
             await erc20Project.connect(user1).voteToReleasePayment();
             await erc20Project.connect(contractor).withdrawAsContractor();

@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("./helpers/coolingOff");
 
 /**
  * Comprehensive Contribution & Withdrawal Tests
@@ -265,6 +266,7 @@ describe("Comprehensive Contribution & Withdrawal Tests", function () {
             const arbitrationFee = (totalLocked * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             const contractorStake = arbitrationFee / 2n;
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Immediate released to contractor
@@ -307,6 +309,7 @@ describe("Comprehensive Contribution & Withdrawal Tests", function () {
             const arbitrationFee = (totalLocked * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             const contractorStake = arbitrationFee / 2n;
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute and arbitrate at 50%
@@ -398,6 +401,7 @@ describe("Comprehensive Contribution & Withdrawal Tests", function () {
             const arbitrationFee = (total * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             const contractorStake = arbitrationFee / 2n;
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute with 33% ruling (creates more rounding)
@@ -444,6 +448,7 @@ describe("Comprehensive Contribution & Withdrawal Tests", function () {
             const arbitrationFee = (totalLocked * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             const contractorStake = arbitrationFee / 2n;
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Backer1 votes to dispute - has 1000 voting power (55.5% of 1800)
@@ -483,6 +488,7 @@ describe("Comprehensive Contribution & Withdrawal Tests", function () {
             const arbitrationFee = (totalLocked * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             const contractorStake = arbitrationFee / 2n;
             await testToken.connect(contractor).approve(await project.getAddress(), contractorStake);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Vote to release - voting power should be totalLocked (920)
@@ -530,6 +536,7 @@ describe("Comprehensive Contribution & Withdrawal Tests", function () {
             // Sign
             const arbitrationFee = (totalLocked * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             const contractorStake = arbitrationFee / 2n;
+            await passCoolingOff(project);
             await project.connect(contractor).signContract({ value: contractorStake });
 
             // Dispute and arbitrate
@@ -602,6 +609,7 @@ describe("Comprehensive Contribution & Withdrawal Tests", function () {
             // Sign to move to Ongoing
             const arbitrationFee = (amount * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             await testToken.connect(contractor).approve(await project.getAddress(), arbitrationFee / 2n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             expect(await project.stage()).to.equal(2); // Ongoing
@@ -621,6 +629,7 @@ describe("Comprehensive Contribution & Withdrawal Tests", function () {
 
             const arbitrationFee = (amount * BigInt(ARBITRATION_FEE_BPS)) / 10000n;
             await testToken.connect(contractor).approve(await project.getAddress(), arbitrationFee / 2n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Move to Dispute

@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { passCoolingOff } = require("../helpers/coolingOff");
 
 /**
  * Comprehensive Withdrawal Tests
@@ -181,6 +182,7 @@ describe("Comprehensive Withdrawal Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Reimburse (contractor cancels)
@@ -208,6 +210,7 @@ describe("Comprehensive Withdrawal Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Reimburse
@@ -238,6 +241,7 @@ describe("Comprehensive Withdrawal Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute
@@ -274,6 +278,7 @@ describe("Comprehensive Withdrawal Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute
@@ -306,6 +311,7 @@ describe("Comprehensive Withdrawal Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute
@@ -351,6 +357,7 @@ describe("Comprehensive Withdrawal Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract();
 
             // Dispute with 50% ruling
@@ -420,6 +427,7 @@ describe("Comprehensive Withdrawal Tests", function () {
 
             const coolingOff = await economy.coolingOffPeriod();
             await time.increase(coolingOff + 1n);
+            await passCoolingOff(project);
             await project.connect(contractor).signContract({ value: contractorStake });
 
             // Dispute with 60% ruling

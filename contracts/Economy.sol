@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/proxy/Clones.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./IEconomy.sol";
 import "./NativeProject.sol";
 import "./ERC20Project.sol";
@@ -17,6 +18,7 @@ interface IProjectSpending {
 }
 
 contract Economy is IEconomy {
+    using SafeERC20 for IERC20;
     // --- STATE: DAO Governance ---
     address public timelockAddress;
     address public registryAddress;
@@ -38,6 +40,12 @@ contract Economy is IEconomy {
     // Every payout that accrues reputation pays the platform fee to the treasury, so the floor
     // is the minimum price of reputation. Without it, wash trading mints REP for free.
     uint public constant MIN_PLATFORM_FEE_BPS = 100; // 1%
+    uint public constant MAX_PLATFORM_FEE_BPS = 5000; // 50%
+    // Platform + author fees stay well below 100% of any payout
+    uint public constant MAX_AUTHOR_FEE_BPS = 2500; // 25%
+    uint public constant MAX_ARBITRATION_FEE_BPS = 2500; // 25% of the locked value
+    // Margin after a full proposal lifecycle so a passed veto can be executed before signing
+    uint public constant COOLING_OFF_BUFFER = 1 days;
 
     // Configures the economy until the DAO addresses are set; after that only the timelock can.
     address public admin;
@@ -114,6 +122,7 @@ contract Economy is IEconomy {
     event AdminTransferred(address newAdmin);
 
     constructor(uint _arbitrationFeeBps) {
+        require(_arbitrationFeeBps <= MAX_ARBITRATION_FEE_BPS, "Arbitration fee too high");
         arbitrationFeeBps = _arbitrationFeeBps;
         platformFeeBps = 100; // 1%
         authorFeeBps = 100;   // 1%
@@ -148,7 +157,8 @@ contract Economy is IEconomy {
     receive() external payable { emit InboundValue(); }
 
     // A project's cooling-off must give the jurisdiction time to run a full proposal (e.g. a
-    // veto) before the contractor can sign, so it never drops below the governance lifecycle.
+    // veto) before the contractor can sign, so it never drops below the governance lifecycle
+    // plus a day to execute the result.
     function proposalLifecycle() public view returns (uint total) {
         total += _readUint(governorAddress, "votingDelay()");
         total += _readUint(governorAddress, "votingPeriod()");
@@ -156,8 +166,8 @@ contract Economy is IEconomy {
     }
 
     function effectiveCoolingOffPeriod() external view returns (uint) {
-        uint lifecycle = proposalLifecycle();
-        return coolingOffPeriod > lifecycle ? coolingOffPeriod : lifecycle;
+        uint floor = proposalLifecycle() + COOLING_OFF_BUFFER;
+        return coolingOffPeriod > floor ? coolingOffPeriod : floor;
     }
 
     function _readUint(address target, string memory signature) private view returns (uint) {
@@ -329,17 +339,19 @@ contract Economy is IEconomy {
     }
 
     function setPlatformFee(uint newFeeBps) external onlyGovernance {
-        require(newFeeBps >= MIN_PLATFORM_FEE_BPS && newFeeBps <= 5000, "Platform fee out of range");
+        require(newFeeBps >= MIN_PLATFORM_FEE_BPS && newFeeBps <= MAX_PLATFORM_FEE_BPS, "Platform fee out of range");
         platformFeeBps = newFeeBps;
         emit PlatformFeeSet(newFeeBps);
     }
 
     function setAuthorFee(uint newFeeBps) external onlyGovernance {
+        require(newFeeBps <= MAX_AUTHOR_FEE_BPS, "Author fee too high");
         authorFeeBps = newFeeBps;
         emit AuthorFeeSet(newFeeBps);
     }
 
     function setArbitrationFee(uint newFeeBps) external onlyGovernance {
+        require(newFeeBps <= MAX_ARBITRATION_FEE_BPS, "Arbitration fee too high");
         arbitrationFeeBps = newFeeBps;
         emit ArbitrationFeeSet(newFeeBps);
     }
@@ -373,7 +385,8 @@ contract Economy is IEconomy {
 
     function withdrawNative() public {
         require(msg.sender == timelockAddress, "Only the DAO can withdraw Ether");
-        payable(registryAddress).transfer(address(this).balance);
+        (bool sent, ) = payable(registryAddress).call{value: address(this).balance}("");
+        require(sent, "Native withdrawal failed.");
     }
 
     function withdrawTokens(address tokenAddress) public {
@@ -381,7 +394,7 @@ contract Economy is IEconomy {
         IERC20 token = IERC20(tokenAddress);
         uint256 balance = token.balanceOf(address(this));
         require(balance > 0, "No tokens to withdraw.");
-        require(token.transfer(registryAddress, balance), "Token withdrawal failed.");
+        token.safeTransfer(registryAddress, balance);
     }
 }
 // Economy.sol

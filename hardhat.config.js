@@ -20,7 +20,9 @@ module.exports = {
       mining: {
         auto: true,
         interval: 2000
-      }
+      },
+      // Lets the local UI harness start the chain behind wall-clock time (see scripts/indexer-e2e/ui.sh)
+      ...(process.env.HARDHAT_INITIAL_DATE ? { initialDate: process.env.HARDHAT_INITIAL_DATE } : {})
     },
     ganache: {
       url: "http://127.0.0.1:7545",
