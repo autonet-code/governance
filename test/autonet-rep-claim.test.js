@@ -80,9 +80,6 @@ describe("AutonetRepClaim", function () {
         await substrate.connect(agentA).registerAgent(ethers.id("a"), "0x01");
         await substrate.connect(agentB).registerAgent(ethers.id("b"), "0x02");
 
-        await repToken.connect(agentA).delegate(agentA.address);
-        await repToken.connect(agentB).delegate(agentB.address);
-
         // Default: no genesis seed. setMinter happens inside deployClaim.
         claim = await deployClaim([], []);
     });
@@ -179,6 +176,24 @@ describe("AutonetRepClaim", function () {
         expect(await claim.claimable(agentB.address)).to.equal(0);
         await expect(claim.claim(agentB.address))
             .to.be.revertedWithCustomError(claim, "NothingToClaim");
+    });
+
+    it("claiming makes the agent its own delegate, but keeps a delegate it already chose", async function () {
+        await earnPool(agentA, 2n * ONE_ATN);
+        await claim.claim(agentA.address);
+        expect(await repToken.delegates(agentA.address)).to.equal(agentA.address);
+        expect(await repToken.getVotes(agentA.address)).to.equal(ethers.parseEther("2"));
+
+        await repToken.connect(agentB).delegate(agentA.address);
+        await earnPool(agentB, 3n * ONE_ATN);
+        await claim.claim(agentB.address);
+        expect(await repToken.delegates(agentB.address)).to.equal(agentA.address);
+        expect(await repToken.getVotes(agentA.address)).to.equal(ethers.parseEther("5"));
+    });
+
+    it("only the admin or a minter can mintDelegated", async function () {
+        await expect(repToken.connect(stranger).mintDelegated(stranger.address, 1))
+            .to.be.revertedWith("RepToken: Not authorized to mint");
     });
 
     it("earnings paid to an address that is not a registered agent never become REP", async function () {

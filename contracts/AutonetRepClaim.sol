@@ -26,6 +26,7 @@ interface ISubstrateEarnings {
 ///         header and scripts/deploy-autonet-rep-claim.js.
 interface IMintableRepToken {
     function mint(address to, uint256 amount) external;
+    function mintDelegated(address to, uint256 amount) external;
 }
 
 /// @title AutonetRepClaim
@@ -190,7 +191,8 @@ contract AutonetRepClaim {
         uint256 repMinted = earningsDelta * REP_PER_ATN_BASE; // 18-decimal REP
 
         claimedEarnings[agent] = base;
-        repToken.mint(agent, repMinted);
+        // The agent votes its own REP (it signs Substrate anchors with it) unless it already chose a delegate
+        repToken.mintDelegated(agent, repMinted);
 
         emit RepClaimed(agent, earningsDelta, repMinted);
     }

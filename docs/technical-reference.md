@@ -50,6 +50,7 @@ State: `admin`, `isTransferable` (immutable), `registryAddress` (immutable), `ti
 | Function | Caller |
 |----------|--------|
 | `mint(address to, uint256 amount)` | `admin` or a `minters` entry |
+| `mintDelegated(address to, uint256 amount)` | `admin` or a `minters` entry; makes `to` its own delegate first unless it already chose one |
 | `burn(address from, uint256 amount)` | `admin` |
 | `setAdmin(address newAdmin)` | `admin` (non-zero) |
 | `setMinter(address account, bool allowed)` | `admin` or `timelockAddress` |

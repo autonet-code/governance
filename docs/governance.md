@@ -112,6 +112,7 @@ Two addresses matter, and they are set differently:
 | Function | Caller |
 |---|---|
 | `mint(to, amount)` | `admin` or an address in `minters` |
+| `mintDelegated(to, amount)` | Same, and `to` votes for itself unless it already chose a delegate (used by `AutonetRepClaim`) |
 | `burn(from, amount)` | `admin` only |
 | `setMinter`, `setDefaultDelegate`, `setAutoDelegateExempt` | `admin` or `timelockAddress` |
 | `setEconomyAddress` | `admin` or `timelockAddress`, once only |

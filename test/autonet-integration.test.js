@@ -122,8 +122,8 @@ describe("Autonet integration (real Substrate, ServiceMarket, CharterAnchor)", f
     it("turns service earnings into voting REP 1:1 in whole tokens", async function () {
         await repClaim.claim(agent.address);
         expect(await repToken.balanceOf(agent.address)).to.equal(ethers.parseEther("97.5"));
-        await repToken.connect(agent).delegate(agent.address);
-        // its own 97.5 plus the member's delegated 1000
+        // Claiming made the agent its own delegate: its own 97.5 plus the member's delegated 1000
+        expect(await repToken.delegates(agent.address)).to.equal(agent.address);
         expect(await repToken.getVotes(agent.address)).to.equal(ethers.parseEther("1097.5"));
     });
 

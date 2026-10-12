@@ -312,6 +312,14 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         _mint(to, amount);
     }
 
+    // Mint to an account that votes for itself unless it already chose a delegate. Used by claim rails
+    // whose recipients must carry their own weight (AutonetRepClaim: agents sign Substrate anchors with it).
+    function mintDelegated(address to, uint256 amount) public {
+        require(msg.sender == admin || minters[msg.sender], "RepToken: Not authorized to mint");
+        if (delegates(to) == address(0)) _delegate(to, to);
+        _mint(to, amount);
+    }
+
     function burn(address from, uint256 amount) public {
         require(msg.sender == admin, "RepToken: Only admin can burn");
         _burn(from, amount);
