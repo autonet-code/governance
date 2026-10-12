@@ -1,758 +1,221 @@
 # Trustless Economy
 
-This document explains the Trustless Economy system—a marketplace for work where agreements self-enforce through smart contracts, with multi-layered dispute resolution.
+The Economy is a jurisdiction's marketplace for work. An author posts a project, backers fund it into escrow, a contractor signs and delivers, and backers either release the escrow or send it to an arbiter. The jurisdiction (its Governor and Timelock) sits above every project: it can veto, hear appeals, and tune the economy's parameters. Paid work and funded work both accrue reputation (REP) in the jurisdiction.
 
-## The Problem We Solve
+Contracts:
 
-Traditional business arrangements require trust:
-- You trust the contractor will deliver
-- The contractor trusts you'll pay
-- Both trust the legal system to resolve disputes
+| Contract | Role |
+|----------|------|
+| `contracts/Economy.sol` | One per jurisdiction. Deploys projects as minimal clones, holds DAO-governed parameters, keeps the earnings/spending ledger that REP is minted from. |
+| `contracts/NativeProject.sol` | Escrow for one project paid in the chain's native currency. |
+| `contracts/ERC20Project.sol` | Same lifecycle, paid in one ERC20 token (SafeERC20 transfers). |
+| `contracts/IEconomy.sol` | Callbacks projects make into the Economy (`updateEarnings`, `registerBacker`, `registerProjectRoles`). |
+| `contracts/IGovernedEconomy.sol` | Parameter getters projects read from the Economy. |
 
-This trust requirement creates friction:
-- **Geographic barriers**: Contracts across jurisdictions are risky
-- **Cost barriers**: Legal enforcement is expensive
-- **Access barriers**: Many workers lack enforceable legal identities
-- **Speed barriers**: Court cases take months or years
+See also: [architecture.md](architecture.md) for how the suite is wired, [governance.md](governance.md) for the proposal lifecycle, [registry-settings.md](registry-settings.md) for every parameter and registry key, [immediate-release.md](immediate-release.md) for advance payments, [technical-reference.md](technical-reference.md) for full signatures, [deployments.md](deployments.md) for addresses, and [autonet.md](autonet.md) for the AI layer built on top.
 
-The Trustless Economy removes these barriers by encoding trust into smart contracts.
+## Roles
 
-## How It Works (Non-Technical)
+| Role | Who | Can do | Paid |
+|------|-----|--------|------|
+| Author | Creator of the project (needs `projectThreshold` REP) | Set parties if not set at creation, fund | Author fee on every contractor payout |
+| Backer | Anyone who funds | Fund, withdraw before signing, vote release/dispute with locked funds, withdraw refund after close | Refund per outcome; REP for what they spent |
+| Contractor | Named by author | Sign, dispute, reimburse (cancel), withdraw | Payouts net of platform and author fees; stake back if no arbitration |
+| Arbiter | Named by author | Rule 0 to 100% while in Dispute | Arbitration fee net of platform fee, only if they ruled |
+| DAO (Timelock) | The jurisdiction | Veto any non-closed project, overrule an appealed ruling, set parameters | Platform fees and forfeited arbitration fees go to the Registry (treasury) |
+| DAO member | REP holder with votes `>= projectThreshold` | Open an appeal | |
 
-### The Basic Flow
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         PROJECT LIFECYCLE                                 │
-│                                                                           │
-│  1. CREATION                                                              │
-│     ┌─────────┐                                                           │
-│     │ Author  │ creates project with terms and initial funding            │
-│     └────┬────┘                                                           │
-│          │                                                                │
-│          ▼                                                                │
-│  2. SETUP                                                                 │
-│     Author selects contractor and arbiter                                 │
-│     Backers contribute funds (optionally specifying immediate release)    │
-│          │                                                                │
-│          ▼                                                                │
-│  3. SIGNING                                                               │
-│     Contractor reviews terms and signs, staking arbitration fee           │
-│     Immediate release funds (if any) sent to contractor                   │
-│          │                                                                │
-│          ▼                                                                │
-│  4. WORK                                                                  │
-│     Contractor performs work according to terms                           │
-│     Backers can vote to release or dispute at any time                    │
-│          │                                                                │
-│          ├──────── 70%+ vote release ────────► PAYMENT                    │
-│          │                                                                │
-│          ├──────── 70%+ vote dispute ────────► ARBITRATION                │
-│          │                                                                │
-│          └──────── contractor reimburses ────► REFUND                     │
-│                                                                           │
-│  5. RESOLUTION                                                            │
-│     Arbiter decides split (or DAO overrides via appeal)                   │
-│     Contractor withdraws their share                                      │
-│     Backers withdraw their refunds                                        │
-│                                                                           │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
-### The Players
-
-| Role | Responsibilities | Incentives |
-|------|------------------|------------|
-| **Author** | Creates project, sets terms, funds initially | Gets 1% of contractor earnings |
-| **Contractor** | Performs the work | Gets paid minus fees |
-| **Arbiter** | Resolves disputes fairly | Gets arbitration fee if they rule |
-| **Backers** | Fund the project | Get their share back if work fails |
-| **DAO** | Ultimate authority | Platform fee + bad actor removal |
-
-### Money Flow Example
-
-Let's trace $10,000 through a successful project:
+## Stages
 
 ```
-Project Value: $10,000
-
-At Signing:
-├── Immediate release (20%): $2,000 → Contractor (no fees)
-└── Escrowed (80%): $8,000 → Held in contract
-
-Contractor stakes: $400 (half of 10% arbitration fee on locked amount)
-
-If 70%+ backers vote to release:
-├── Platform fee (1% of $8,000): $80 → DAO Treasury
-├── Author fee (1% of $7,920): $79.20 → Author
-└── Contractor payment: $7,840.80 → Contractor
-    Plus the $2,000 immediate release = $9,840.80 total
-
-Plus contractor gets back their $400 stake (no dispute occurred)
-
-Final distribution:
-├── Contractor: $10,240.80 (includes stake return)
-├── Author: $79.20
-├── DAO: $80
-└── Backers: $0 (they chose to release)
+Open --setParties--> Pending --signContract--> Ongoing
+                                                 |-- backers reach release quorum --> Closed (100% to contractor)
+                                                 |-- contractor reimburse() -------> Closed (0% to contractor)
+                                                 |-- backers reach dispute quorum -+
+                                                 '-- disputeAsContractor() --------+--> Dispute
+Dispute --arbitrate--> Appealable --finalizeArbitration (after appeal window)--> Closed
+Dispute (arbiter silent past appealPeriod) --appeal--> Appeal
+Appealable --appeal--> Appeal --daoOverrule (Timelock)--> Closed
+                             '--finalizeArbitration (after window)--> Closed
+Dispute --arbitrationPeriodExpired (150 days)--> Closed (full refund, no fee)
+any stage except Closed --daoVeto (Timelock)--> Closed (full refund of what is still held)
 ```
 
-## Project Lifecycle (Technical)
+If the contractor and arbiter are both passed to `createProject`, the project starts in Pending (cooling-off starts at creation). Otherwise it starts in Open.
 
-### Stage Transitions
+### Who can call what
+
+| Function | Caller | Stage | Effect |
+|----------|--------|-------|--------|
+| `setParties(contractor, arbiter, termsHash)` | Author | Open | Sets parties, starts cooling-off, moves to Pending |
+| `sendFunds` / `sendFundsWithImmediate(bps)` | Anyone | Open, Pending | Adds funds; `bps <= maxImmediateBps` is paid out at signing (see [immediate-release.md](immediate-release.md)). Native: `msg.value`, also plain transfers via `receive()`. ERC20: `(amount)` / `(amount, bps)`, pulled with `safeTransferFrom` |
+| `withdrawAsContributor()` | Backer | Open, Pending | Full refund of everything contributed |
+| `signContract()` | Contractor | Pending, after cooling-off, `projectValue > 0` | Fixes the arbitration fee, takes the contractor's half as stake, pays out the immediate portion, moves to Ongoing |
+| `voteToReleasePayment()` / `voteToDispute()` | Backer with locked funds | Ongoing | Weight = backer's locked amount; switching sides moves the weight. Closes or disputes when quorum is reached |
+| `disputeAsContractor()` | Contractor | Ongoing | Moves to Dispute |
+| `reimburse()` | Contractor | Ongoing | Closes with 0% to contractor (backers get locked funds back) |
+| `arbitrate(percent, rulingHash)` | Arbiter | Dispute | Records ruling, opens the appeal window (`appealPeriod`), moves to Appealable |
+| `appeal(proposalId, targets)` | Holder of `getVotes >= projectThreshold` | Appealable (inside window), or Dispute once `appealPeriod` has passed with no ruling | Requires a live Governor proposal (Pending, Active, Succeeded, Queued) and `targets[0] == project`. Moves to Appeal, restarts the window |
+| `daoOverrule(percent, rulingHash)` | Timelock | Appeal, inside window | Finalizes with the DAO's percentage |
+| `finalizeArbitration()` | Anyone | Appealable or Appeal, after window | Finalizes with the arbiter's ruling (0% if the arbiter never ruled) |
+| `arbitrationPeriodExpired()` | Anyone | Dispute, 150 days after dispute | Closes with full refund of locked funds, no arbitration fee |
+| `daoVeto()` | Timelock | Any but Closed | Closes with 0% to contractor |
+| `withdrawAsContractor()` | Contractor | Closed | Pays `availableToContractor` through the fee path |
+| `withdrawAsContributor()` | Backer | Closed | Pays the backer's exit amount once (`contributorSettled`) |
+| `reclaimArbitrationStake()` | Contractor | Closed, arbitration fee not paid out | Returns the stake, emits `ArbitrationStakeReclaimed` |
+| `sweepOrphanedTokens(token)` | Timelock | Any (ERC20Project only) | Sends tokens above the tracked balance to the Registry |
+
+### Cooling-off
+
+`coolingOffPeriodEnds = now + economy.effectiveCoolingOffPeriod()`, set by `setParties` or at creation when parties are named. 
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                           PROJECT STAGES                                │
-│                                                                         │
-│   ┌────────┐    setParties()    ┌─────────┐    signContract()           │
-│   │  OPEN  │───────────────────►│ PENDING │─────────────────►           │
-│   └───┬────┘                    └────┬────┘                             │
-│       │                              │                                   │
-│       │ (no parties set yet)         │ (cooling-off period)              │
-│       │                              │                                   │
-│       ▼                              ▼                                   │
-│   withdrawAsContributor()        withdrawAsContributor()                 │
-│   (full refund)                  (full refund)                           │
-│                                                                         │
-│                                      │                                   │
-│                                      ▼                                   │
-│                               ┌──────────┐                               │
-│                               │ ONGOING  │                               │
-│                               └────┬─────┘                               │
-│                                    │                                     │
-│         ┌────────────────┬─────────┼─────────┬────────────────┐          │
-│         │                │         │         │                │          │
-│         ▼                ▼         ▼         ▼                ▼          │
-│   voteToRelease   voteToDispute   │   disputeAs      reimburse()         │
-│   (70%+ quorum)   (70%+ quorum)   │   Contractor                         │
-│         │                │         │                │                    │
-│         ▼                ▼         │                ▼                    │
-│    ┌─────────┐     ┌─────────┐    │          ┌─────────┐                 │
-│    │ CLOSED  │     │ DISPUTE │◄───┘          │ CLOSED  │                 │
-│    │(release)│     └────┬────┘               │(refund) │                 │
-│    └─────────┘          │                    └─────────┘                 │
-│                         │                                                │
-│                         │ arbitrate()                                    │
-│                         ▼                                                │
-│                  ┌────────────┐                                          │
-│                  │ APPEALABLE │◄──── arbiter rules                       │
-│                  └─────┬──────┘                                          │
-│                        │                                                 │
-│         ┌──────────────┼──────────────┐                                  │
-│         │              │              │                                  │
-│         ▼              ▼              ▼                                  │
-│    appeal()     finalizeArb()   (appeal period                           │
-│    (DAO member)  (no appeal)     expires)                                │
-│         │              │              │                                  │
-│         ▼              │              │                                  │
-│    ┌────────┐          │              │                                  │
-│    │ APPEAL │          │              │                                  │
-│    └───┬────┘          │              │                                  │
-│        │               │              │                                  │
-│   ┌────┴────┐          │              │                                  │
-│   │         │          │              │                                  │
-│   ▼         ▼          ▼              ▼                                  │
-│ daoOverrule finalizeArb          ┌─────────┐                             │
-│ (Timelock)  (appeal expired)     │ CLOSED  │                             │
-│   │              │               │(arbiter │                             │
-│   │              │               │ ruling) │                             │
-│   │              │               └─────────┘                             │
-│   └──────────────┴──────────────────────►                                │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
+effectiveCoolingOffPeriod = max(coolingOffPeriod, proposalLifecycle())
+proposalLifecycle         = governor.votingDelay() + governor.votingPeriod() + timelock.getMinDelay()
 ```
 
-### Stage: Open
+The floor means a veto proposal made when the parties are set can run its full course before the contractor can sign. The value is fixed per project when cooling-off starts; later parameter changes do not affect it. Note the margin is zero: the veto must be proposed at the moment cooling-off starts, and becomes executable in the same second the contractor may sign (`signContract` requires `now > coolingOffPeriodEnds`). A DAO that wants reaction time sets `coolingOffPeriod` above the lifecycle. Funding during Pending does not extend cooling-off, and backers can still withdraw in full until the contract is signed.
 
-The project exists but parties haven't been assigned.
+### Backer votes
 
-**State:**
-- `contractor = address(0)`
-- `arbiter = address(0)`
-- Funding can be added
+- Weight is the backer's locked amount; immediate funds carry no vote.
+- Quorum is measured against `totalLocked`: the action fires when `votes * 10000 >= totalLocked * backersVoteQuorumBps`. Default 7000 (70%), settable within 50% to 99%.
+- Release quorum sets `availableToContractor = totalLocked` and closes. Dispute quorum moves to Dispute.
 
-**Available Actions:**
-```solidity
-// Author sets the parties and terms
-function setParties(address _contractor, address _arbiter, string memory _termsHash)
+### Arbitration and appeals
 
-// Anyone can fund
-function sendFunds() public payable
-function sendFundsWithImmediate(uint immediateBps) public payable
+| Item | Value |
+|------|-------|
+| Arbitration fee | `totalLocked * arbitrationFeeBps / 10000`, fixed at signing. Set at Economy deployment (`deployInfrastructure(..., arbitrationFeeBps)`), changeable by `setArbitrationFee` |
+| Contractor stake | `arbitrationFee / 2`, paid at signing (Native: `msg.value >= stake`; ERC20: exactly `stake` pulled) |
+| Backers' share | `arbitrationFee - arbitrationFee / 2`, taken from the locked pool only if arbitration is finalized |
+| Appeal window | `appealPeriod`, default 7 days. Restarts when an appeal is filed |
+| Arbiter exclusive window | An appeal from Dispute (arbiter silent) is only allowed after `disputeStarted + appealPeriod` |
+| Arbitration timeout | `ARBITRATION_TIMEOUT = 150 days` |
 
-// Contributors can withdraw (full refund)
-function withdrawAsContributor()
+On finalization (`finalizeArbitration` or `daoOverrule`):
+
+```
+pool                  = totalLocked - backersArbShare
+availableToContractor = pool * percent / 100
+backer exit           = pool * (100 - percent) / 100 * backerLocked / totalLocked
 ```
 
-### Stage: Pending
+The full arbitration fee (stake plus backers' share) goes to the arbiter through the fee path (platform fee, no author fee) if the arbiter ruled. If the arbiter never ruled (appeal from Dispute, DAO did not overrule), the whole fee goes to the Registry and the stake is lost. A veto or the 150-day timeout skips arbitration accounting: nobody pays the fee and the contractor reclaims the stake.
 
-Parties are set, awaiting contractor signature.
+The DAO's appeal flow: a member creates a Governor proposal calling `project.daoOverrule(percent, hash)`, calls `appeal(proposalId, targets)` while it is live, and the proposal must execute before the restarted window ends; otherwise anyone can finalize with the arbiter's ruling. See [governance.md](governance.md) for proposal timing.
 
-**State:**
-- `contractor` and `arbiter` are set
-- `coolingOffPeriodEnds` is set
-- Funding continues
+## Money flows
 
-**Cooling-Off Period:**
+### Fee path
 
-A configurable delay (default: 2 minutes) before the contractor can sign. This protects backers from:
-- Bait-and-switch tactics
-- Rush decisions without review
+Every payout that accrues reputation goes through `_payWithFees(payee, amount, withAuthorFee)`:
 
-**Available Actions:**
-```solidity
-// After cooling-off period
-function signContract() public payable
-
-// Contributors can still withdraw (full refund)
-function withdrawAsContributor()
+```
+platformFee = amount * platformFeeBps / 10000            -> Registry (treasury)
+authorFee   = (amount - platformFee) * authorFeeBps / 10000 -> author   (contractor payouts only)
+net         = amount - platformFee - authorFee           -> payee
 ```
 
-### Stage: Ongoing
+| Payout | Platform fee | Author fee | REP accrues to |
+|--------|--------------|------------|----------------|
+| Immediate release at signing | yes | yes | contractor (net), author (fee) |
+| Escrow release (`withdrawAsContractor`) | yes | yes | contractor (net), author (fee) |
+| Arbitration fee to arbiter | yes | no | arbiter (net) |
+| Backer refunds, stake return, forfeited fee | no | no | none |
 
-Work is in progress.
+The platform fee floor is `MIN_PLATFORM_FEE_BPS = 100` (1%), ceiling 50%. Since every REP-earning payout pays it, the floor is the minimum price of REP and makes wash trading (fund yourself, release or reimburse) cost real money (`test/security.test.js`). Platform fees are sent straight to the Registry; `Economy.withdrawNative()` / `withdrawTokens()` (Timelock only) just sweep anything sent to the Economy itself into the Registry.
 
-**At Signing:**
-1. Arbitration fee calculated: `(totalLocked * arbitrationFeeBps) / 10000`
-2. Contractor stakes half the fee
-3. Immediate release funds sent to contractor
-4. Stage transitions to Ongoing
+### Outcomes for locked funds
 
-**Voting Mechanics:**
+| Outcome | Contractor gets (gross, before fees) | Backers get back | Arbiter | Stake |
+|---------|-------------------------------------|------------------|---------|-------|
+| Release quorum | `totalLocked` | 0 | none | reclaimable |
+| `reimburse()` | 0 | all locked | none | reclaimable |
+| Arbitration finalized at p% | `pool * p%` | `pool * (100-p)%` pro rata by locked | full fee (net of platform fee), or Registry if no ruling | used for the fee |
+| 150-day timeout | 0 | all locked | none | reclaimable |
+| `daoVeto()` after signing | 0 | all locked | none (even if it already ruled) | reclaimable |
+| `daoVeto()` before signing | n/a | everything, including immediate portions | none | none taken |
 
-Backers vote with their **locked portion** only (immediate givers have less voting power):
+Immediate funds paid at signing are never clawed back. Every outcome refunds them only if the contract was never signed (`immediateReleased == 0`).
+
+### Worked example
+
+10,000 contributed by one backer, 20% immediate, `arbitrationFeeBps = 1000`, platform and author fees 1%.
+
+At signing: locked 8,000, arbitration fee 800, contractor stakes 400. Immediate 2,000 pays 20 platform fee, 19.80 author fee, 1,960.20 to the contractor.
+
+| | Release quorum | Arbitration at 60% |
+|---|---|---|
+| Contractor escrow payout (gross) | 8,000 | (8,000 - 400) * 60% = 4,560 |
+| Platform fee on it | 80 | 45.60 |
+| Author fee on it | 79.20 | 45.14 |
+| Contractor net (escrow) | 7,840.80 | 4,469.26 |
+| Arbiter | 0 | 800 - 8 platform fee = 792 |
+| Backer refund | 0 | 7,600 * 40% = 3,040 |
+| Contractor stake | 400 returned | spent on the fee |
+| Backer spending (REP basis) | 10,000 | 6,960 |
+
+## Reputation
+
+The Economy keeps the ledger; the RepToken mints from it.
+
+- Earnings: each project calls `economy.updateEarnings(payee, net, token)` for the contractor's net, the author fee, and the arbiter's net. Token is `NATIVE_CURRENCY` (`0xEeee...EEeE`) for native projects.
+- Spending: projects call `registerBacker(backer)` on a backer's first contribution, which adds the project to `projectsAsBacker[backer]` once. `projectToken[project]` records its payment token. Each project exposes `spentBy(backer) = total - exit` once Closed (0 before). `Economy.getUser()` sums `spentBy` over all backed projects per token, so spending accrues at close without the backer withdrawing, and withdrawing (`contributorSettled`) does not double count. A backer who withdraws before signing spends 0.
+- The legacy `updateSpendings` callback and `spendings` mapping remain and are included in `getUser()`, but current projects do not call them.
+- Claiming: `repToken.claimReputationFromEconomy()` reads `getUser(msg.sender)` and mints `amount * parity / 1e18` for each token's unclaimed delta, where parity is the Registry value `jurisdiction.parity.<lowercase token address>`. No parity set means no REP for that token. See [registry-settings.md](registry-settings.md).
+
+What a backer spends includes immediate funds paid out and their share of the arbitration fee; refunds are excluded.
+
+## Economy contract
+
+### Creating projects
 
 ```solidity
-// Vote to release payment to contractor
-function voteToReleasePayment() public {
-    uint lockedAmount = contributions[msg.sender].locked;
-    require(lockedAmount > 0, "Only contributors with locked funds can vote");
-
-    // Can change vote from dispute to release
-    if (contributorsDisputing[msg.sender] > 0) {
-        totalVotesForDispute -= contributorsDisputing[msg.sender];
-        contributorsDisputing[msg.sender] = 0;
-    }
-
-    totalVotesForRelease += lockedAmount;
-    contributorsReleasing[msg.sender] = lockedAmount;
-
-    // Check quorum (default 70%)
-    if (totalVotesForRelease * 10000 >= totalLocked * backersVoteQuorumBps) {
-        stage = Stage.Closed;
-        availableToContractor = totalLocked;
-        fundsReleased = true;
-        disputeResolution = 100;  // 100% to contractor
-    }
-}
-
-// Vote to escalate to dispute
-function voteToDispute() public {
-    // Similar logic, but triggers Dispute stage at quorum
-}
+createProject(name, contractor, arbiter, termsHash, repo, description) payable   // NativeProject
+createERC20Project(name, contractor, arbiter, termsHash, repo, description, token) // ERC20Project
 ```
 
-**Other Actions:**
-```solidity
-// Contractor can initiate dispute
-function disputeAsContractor()
+- Caller needs `repToken.balanceOf(caller) >= projectThreshold` (REP balance, not votes). The DAO addresses and implementation must be set.
+- `msg.value` on `createProject` becomes the author's locked contribution (0% immediate). ERC20 projects start unfunded.
+- Pass `address(0)` for contractor and arbiter to start in Open; pass both to start in Pending.
+- Emits `NewProject(contractAddress, projectName, contractor, arbiter, termsHash, repo, description, token)` (token is `address(0)` for native).
+- Roles are indexed in `projectsAsAuthor`, `projectsAsContractor`, `projectsAsArbiter`; projects in `deployedProjects` and `isProjectContract`.
 
-// Contractor can voluntarily reimburse
-function reimburse()
-```
+### Admin and governance
 
-### Stage: Dispute
+`onlyGovernance`: before `setDaoAddresses` the `admin` may call setters; after, only the Timelock. `admin` is the deployer, `EconomyFactory` hands it to the caller (the TrustlessFactory) with `transferAdmin`, which only works before DAO addresses are set. `setDaoAddresses(timelock, registry, governor, repToken)` is admin-only and one-time. The TrustlessFactory configures parameters, then sets the DAO addresses, so after deployment only DAO proposals can change anything.
 
-Awaiting arbitration.
+| Setter | Bounds | Default |
+|--------|--------|---------|
+| `setPlatformFee(bps)` | 100 to 5000 | 100 |
+| `setAuthorFee(bps)` | none | 100 |
+| `setArbitrationFee(bps)` | none | constructor argument |
+| `setCoolingOffPeriod(s)` | none (floored by lifecycle at use) | 120 |
+| `setBackersVoteQuorum(bps)` | 5000 to 9900 | 7000 |
+| `setProjectThreshold(n)` | none | 0 |
+| `setAppealPeriod(s)` | none | 604800 (7 days) |
+| `setMaxImmediateBps(bps)` | 0 to 5000 | 2000 |
+| `setImplementations(native, erc20)` | none | unset |
 
-**Available Actions:**
-```solidity
-// Arbiter issues ruling
-function arbitrate(uint256 percent, string memory rulingHash) public {
-    require(msg.sender == arbiter);
-    require(percent <= 100);  // Percent to contractor
+Projects read parameters live, except cooling-off end and arbitration fee, which are fixed when set. Details and proposal examples: [registry-settings.md](registry-settings.md).
 
-    originalDisputeResolution = percent;
-    originalRulingHash = rulingHash;  // IPFS hash of reasoning
-    arbiterHasRuled = true;
+### Views
 
-    stage = Stage.Appealable;
-    appealEnds = block.timestamp + economy.appealPeriod();
-}
+`getConfig()` returns all addresses, parameters, implementations and project count. `getUser(addr)` returns earned tokens/amounts, spent tokens/amounts (including backed projects), and role lists. Each project has `getProjectDetails()`.
 
-// If arbiter doesn't rule within 150 days
-function arbitrationPeriodExpired() public {
-    require(block.timestamp >= disputeStarted + ARBITRATION_TIMEOUT);
-    stage = Stage.Closed;
-    // No arbitration fee paid (arbiter forfeits)
-}
-```
+## Events
 
-### Stage: Appealable
+Economy: `NewProject`, `DaoAddressesSet`, `AdminTransferred`, `PlatformFeeSet`, `AuthorFeeSet`, `ArbitrationFeeSet`, `CoolingOffPeriodSet`, `BackersVoteQuorumSet`, `ProjectThresholdSet`, `AppealPeriodSet`, `MaxImmediateBpsSet`, `InboundValue`.
 
-Arbiter has ruled, appeal window is open.
+Projects: `SetParties`, `SendFunds(who, amount, immediateBps)`, `ContractSigned`, `ImmediateFundsReleased(contractor, net)`, `BackerVoteCast(voter, power, forDispute)`, `ProjectDisputed`, `ArbitrationDecision`, `ArbitrationAppealed`, `DaoOverruled`, `ArbitrationFinalized`, `VetoedByDao`, `ProjectClosed`, `ContractorPaid(contractor, net)`, `AuthorPaid`, `ContributorWithdrawn`, `ArbitrationStakeReclaimed(contractor, amount)`, and on ERC20Project `OrphanedTokensSwept`.
 
-**Appeal Requirements:**
-1. Caller has sufficient RepToken voting power (`>= projectThreshold`)
-2. A valid DAO proposal exists targeting this project
-3. Within appeal period
+## Tests
 
-```solidity
-function appeal(uint256 proposalId, address[] calldata targets) external {
-    require(stage == Stage.Appealable);
-    require(block.timestamp <= appealEnds);
-
-    // Verify voting power
-    uint256 votingPower = IVotes(repTokenAddress).getVotes(msg.sender);
-    require(votingPower >= projectThreshold);
-
-    // Verify proposal targets this project
-    require(targets[0] == address(this));
-
-    // Verify proposal is in valid state
-    IGovernor.ProposalState propState = IGovernor(daoGovernor).state(proposalId);
-    require(propState == Pending || propState == Active ||
-            propState == Succeeded || propState == Queued);
-
-    stage = Stage.Appeal;
-    appealEnds = block.timestamp + appealPeriod;
-}
-```
-
-### Stage: Appeal
-
-DAO is reviewing the arbitration.
-
-**Available Actions:**
-```solidity
-// Timelock executes DAO decision
-function daoOverrule(uint256 percent, string memory rulingHash) public {
-    require(msg.sender == daoTimelock);
-    require(stage == Stage.Appeal);
-    require(block.timestamp <= appealEnds);
-
-    _finalizeDispute(percent, rulingHash);  // Use DAO's ruling
-}
-
-// If appeal expires without DAO action
-function finalizeArbitration() public {
-    require(block.timestamp > appealEnds);
-    _finalizeDispute(originalDisputeResolution, originalRulingHash);
-}
-```
-
-### Stage: Closed
-
-Project is complete.
-
-**Withdrawal:**
-```solidity
-// Contractor claims their share
-function withdrawAsContractor() public {
-    require(stage == Stage.Closed);
-    require(msg.sender == contractor);
-
-    uint256 amountToPay = availableToContractor;
-    availableToContractor = 0;
-
-    // Calculate fees
-    uint platformFee = (amountToPay * platformFeeBps) / 10000;
-    uint remainder = amountToPay - platformFee;
-    uint authorFee = (remainder * authorFeeBps) / 10000;
-    uint amountToWithdraw = remainder - authorFee;
-
-    // Transfer to all parties
-    economy.updateEarnings(contractor, amountToWithdraw, token);
-    if (authorFee > 0) {
-        economy.updateEarnings(author, authorFee, token);
-        token.transfer(author, authorFee);
-    }
-    token.transfer(contractor, amountToWithdraw);
-    token.transfer(registry, platformFee);
-}
-
-// Backers claim their refund
-function withdrawAsContributor() public {
-    require(stage == Stage.Closed);
-
-    uint lockedAmount = contributions[msg.sender].locked;
-    uint immediateAmount = contributions[msg.sender].immediate;
-
-    // Clear contribution
-    contributions[msg.sender] = Contribution(0, 0, 0);
-
-    // Immediate portion is gone (released at signing)
-    // Locked portion returned based on dispute resolution
-    if (arbitrationFeePaidOut) {
-        uint backersArbShare = arbitrationFee - (arbitrationFee / 2);
-        uint pool = totalLocked - backersArbShare;
-        exitAmount = ((pool * (100 - disputeResolution)) / 100) * lockedAmount / totalLocked;
-    } else {
-        exitAmount = (lockedAmount * (100 - disputeResolution)) / 100;
-    }
-
-    expenditure = immediateAmount + (lockedAmount - exitAmount);
-    economy.updateSpendings(msg.sender, expenditure, token);
-
-    token.transfer(msg.sender, exitAmount);
-}
-```
-
-## Immediate Release Feature
-
-Backers can choose to release a portion of their contribution immediately upon contract signing.
-
-### How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      CONTRIBUTION STRUCTURE                              │
-│                                                                          │
-│  sendFundsWithImmediate(2000)  // 20% = 2000 basis points                │
-│  msg.value = 1000 tokens                                                 │
-│                                                                          │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │                     Total Contribution: 1000                     │    │
-│  │                                                                  │    │
-│  │  ┌──────────────────┐     ┌────────────────────────────────┐    │    │
-│  │  │  Immediate: 200  │     │       Locked: 800              │    │    │
-│  │  │                  │     │                                │    │    │
-│  │  │ Released at      │     │ Held in escrow until:          │    │    │
-│  │  │ signing          │     │ • Backer vote release          │    │    │
-│  │  │ (fee-free)       │     │ • Dispute resolution           │    │    │
-│  │  │                  │     │ • Contractor reimburses        │    │    │
-│  │  └──────────────────┘     └────────────────────────────────┘    │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                                                                          │
-│  Voting power for this backer: 800 (locked portion only)                 │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Key Rules
-
-| Rule | Rationale |
-|------|-----------|
-| Max 20% immediate (configurable) | Limits backer risk |
-| Fee-free immediate release | Only escrow release incurs fees |
-| Voting power = locked only | More trust given = less control needed |
-| Non-recoverable if contractor fails | Backers knowingly accept this risk |
-
-### When to Use Immediate Release
-
-**Good for:**
-- Trusted contractors who need operating capital
-- Projects where some upfront work is expected
-- Backers who want to express high confidence
-
-**Not for:**
-- New/unknown contractors
-- Projects with milestone-based payment
-- Risk-averse backers
-
-## Arbitration System
-
-### The Arbiter's Role
-
-Arbiters are trusted third parties who:
-1. Review the terms (`termsHash`)
-2. Examine evidence from both sides
-3. Issue a percentage ruling
-
-```
-Arbiter rules 60%:
-├── Contractor gets: 60% of escrowed funds (minus fees)
-└── Backers get: 40% of escrowed funds (pro-rata)
-```
-
-### Arbitration Fee
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    ARBITRATION FEE STRUCTURE                             │
-│                                                                          │
-│  Total Fee = (totalLocked * arbitrationFeeBps) / 10000                   │
-│  Default: 10% of locked value                                            │
-│                                                                          │
-│  Example: $10,000 project with $8,000 locked                             │
-│  Arbitration fee: $800                                                   │
-│                                                                          │
-│  ┌────────────────────────┐    ┌────────────────────────┐               │
-│  │  Contractor stakes     │    │  Backers contribute    │               │
-│  │  $400 at signing       │    │  $400 from locked pool │               │
-│  └───────────┬────────────┘    └───────────┬────────────┘               │
-│              │                              │                            │
-│              └──────────────┬───────────────┘                            │
-│                             │                                            │
-│                             ▼                                            │
-│                    ┌────────────────┐                                    │
-│                    │  If disputed:  │                                    │
-│                    │  $800 → Arbiter│                                    │
-│                    └────────────────┘                                    │
-│                                                                          │
-│  If NO dispute (backer vote or reimburse):                               │
-│  • Contractor reclaims $400 stake                                        │
-│  • Backers get their $400 back in the pool                               │
-│                                                                          │
-│  If arbiter FAILS to rule (150-day timeout):                             │
-│  • $800 goes to DAO treasury (arbiter forfeits)                          │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Appeal Process
-
-Any DAO member with sufficient reputation can appeal an arbitration decision:
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                       DAO APPEAL PROCESS                                 │
-│                                                                          │
-│  1. CREATE PROPOSAL                                                      │
-│     ┌─────────────────────────────────────────────────────────────┐     │
-│     │ dao.propose(                                                 │     │
-│     │   [projectAddress],                                          │     │
-│     │   [0],                                                       │     │
-│     │   [abi.encodeWithSignature(                                  │     │
-│     │     "daoOverrule(uint256,string)",                           │     │
-│     │     75,  // New percentage                                   │     │
-│     │     "QmHash..."  // DAO's reasoning                          │     │
-│     │   )],                                                        │     │
-│     │   "Appeal: Project X deserves 75%, not 50%"                  │     │
-│     │ );                                                           │     │
-│     └─────────────────────────────────────────────────────────────┘     │
-│                                                                          │
-│  2. LINK APPEAL                                                          │
-│     ┌─────────────────────────────────────────────────────────────┐     │
-│     │ project.appeal(proposalId, [projectAddress]);                │     │
-│     └─────────────────────────────────────────────────────────────┘     │
-│     → Transitions project to Appeal stage                                │
-│     → Extends appeal period for DAO voting                               │
-│                                                                          │
-│  3. DAO VOTES                                                            │
-│     Standard governance process:                                         │
-│     • Voting delay                                                       │
-│     • Voting period                                                      │
-│     • Queue in timelock                                                  │
-│                                                                          │
-│  4. OUTCOME                                                              │
-│     ┌──────────────────────────────────────────────────────────────┐    │
-│     │ If DAO approves:                                              │    │
-│     │   Timelock executes daoOverrule()                             │    │
-│     │   Project uses DAO's ruling instead of arbiter's             │    │
-│     │                                                               │    │
-│     │ If DAO rejects or doesn't vote:                               │    │
-│     │   Appeal period expires                                       │    │
-│     │   Anyone calls finalizeArbitration()                          │    │
-│     │   Original arbiter ruling stands                              │    │
-│     └──────────────────────────────────────────────────────────────┘    │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-## Economy Contract
-
-The Economy contract is the central marketplace that:
-1. Deploys projects using the clone pattern
-2. Tracks user profiles (earnings, spendings, roles)
-3. Stores DAO-controlled parameters
-
-### Creating Projects
-
-```solidity
-// Native currency project
-function createProject(
-    string memory name,
-    address contractor,
-    address arbiter,
-    string memory termsHash,
-    string memory repo,
-    string memory description
-) public payable {
-    require(repToken.balanceOf(msg.sender) >= projectThreshold);
-
-    address clone = Clones.clone(nativeProjectImplementation);
-    deployedProjects.push(clone);
-    isProjectContract[clone] = true;
-
-    NativeProject(clone).initialize{value: msg.value}(
-        address(this), name, msg.sender, contractor, arbiter,
-        termsHash, repo, timelockAddress, governorAddress
-    );
-
-    emit NewProject(clone, name, contractor, arbiter, termsHash, repo, description, address(0));
-}
-
-// ERC20 token project
-function createERC20Project(..., address tokenAddress) public {
-    // Similar, but with token address
-}
-```
-
-### User Profile Tracking
-
-```solidity
-struct UserProfile {
-    address[] earnedTokens;      // Tokens user has earned
-    uint[] earnedAmounts;        // Amounts per token
-    address[] spentTokens;       // Tokens user has spent
-    uint[] spentAmounts;         // Amounts per token
-    address[] projectsAsAuthor;  // Projects they created
-    address[] projectsAsContractor; // Projects they worked on
-    address[] projectsAsArbiter;    // Projects they arbitrated
-}
-
-// Updated by project contracts
-function updateEarnings(address user, uint amount, address token) external {
-    require(isProjectContract[msg.sender]);
-    earnings[user][token] += amount;
-}
-
-function updateSpendings(address user, uint amount, address token) external {
-    require(isProjectContract[msg.sender]);
-    spendings[user][token] += amount;
-}
-```
-
-### DAO-Controlled Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `arbitrationFeeBps` | 1000 (10%) | Fee for dispute resolution |
-| `platformFeeBps` | 100 (1%) | Platform fee to DAO treasury |
-| `authorFeeBps` | 100 (1%) | Fee to project author |
-| `coolingOffPeriod` | 2 minutes | Delay before contractor can sign |
-| `backersVoteQuorumBps` | 7000 (70%) | Quorum for backer votes |
-| `projectThreshold` | 0 | Min RepTokens to create project |
-| `appealPeriod` | 7 days | Window for appeals |
-| `maxImmediateBps` | 2000 (20%) | Max immediate release percentage |
-
-All parameters can be changed via DAO governance proposals.
-
-## Reputation Flow
-
-Economic activity generates reputation:
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      REPUTATION ACCRUAL                                  │
-│                                                                          │
-│  Activity                    │  Tracked As        │  Who Gets Rep        │
-│  ────────────────────────────┼────────────────────┼─────────────────────│
-│  Contractor paid             │  updateEarnings    │  Contractor          │
-│  Author fee paid             │  updateEarnings    │  Author              │
-│  Arbiter fee paid            │  updateEarnings    │  Arbiter             │
-│  Backer funds project        │  updateSpendings   │  Backer              │
-│  Backer loses to contractor  │  updateSpendings   │  Backer              │
-│                                                                          │
-│  Conversion:                                                             │
-│  1. User calls repToken.claimReputationFromEconomy()                     │
-│  2. RepToken reads Economy.getUser(user)                                 │
-│  3. For each unclaimed token amount:                                     │
-│     rep = amount * Registry["jurisdiction.parity.<token>"]               │
-│  4. Total rep minted to user                                             │
-│                                                                          │
-│  Example:                                                                │
-│  • User earned 1000 USDC                                                 │
-│  • Parity for USDC = 1                                                   │
-│  • User claims and receives 1000 RepTokens                               │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-## DAO Powers Over Economy
-
-The DAO can:
-
-### 1. Adjust Parameters
-
-```solidity
-// Proposal to change platform fee
-dao.propose(
-    [economyAddress],
-    [0],
-    [abi.encodeWithSignature("setPlatformFee(uint256)", 200)],  // 2%
-    "Increase platform fee to 2%"
-);
-```
-
-### 2. Override Arbitration
-
-```solidity
-// Proposal to override arbiter
-dao.propose(
-    [projectAddress],
-    [0],
-    [abi.encodeWithSignature("daoOverrule(uint256,string)", 80, "QmHash")],
-    "Override: contractor delivered 80% of scope"
-);
-```
-
-### 3. Veto Projects
-
-```solidity
-// Emergency veto of bad project
-dao.propose(
-    [projectAddress],
-    [0],
-    [abi.encodeWithSignature("daoVeto()")],
-    "Veto: project violates community standards"
-);
-```
-
-### 4. Withdraw Platform Fees
-
-```solidity
-// Move accumulated fees to registry
-dao.propose(
-    [economyAddress],
-    [0],
-    [abi.encodeWithSignature("withdrawNative()")],
-    "Transfer ETH fees to treasury"
-);
-```
-
-## Security Features
-
-| Feature | Protection Against |
-|---------|-------------------|
-| Cooling-off period | Bait-and-switch tactics |
-| Arbitration staking | Frivolous disputes |
-| 150-day timeout | Arbiter abandonment |
-| DAO appeal | Corrupt or mistaken arbitration |
-| DAO veto | Malicious projects |
-| Non-transferable tokens | Reputation farming |
-| Quorum requirements | Minority control |
-| Clone pattern | Gas optimization + consistent interface |
-
-## Use Cases
-
-### Freelance Work
-
-1. Client creates project with clear deliverables
-2. Contractor signs and begins work
-3. Client funds with immediate release for operating costs
-4. On delivery, backers vote to release
-5. Contractor withdraws payment
-
-### Grant Distribution
-
-1. DAO creates project for public good
-2. Grantee (contractor) signs
-3. Multiple backers fund the project
-4. Milestones verified by community vote
-5. Arbiter handles any disputes
-
-### DAO-to-DAO Collaboration
-
-1. DAO A creates project with DAO B as contractor
-2. DAO A's treasury funds the escrow
-3. DAO B delivers the work
-4. Both DAOs' governance processes involved if dispute
-
-## Further Reading
-
-- [Architecture](architecture.md) - System design and contract relationships
-- [DAO Governance](dao-governance.md) - Voting and treasury management
-- [Technical Reference](technical-reference.md) - Complete API documentation
+| File | Covers |
+|------|--------|
+| `test/project-lifecycle.test.js` | Happy path (ERC20), dispute path (native), vote switching, `projectThreshold` |
+| `test/arbitration-accounting.test.js` | Every outcome's payouts, immediate release with disputes, multiple backers, zero leftover balance |
+| `test/appeals.test.js` | Appeal, overrule, finalize after window, inactive arbiter escalation, `receive()`, ERC20 sweep |
+| `test/backer-spending.test.js` | `spentBy`, no double counting, reimburse, pre-signing veto refund, one listing per backed project |
+| `test/security.test.js` | Factory binding, cooling-off lifecycle floor, platform fee floor, wash-trading cost |

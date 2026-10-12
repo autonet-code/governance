@@ -1,862 +1,369 @@
 # Technical Reference
 
-Complete API documentation for On-Chain Jurisdiction smart contracts.
+Per-contract API for the production suite: key functions, parameters, constants, events and access control. Signatures are taken from the current source. Autonet satellites are covered in [autonet.md](autonet.md); deployed addresses and scripts in [deployments.md](deployments.md); the threat model in [security.md](security.md).
 
-## Table of Contents
+- [Roles after deployment](#roles-after-deployment)
+- [HomebaseDAO](#homebasedao) · [RepToken](#reptoken) · [Registry](#registry) · [Economy](#economy) · [NativeProject / ERC20Project](#nativeproject--erc20project)
+- [Factories](#factories) · [WrappedRepToken](#wrappedreptoken) · [Debates](#debates)
+- [Events](#events) · [Constants and defaults](#constants-and-defaults)
 
-- [Core Contracts](#core-contracts)
-  - [HomebaseDAO](#homebasedao)
-  - [RepToken](#reptoken)
-  - [Registry](#registry)
-  - [Economy](#economy)
-  - [NativeProject](#nativeproject)
-  - [ERC20Project](#erc20project)
-- [Factory Contracts](#factory-contracts)
-  - [StandardFactory](#standardfactory)
-  - [TrustlessFactory](#trustlessfactory)
-- [Events](#events)
-- [Deployed Addresses](#deployed-addresses)
+## Roles after deployment
 
----
-
-## Core Contracts
-
-### HomebaseDAO
-
-**File:** `contracts/Dao.sol`
-
-Governor contract implementing the proposal and voting lifecycle. Inherits from OpenZeppelin's Governor framework.
-
-#### Constructor
-
-```solidity
-constructor(
-    IVotes _token,
-    TimelockController _timelock,
-    string memory name,
-    uint48 minsDelay,
-    uint32 minsVoting,
-    uint256 pThreshold,
-    uint8 qvrm
-)
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `_token` | `IVotes` | Governance token (RepToken) |
-| `_timelock` | `TimelockController` | Timelock for proposal execution |
-| `name` | `string` | DAO name |
-| `minsDelay` | `uint48` | Voting delay in minutes |
-| `minsVoting` | `uint32` | Voting period in minutes |
-| `pThreshold` | `uint256` | Tokens required to create proposal |
-| `qvrm` | `uint8` | Quorum percentage (0-100) |
-
-#### Key Functions
-
-```solidity
-// Create a proposal
-function propose(
-    address[] memory targets,
-    uint256[] memory values,
-    bytes[] memory calldatas,
-    string memory description
-) public returns (uint256 proposalId)
-
-// Cast a vote
-function castVote(uint256 proposalId, uint8 support) public returns (uint256)
-// support: 0 = Against, 1 = For, 2 = Abstain
-
-// Cast vote with reason
-function castVoteWithReason(
-    uint256 proposalId,
-    uint8 support,
-    string calldata reason
-) public returns (uint256)
-
-// Queue a successful proposal
-function queue(
-    address[] memory targets,
-    uint256[] memory values,
-    bytes[] memory calldatas,
-    bytes32 descriptionHash
-) public returns (uint256)
-
-// Execute a queued proposal
-function execute(
-    address[] memory targets,
-    uint256[] memory values,
-    bytes[] memory calldatas,
-    bytes32 descriptionHash
-) public payable returns (uint256)
-
-// Get proposal state
-function state(uint256 proposalId) public view returns (ProposalState)
-// States: Pending, Active, Canceled, Defeated, Succeeded, Queued, Expired, Executed
-```
+| Contract | Privileged party after finalize | Notes |
+|----------|----------------------------------|-------|
+| TimelockController | `PROPOSER_ROLE`: the governor. `EXECUTOR_ROLE`: `address(0)` (anyone). Factory's `DEFAULT_ADMIN_ROLE` revoked | All governance actions are timelock calls |
+| RepToken | `admin` = timelock; `timelockAddress` immutable | See the StandardFactory caveat below |
+| Registry | `owner` = timelock; `wrapper` = StandardFactory (standard DAOs) or `address(0)` (economy DAOs); `jurisdictionAddress` = RepToken | |
+| Economy | `timelockAddress` set once by `setDaoAddresses`; `admin` frozen | |
+| Projects | `daoTimelock`, `daoGovernor` copied at initialization | |
 
 ---
 
-### RepToken
+## HomebaseDAO
 
-**File:** `contracts/RepToken.sol`
-
-ERC20Votes governance token with reputation accrual from Economy activity.
-
-#### Constructor
+`contracts/Dao.sol`. OpenZeppelin Governor with `GovernorSettings`, `GovernorCountingSimple`, `GovernorVotes`, `GovernorVotesQuorumFraction`, `GovernorTimelockControl`. No custom logic beyond the required overrides.
 
 ```solidity
-constructor(
-    string memory name,
-    string memory symbol,
-    address payable _registryAddress,
-    address _adminAddress,
-    address[] memory initialMembers,
-    uint256[] memory initialAmounts,
-    bool transferrable
-)
+constructor(IVotes _token, TimelockController _timelock, string memory name,
+            uint48 minsDelay, uint32 minsVoting, uint256 pThreshold, uint8 qvrm)
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | `string` | Token name |
-| `symbol` | `string` | Token symbol |
-| `_registryAddress` | `address payable` | Registry contract address |
-| `_adminAddress` | `address` | Initial admin (typically factory) |
-| `initialMembers` | `address[]` | Initial token recipients |
-| `initialAmounts` | `uint256[]` | Token amounts for each recipient |
-| `transferrable` | `bool` | Whether tokens can be transferred |
-
-#### State Variables
-
-```solidity
-bool public immutable isTransferable;    // Transfer restriction flag
-address public admin;                     // Admin address (can mint/burn)
-address public registryAddress;           // Registry for parity lookup
-address public economyAddress;            // Economy for reputation claims
-uint256 public currentPassiveIncomeEpochId;
-uint256 public currentDelegateRewardEpochId;
-```
-
-#### Admin Functions
-
-```solidity
-// Mint tokens (admin only)
-function mint(address to, uint256 amount) public
-
-// Burn tokens (admin only)
-function burn(address from, uint256 amount) public
-
-// Transfer admin role
-function setAdmin(address newAdmin) public
-
-// Link Economy contract (one-time)
-function setEconomyAddress(address _economyAddress) public
-```
-
-#### Epoch Functions
-
-```solidity
-// Start a new passive income epoch
-function startNewPassiveIncomeEpoch(uint256 budget, address paymentToken) public
-
-// Claim passive income for an epoch
-function claimPassiveIncome(uint256 epochId) public
-
-// Start a new delegate reward epoch
-function startNewDelegateRewardEpoch(uint256 budget, address paymentToken) public
-
-// Claim delegate rewards for an epoch
-function claimRepresentationReward(uint256 epochId) public
-
-// Get epoch info
-function getPassiveIncomeEpochStart(uint256 epochId) public view returns (uint48)
-function getDelegateRewardEpochStart(uint256 epochId) public view returns (uint48)
-```
-
-#### Reputation Functions
-
-```solidity
-// Claim reputation from Economy activity
-function claimReputationFromEconomy() external
-```
-
-#### Voting Functions (inherited from ERC20Votes)
-
-```solidity
-// Delegate voting power
-function delegate(address delegatee) public
-
-// Get current voting power
-function getVotes(address account) public view returns (uint256)
-
-// Get voting power at past timepoint
-function getPastVotes(address account, uint256 timepoint) public view returns (uint256)
-
-// Get total voting power at past timepoint
-function getPastTotalSupply(uint256 timepoint) public view returns (uint256)
-```
+- `minsDelay`, `minsVoting` are **minutes**, multiplied by 60 into `GovernorSettings`. RepToken uses `CLOCK_MODE() == "mode=timestamp"`, so the governor's delay and period are seconds on-chain.
+- `pThreshold`: votes needed to propose (18-decimal token units). `qvrm`: quorum percent of past total supply.
+- Inherited API: `propose`, `castVote`, `castVoteWithReason`, `queue`, `execute`, `cancel`, `state`, `votingDelay`, `votingPeriod`, `quorum`, `proposalThreshold`, `proposalNeedsQueuing`. States: `Pending, Active, Canceled, Defeated, Succeeded, Queued, Expired, Executed`.
 
 ---
 
-### Registry
+## RepToken
 
-**File:** `contracts/Registry.sol`
-
-Treasury and configuration store for the DAO.
-
-#### Constructor
+`contracts/RepToken.sol`. `ERC20, ERC20Permit, ERC20Votes`, 18 decimals, timestamp clock.
 
 ```solidity
-constructor(address initialOwner, address _wrapperAddress)
+constructor(string name, string symbol, address payable _registryAddress, address _timelockAddress,
+            address[] initialMembers, uint256[] initialAmounts, bool _isTransferable)
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `initialOwner` | `address` | Initial owner (typically factory) |
-| `_wrapperAddress` | `address` | Factory address for registry edits |
+State: `admin`, `isTransferable` (immutable), `registryAddress` (immutable), `timelockAddress` (immutable), `economyAddress`, `defaultDelegate`, `autoDelegateExempt[account]`, `minters[account]`, `claimedEarnings[user][token]`, `claimedSpendings[user][token]`.
 
-#### State Variables
+### Access control
 
-```solidity
-address public wrapperAddress;         // Factory address
-address public jurisdictionAddress;    // RepToken address
+| Function | Caller |
+|----------|--------|
+| `mint(address to, uint256 amount)` | `admin` or a `minters` entry |
+| `burn(address from, uint256 amount)` | `admin` |
+| `setAdmin(address newAdmin)` | `admin` (non-zero) |
+| `setMinter(address account, bool allowed)` | `admin` or `timelockAddress` |
+| `setEconomyAddress(address)` | `admin` or `timelockAddress`, once |
+| `setDefaultDelegate(address)` | `admin` or `timelockAddress`; `address(0)` disables |
+| `setAutoDelegateExempt(address account, bool exempt)` | `admin` or `timelockAddress` |
+| `setDelegateShareBps(uint16)` | `timelockAddress` only, `<= MAX_DELEGATE_SHARE_BPS` |
+| `startNewRewardEpoch(uint256 budget, address paymentToken)` | `timelockAddress` only |
+| `transfer`, `transferFrom` | revert `"RepToken: Reputation is non-transferable"` unless `isTransferable` |
+
+> **StandardFactory caveat.** The current source of the standard factories passes the DAO's timelock as `_timelockAddress`. Earlier builds passed `address(this)`, so DAOs created by those factories (including the Shadownet factories deployed 2026-10-11, until they are redeployed) have the factory as their immutable `timelockAddress`. In those DAOs, functions gated to `timelockAddress` only (`startNewRewardEpoch`, `setDelegateShareBps`) are unreachable; admin-or-timelock functions still work because `admin` is handed to the timelock. Economy DAOs (TrustlessFactory) always passed the real timelock.
+
+### Reputation from the Economy
+
+`claimReputationFromEconomy()`: reads `Economy.getUser(msg.sender)` and mints REP for the unclaimed delta of earnings and spendings per token, priced by the Registry key `jurisdiction.parity.<token>`:
+
+```
+rep = amount * parity / 1e18        (PARITY_ONE = 1e18; missing or 0 parity = no REP)
 ```
 
-#### Treasury Functions
+See [autonet.md](autonet.md#parity-one-registry-key-one-formula) for how parity values encode decimals. Emits `ReputationClaimedFromEconomy(user, amount)`.
 
-```solidity
-// Receive ETH
-receive() external payable
+### Reward epochs
 
-// Receive ERC721
-function onERC721Received(
-    address operator,
-    address from,
-    uint256 tokenId,
-    bytes calldata data
-) external returns (bytes4)
+Each REP earns its share of an epoch budget once. A holder delegated to someone else keeps `(1 - delegateShareBps)` of their share; the delegate earns the rest. Self-delegation (or no delegation) keeps 100%.
 
-// Transfer ETH (owner only)
-function transferETH(address payable to, uint256 amount) external
+| Item | Detail |
+|------|--------|
+| `startNewRewardEpoch(uint256 budget, address paymentToken)` | Timelock only, `budget > 0`. Increments `currentRewardEpoch`, snapshots `delegateShareBps`, and calls `Registry.earmarkFunds(rewardPurpose(id, token), budget, token)` in the same call (reverts if the Registry lacks unreserved balance). Use `0xEeee...EEeE` for native currency |
+| `rewardOf(uint256 epochId, address account) view` | `weight * budget / pastTotalSupply` at `startTimestamp - 1`, where `weight` = own balance (reduced by the delegate share if delegated elsewhere) + delegate share of votes delegated in |
+| `claimReward(uint256 epochId)` | Once per epoch per account, non-zero; pays via `Registry.disburseEarmarked` |
+| `rewardPurpose(uint256 epochId, address paymentToken) pure` | `keccak256(abi.encodePacked("REWARD", epochId, paymentToken))` |
+| `delegateShareBps` | Default `100` (1%); max `MAX_DELEGATE_SHARE_BPS = 2500` |
+| `getRewardEpochStart(uint256)`, `pastDelegatee(address, uint256)` | Views (`IJurisdictionData`) |
+| Unclaimed remainder | `Registry.reclaimEarmarkedFunds(epochId, token)` after the next epoch starts plus `benefits.claim.gracePeriod` |
 
-// Transfer ERC20 (owner only)
-function transferERC20(address tokenAddress, address to, uint256 amount) external
+### Auto-delegation
 
-// Transfer ERC721 (owner only)
-function transferERC721(address tokenAddress, address to, uint256 tokenId) external
-```
-
-#### Configuration Functions
-
-```solidity
-// Set a registry key-value pair
-function editRegistry(string memory key, string memory value) public
-
-// Set multiple key-value pairs
-function batchEditRegistry(string[] memory keys, string[] memory values) public
-
-// Get a registry value
-function getRegistryValue(string memory key) public view returns (string memory)
-
-// Get all keys
-function getAllKeys() public view returns (string[] memory)
-
-// Get all values
-function getAllValues() public view returns (string[] memory)
-```
-
-#### Earmarking Functions
-
-```solidity
-// Reserve funds for a purpose
-function earmarkFunds(bytes32 purpose, uint256 amount, address tokenAddress) external
-
-// Release reservation (funds stay in treasury)
-function withdrawEarmarkedFunds(bytes32 purpose, uint256 amount) external
-
-// Disburse to recipient
-function disburseEarmarked(
-    address recipient,
-    uint256 amount,
-    bytes32 purpose,
-    address tokenAddress
-) external
-
-// Reclaim unclaimed epoch funds
-function reclaimEarmarkedFunds(
-    uint256 epochId,
-    address paymentToken,
-    bool isDelegateReward
-) external
-```
+On any receipt, if `defaultDelegate != 0`, the recipient is not the default delegate, is not exempt, and has no delegate, the recipient is delegated to `defaultDelegate` (`AutoDelegated`). A holder's own `delegate()` call is never reset.
 
 ---
 
-### Economy
+## Registry
 
-**File:** `contracts/Economy.sol`
-
-Marketplace contract that deploys and tracks projects.
-
-#### Constructor
+`contracts/Registry.sol`. Treasury (native, ERC20, ERC721) and string key-value store. `ReentrancyGuard`.
 
 ```solidity
-constructor(uint _arbitrationFeeBps)
+constructor(address _owner, address _wrapper)
 ```
 
-#### State Variables
+| Function | Caller | Notes |
+|----------|--------|-------|
+| `editRegistry(string key, string value)` | `owner` or `wrapper` | Emits `RegistryUpdated` |
+| `batchEditRegistry(string[] keys, string[] values)` | `owner` or `wrapper` | No event |
+| `getRegistryValue(string)`, `getAllKeys()`, `getAllValues()` | anyone | |
+| `setJurisdictionAddress(address)` | `owner` or `wrapper` | |
+| `transferOwnership(address)` | `owner` | |
+| `transferETH(address payable to, uint256 amount)` | `owner` | `nonReentrant`, unreserved balance only, metered |
+| `transferERC20(address token, address to, uint256 amount)` | `owner` | `nonReentrant`, unreserved, metered |
+| `transferERC721(address token, address to, uint256 tokenId)` | `owner` | Unmetered |
+| `earmarkFunds(bytes32 purpose, uint256 amount, address token)` | `owner` or `jurisdictionAddress` | Cannot exceed unreserved balance; purpose bound to one token |
+| `withdrawEarmarkedFunds(bytes32 purpose, uint256 amount)` | `owner` | Releases the reservation (funds stay) |
+| `disburseEarmarked(address recipient, uint256 amount, bytes32 purpose, address token)` | `jurisdictionAddress` | `nonReentrant`, metered |
+| `reclaimEarmarkedFunds(uint256 epochId, address paymentToken)` | `owner` | Requires `benefits.claim.gracePeriod` |
+| `setSpendCap(address token, uint256 cap)` | `owner` | `0` = unmetered (default) |
+| `setWindowDuration(uint256)` | `owner` | Default `7 days`, `> 0` |
+| `remainingInWindow(address token) view` | anyone | `type(uint256).max` if unmetered |
 
-```solidity
-// DAO links
-address public timelockAddress;
-address public registryAddress;
-address public governorAddress;
-address public repTokenAddress;
-
-// Project implementations (for cloning)
-address public nativeProjectImplementation;
-address public erc20ProjectImplementation;
-
-// DAO-controlled parameters
-uint public arbitrationFeeBps;        // Default: 1000 (10%)
-uint public platformFeeBps;           // Default: 100 (1%)
-uint public authorFeeBps;             // Default: 100 (1%)
-uint public coolingOffPeriod;         // Default: 120 seconds
-uint public backersVoteQuorumBps;     // Default: 7000 (70%)
-uint public projectThreshold;         // Default: 0
-uint public appealPeriod;             // Default: 604800 (7 days)
-uint public maxImmediateBps;          // Default: 2000 (20%)
-
-// Tracking
-address[] public deployedProjects;
-mapping(address => bool) public isProjectContract;
-mapping(address => mapping(address => uint)) public earnings;
-mapping(address => mapping(address => uint)) public spendings;
-```
-
-#### Project Creation Functions
-
-```solidity
-// Create native currency project
-function createProject(
-    string memory name,
-    address contractor,
-    address arbiter,
-    string memory termsHash,
-    string memory repo,
-    string memory description
-) public payable returns (address)
-
-// Create ERC20 token project
-function createERC20Project(
-    string memory name,
-    address contractor,
-    address arbiter,
-    string memory termsHash,
-    string memory repo,
-    string memory description,
-    address tokenAddress,
-    uint256 arbitrationFee
-) public returns (address)
-```
-
-#### User Profile Functions
-
-```solidity
-// Get user profile
-function getUser(address user) external view returns (
-    address[] memory earnedTokens,
-    uint[] memory earnedAmounts,
-    address[] memory spentTokens,
-    uint[] memory spentAmounts,
-    address[] memory projectsAsAuthor,
-    address[] memory projectsAsContractor,
-    address[] memory projectsAsArbiter
-)
-
-// Called by projects to track activity
-function updateEarnings(address user, uint amount, address tokenAddress) external
-function updateSpendings(address user, uint amount, address tokenAddress) external
-function registerProjectRoles(
-    address projectAddress,
-    address author,
-    address contractor,
-    address arbiter
-) external
-```
-
-#### DAO Governance Functions
-
-```solidity
-// Set implementations (timelock only)
-function setImplementations(address native, address erc20) external
-
-// Parameter setters (timelock only after initial setup)
-function setPlatformFee(uint newFeeBps) external
-function setAuthorFee(uint newFeeBps) external
-function setCoolingOffPeriod(uint newPeriod) external
-function setBackersVoteQuorum(uint newQuorumBps) external
-function setProjectThreshold(uint newThreshold) external
-function setAppealPeriod(uint newPeriod) external
-function setMaxImmediateBps(uint newMaxBps) external
-
-// Fee withdrawal
-function withdrawNative() external
-function withdrawERC20(address tokenAddress) external
-
-// Orphan token recovery
-function sweepOrphanedTokens(address tokenAddress, address to) external
-```
+Spend guard: a fixed (not sliding) window per token. Worst case across a boundary is 2x the cap; size caps at half the tolerable burst. `NATIVE_TOKEN = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE`. Configuration keys are listed in [registry-settings.md](registry-settings.md).
 
 ---
 
-### NativeProject
+## Economy
 
-**File:** `contracts/NativeProject.sol`
-
-Escrow contract for native currency (ETH/XTZ) projects.
-
-#### State Variables
+`contracts/Economy.sol`. Deploys project clones (`Clones.clone`) and keeps the earnings/spendings ledgers that RepToken reads.
 
 ```solidity
-enum Stage { Open, Pending, Ongoing, Dispute, Appealable, Appeal, Closed }
+constructor(uint _arbitrationFeeBps)   // admin = msg.sender
+```
 
-Stage public stage;
-IEconomy public economy;
-string public name;
-address public author;
-address public contractor;
-address public arbiter;
-string public termsHash;
+### Admin and governance handover
 
-uint public projectValue;
-uint public totalImmediate;
-uint public totalLocked;
-uint public arbitrationFee;
-uint public availableToContractor;
-uint public disputeResolution;  // 0-100 percent to contractor
-bool public arbitrationFeePaidOut;
-
-address public daoTimelock;
-address public daoGovernor;
-uint public appealEnds;
-
-mapping(address => Contribution) public contributions;
-
-struct Contribution {
-    uint total;
-    uint immediate;
-    uint locked;
+```solidity
+modifier onlyGovernance() {
+    if (timelockAddress == address(0)) require(msg.sender == admin, "Protected");
+    else                               require(msg.sender == timelockAddress, "Protected");
 }
 ```
 
-#### Initialization
+- Before `setDaoAddresses`, `admin` (the factory) configures. After it, only the timelock can; `admin` is inert.
+- `transferAdmin(address newAdmin)`: only while `timelockAddress == 0` and only by `admin` (`EconomyFactory` uses it to hand admin to the calling factory). Emits `AdminTransferred`.
+- `setDaoAddresses(address _timelock, address _registry, address _governor, address _repToken)`: `admin` only, once, `_timelock != 0`. Emits `DaoAddressesSet`.
+
+### Governed setters (`onlyGovernance`)
+
+| Function | Bounds | Event |
+|----------|--------|-------|
+| `setImplementations(address _native, address _erc20)` | none | none |
+| `setPlatformFee(uint)` | `MIN_PLATFORM_FEE_BPS (100) <= x <= 5000` | `PlatformFeeSet` |
+| `setAuthorFee(uint)` | none | `AuthorFeeSet` |
+| `setArbitrationFee(uint)` | none | `ArbitrationFeeSet` |
+| `setCoolingOffPeriod(uint)` | none (floored at read time, below) | `CoolingOffPeriodSet` |
+| `setBackersVoteQuorum(uint)` | `5000..9900` | `BackersVoteQuorumSet` |
+| `setProjectThreshold(uint)` | none | `ProjectThresholdSet` |
+| `setAppealPeriod(uint)` | none | `AppealPeriodSet` |
+| `setMaxImmediateBps(uint)` | `<= 5000` | `MaxImmediateBpsSet` |
+
+### Cooling-off floor
 
 ```solidity
-function initialize(
-    address economyAddress,
-    string memory _name,
-    address _author,
-    address _contractor,
-    address _arbiter,
-    string memory _termsHash,
-    string memory _repo,
-    address _daoTimelock,
-    address _daoGovernor
-) external payable
+function proposalLifecycle() public view returns (uint)          // governor.votingDelay() + votingPeriod() + timelock.getMinDelay()
+function effectiveCoolingOffPeriod() external view returns (uint) // max(coolingOffPeriod, proposalLifecycle())
 ```
 
-#### Funding Functions
+Projects use `effectiveCoolingOffPeriod()`, so the DAO always has time to pass a veto before the contractor can sign. Unreadable targets count as 0.
 
-```solidity
-// Send funds (all escrowed)
-function sendFunds() public payable
+### Projects and ledgers
 
-// Send funds with immediate release portion
-function sendFundsWithImmediate(uint immediateBps) public payable
-```
-
-#### Party Setup Functions
-
-```solidity
-// Set contractor and arbiter (author only)
-function setParties(
-    address _contractor,
-    address _arbiter,
-    string memory _termsHash
-) external
-
-// Contractor signs contract
-function signContract() public payable
-```
-
-#### Voting Functions
-
-```solidity
-// Vote to release payment
-function voteToReleasePayment() public
-
-// Vote to dispute
-function voteToDispute() public
-```
-
-#### Dispute Functions
-
-```solidity
-// Contractor initiates dispute
-function disputeAsContractor() public
-
-// Arbiter rules on dispute
-function arbitrate(uint256 percent, string memory rulingHash) public
-
-// Handle arbiter timeout (150 days)
-function arbitrationPeriodExpired() public
-```
-
-#### Appeal Functions
-
-```solidity
-// Initiate DAO appeal
-function appeal(uint256 proposalId, address[] calldata targets) external
-
-// DAO overrules arbiter
-function daoOverrule(uint256 percent, string memory rulingHash) public
-
-// Finalize arbitration (accept original ruling)
-function finalizeArbitration() public
-```
-
-#### Withdrawal Functions
-
-```solidity
-// Contractor withdraws payment
-function withdrawAsContractor() public
-
-// Contributor withdraws refund
-function withdrawAsContributor() public
-
-// Reclaim arbitration fee (if no dispute)
-function reclaimArbitrationFee() public
-
-// Contractor reimburses (cancels project)
-function reimburse() public
-```
-
-#### DAO Functions
-
-```solidity
-// DAO vetoes project
-function daoVeto() external
-```
+| Function | Caller | Notes |
+|----------|--------|-------|
+| `createProject(string name, address contractor, address arbiter, string termsHash, string repo, string description) payable` | REP balance `>= projectThreshold` | Native clone; `msg.value` is the author's locked contribution |
+| `createERC20Project(..., string description, address tokenAddress)` | same | ERC20 clone |
+| `updateEarnings`, `updateSpendings`, `registerBacker`, `registerProjectRoles` | project clones only (`isProjectContract`) | |
+| `getUser(address) view` | anyone | Earnings, spendings (recorded plus `spentBy` on closed projects backed), role lists |
+| `getConfig() view`, `getNumberOfProjects() view` | anyone | |
+| `withdrawNative()`, `withdrawTokens(address)` | timelock | Sweep stray funds to the Registry |
 
 ---
 
-### ERC20Project
+## NativeProject / ERC20Project
 
-**File:** `contracts/ERC20Project.sol`
+`contracts/NativeProject.sol`, `contracts/ERC20Project.sol`. Escrow clones, initialized by the Economy. ERC20Project uses `SafeERC20` for all token movements. Neither inherits `ReentrancyGuard`; state is updated before every external transfer.
 
-Escrow contract for ERC20 token projects. Same interface as NativeProject with ERC20 handling.
+Stages: `Open, Pending, Ongoing, Dispute, Appealable, Appeal, Closed`.
 
-#### Additional State Variables
+| Function | Caller | Stage | Notes |
+|----------|--------|-------|-------|
+| `setParties(address contractor, address arbiter, string termsHash)` | author | Open | Starts cooling-off = `effectiveCoolingOffPeriod()`. Parties named at creation get the same |
+| `sendFundsWithImmediate(uint immediateBps)` payable / `(uint256 amount, uint immediateBps)` | anyone | Open, Pending | `immediateBps <= maxImmediateBps` |
+| `sendFunds()` payable / `sendFunds(uint256 amount)` | anyone | Open, Pending | 0% immediate |
+| `signContract()` | contractor | Pending, after cooling-off | Stakes half the arbitration fee (`totalLocked * arbitrationFeeBps / 10000`); releases immediate funds with fees |
+| `voteToReleasePayment()`, `voteToDispute()` | backers with locked funds | Ongoing | Weight = locked amount; quorum `backersVoteQuorumBps` of `totalLocked` |
+| `disputeAsContractor()`, `reimburse()` | contractor | Ongoing | |
+| `arbitrate(uint256 percent, string rulingHash)` | arbiter | Dispute | Opens the appeal window |
+| `appeal(uint256 proposalId, address[] targets)` | votes `>= projectThreshold` | Appealable, or Dispute after `appealPeriod` | Proposal must be live and `targets[0]` this project |
+| `daoOverrule(uint256 percent, string rulingHash)` | timelock | Appeal | |
+| `finalizeArbitration()` | anyone | Appealable/Appeal after window | |
+| `arbitrationPeriodExpired()` | anyone | Dispute after `ARBITRATION_TIMEOUT` | Closes with full refund |
+| `daoVeto()` | timelock | any but Closed | Full refund of locked funds (and immediate if unsigned) |
+| `withdrawAsContractor()` | contractor | Closed | Pays with fees |
+| `withdrawAsContributor()` | backer | Open, Pending, Closed | Full refund pre-signing; settlement once after close |
+| `reclaimArbitrationStake()` | contractor | Closed, fee not paid out | Emits `ArbitrationStakeReclaimed` |
+| `sweepOrphanedTokens(address)` | timelock | any | ERC20Project only; sends untracked balance to the Registry |
+| `spentBy(address) view`, `getProjectDetails() view` | anyone | | |
 
-```solidity
-IERC20 public token;  // The ERC20 token used for this project
-```
-
-#### Key Differences from NativeProject
-
-```solidity
-// Funding requires token approval first
-function sendFunds(uint256 amount) public  // Uses transferFrom
-
-// Contractor signs with token staking
-function signContract() public  // Requires token approval for arbitration fee
-```
+Fees on every reputation-accruing payout (`_payWithFees`): platform fee to the Registry first, then author fee (contractor payouts only), then the net to the payee; author and payee earnings are recorded in the Economy. Arbiter payouts pay the platform fee but no author fee. If the arbiter never ruled, the fee goes to the Registry.
 
 ---
 
-## Factory Contracts
+## Factories
 
-### StandardFactory
+### StandardFactory family (single transaction)
 
-**File:** `contracts/factories/StandardFactory.sol`
-
-Deploys standard DAOs with governance tokens.
-
-#### Deployment Function
+`StandardFactory` (non-transferable, Firestore `wrapper`), `StandardFactoryTransferable` (`wrapper_t`), `StandardFactoryNonTransferable`, `StandardFactoryWrapped` (`wrapper_w`).
 
 ```solidity
-struct DaoParams {
-    string name;
-    string symbol;
-    string description;
-    uint8 decimals;
-    uint256 executionDelay;
-    address[] initialMembers;
-    uint256[] initialAmounts;  // Token amounts + 4 governance params
-    string[] keys;
-    string[] values;
-}
-
 function deployDAOwithToken(DaoParams memory params) public payable
+function deployDAOwithToken(string name, string symbol, string description, uint8 decimals,
+    uint256 executionDelay, address[] initialMembers, uint256[] initialAmounts,
+    string[] keys, string[] values) public payable                      // legacy overload
+function deployDAOwithWrappedToken(DaoParamsWrapped memory params) public payable   // StandardFactoryWrapped
 ```
 
-#### Parameter Encoding
+- `initialAmounts` = member amounts followed by `[votingDelayMins, votingPeriodMins, proposalThreshold, quorumPercent]`.
+- `executionDelay` is the timelock min delay in **seconds**.
+- Finalization: `Registry.setJurisdictionAddress(token)`, token admin to timelock, Registry ownership to timelock, governor gets `PROPOSER_ROLE`, `EXECUTOR_ROLE` to `address(0)`, factory admin role revoked, then `batchEditRegistry` (allowed because the factory stays the Registry `wrapper`).
+- Event: `NewDaoCreated` (`DaoWrappedDeploymentInfo` for the wrapped factory).
 
-The `initialAmounts` array contains:
-1. Token amounts for each `initialMembers` address
-2. Four governance parameters (at the end):
-   - Voting delay (minutes)
-   - Voting period (minutes)
-   - Proposal threshold (tokens)
-   - Quorum fraction (0-100)
+### TrustlessFactory (three transactions)
 
-#### Legacy Function
+Each in-progress deployment is stored in `mapping(address => DeploymentData) private pendingDeployments` keyed by `msg.sender`. Steps 2 and 3 check that the caller started step 1 and that the addresses passed are the caller's own, so nobody else can finalize a half-deployed suite with their own governor.
 
 ```solidity
-function deployDAOwithToken(
-    string memory name,
-    string memory symbol,
-    string memory description,
-    uint8 decimals,
-    uint256 executionDelay,
-    address[] memory initialMembers,
-    uint256[] memory initialAmounts,
-    string[] memory keys,
-    string[] memory values
-) public payable
+function deployInfrastructure(uint48 timelockDelayInMinutes, uint arbitrationFeeBps) external
+function deployDAOToken(address registryAddr, address timelockAddr,
+                        TokenParams calldata, GovParams calldata) external
+function configureAndFinalize(AddressParams calldata, EconomyParams calldata,
+                              string[] calldata _registryKeys, string[] calldata _registryValues) external
 ```
+
+| Struct | Fields |
+|--------|--------|
+| `TokenParams` | `name, symbol, initialMembers[], initialAmounts[]` (token is always non-transferable) |
+| `GovParams` | `name, timelockDelay` (**the governor voting delay in minutes**, misnamed), `votingPeriod` (minutes), `proposalThreshold, quorumFraction` |
+| `AddressParams` | `implAddresses[2]` = [native, erc20]; `contractAddresses[5]` = [economy, registry, timelock, repToken, dao] |
+| `EconomyParams` | `arbitrationFeeBps` (ignored; the fee is set in step 1), `initialPlatformFeeBps` (must be `>= 100`), `initialAuthorFeeBps, initialCoolingOffPeriod, initialBackersQuorumBps, initialProjectThreshold, initialAppealPeriod` |
+
+Step 3 sets implementations and parameters, links RepToken and Registry, writes the registry keys, calls `setDaoAddresses` (freezing Economy admin), hands RepToken admin and Registry ownership to the timelock, wires timelock roles, then emits `SuiteConfigured` and `NewDaoCreated` and deletes the pending entry. `maxImmediateBps` is left at its default (2000).
+
+### Sub-factories
+
+| Factory | Function |
+|---------|----------|
+| `InfrastructureFactory` | `deployTimelock(address admin, uint256 executionDelay)`, `deployRegistry(address initialOwner, address wrapperAddress)` |
+| `DAOFactory` | `deployDAO(address token, address timelock, string name, uint[] daoSettings)`; emits `Deployed` |
+| `RepTokenFactory` | `deployRepToken(name, symbol, registry, timelock, members, amounts, transferrable)`; hands admin to the caller |
+| `EconomyFactory` | `deployEconomy(uint arbitrationFeeBps)`; `transferAdmin(msg.sender)` |
+| `WrappedRepTokenFactory` | `deployWrappedRepToken(IERC20 underlying, name, symbol, transferrable)` |
 
 ---
 
-### TrustlessFactory
+## WrappedRepToken
 
-**File:** `contracts/factories/TrustlessFactory.sol`
+`contracts/WrappedRepToken.sol`. `ERC20Wrapper + ERC20Votes` over an existing ERC20 (deposit/withdraw 1:1), optional non-transferability, `setAdmin` by admin. Decimals follow the underlying token.
 
-Deploys Economy DAOs with marketplace functionality.
+## Debates
 
-#### Step 1: Deploy Infrastructure
-
-```solidity
-function deployInfrastructure(uint timelockDelayInMinutes) external
-```
-
-Deploys: Economy, Timelock, Registry
-
-#### Step 2: Deploy DAO and Token
-
-```solidity
-struct TokenParams {
-    string name;
-    string symbol;
-    address[] initialMembers;
-    uint256[] initialAmounts;
-}
-
-struct GovParams {
-    string name;
-    uint48 timelockDelay;
-    uint32 votingPeriod;
-    uint256 proposalThreshold;
-    uint8 quorumFraction;
-}
-
-function deployDAOToken(
-    address registryAddr,
-    address timelockAddr,
-    TokenParams memory tokenParams,
-    GovParams memory govParams
-) external
-```
-
-#### Step 3: Configure and Finalize
-
-```solidity
-struct AddressParams {
-    address[2] implAddresses;      // [nativeProjectImpl, erc20ProjectImpl]
-    address[5] contractAddresses;  // [economy, registry, timelock, repToken, dao]
-}
-
-struct EconomyParams {
-    uint initialPlatformFeeBps;
-    uint initialAuthorFeeBps;
-    uint initialCoolingOffPeriod;
-    uint initialBackersQuorumBps;
-    uint initialProjectThreshold;
-    uint initialAppealPeriod;
-}
-
-function configureAndFinalize(
-    AddressParams memory addressParams,
-    EconomyParams memory economyParams
-) external
-```
+`contracts/debates/`. `DebatesFactory.createDebate(address token, string title, string rootArgument, uint256 rootWeight)` deploys a `Debate` argument tree. `Debate.addArgument(parentId, argType, weight, content)`, `addWeight(argumentId, weight)`, `closeDebate()` (creator only), plus views (`getFullDebate`, `getDebateSentiment`, `getRemainingVotingPower`). Each account's total weight is capped by its `getPastVotes` at the token clock just before creation.
 
 ---
 
 ## Events
 
-### Factory Events
-
 ```solidity
-// StandardFactory
-event NewDaoCreated(
-    address indexed dao,
-    address token,
-    address[] initialMembers,
-    uint256[] initialAmounts,
-    string name,
-    string symbol,
-    string description,
-    uint256 executionDelay,
-    address registry,
-    string[] keys,
-    string[] values
-);
+// Factories
+event NewDaoCreated(address indexed dao, address token, address[] initialMembers, uint256[] initialAmounts,
+    string name, string symbol, string description, uint256 executionDelay, address registry,
+    string[] keys, string[] values);
+event InfrastructureDeployed(address economy, address registry, address timelock);           // TrustlessFactory
+event DAOTokenDeployed(address repToken, address dao);                                         // TrustlessFactory
+event SuiteConfigured(address deployer, address indexed economy, address registry, address timelock,
+    address indexed repToken, address indexed dao);                                            // TrustlessFactory
 
-// TrustlessFactory
-event InfrastructureDeployed(address economy, address registry, address timelock);
-event DAOTokenDeployed(address repToken, address dao);
-event SuiteConfigured(
-    address deployer,
-    address indexed economy,
-    address registry,
-    address timelock,
-    address indexed repToken,
-    address indexed dao
-);
-```
+// Economy
+event NewProject(address indexed contractAddress, string projectName, address contractor, address arbiter,
+    string termsHash, string repo, string description, address token);   // token = address(0) for native
+event DaoAddressesSet(address timellock, address registry, address governor, address repToken);
+event AdminTransferred(address newAdmin);
+event PlatformFeeSet(uint); event AuthorFeeSet(uint); event ArbitrationFeeSet(uint);
+event CoolingOffPeriodSet(uint); event BackersVoteQuorumSet(uint); event ProjectThresholdSet(uint);
+event AppealPeriodSet(uint); event MaxImmediateBpsSet(uint); event InboundValue();
 
-### Economy Events
-
-```solidity
-event NewProject(
-    address indexed contractAddress,
-    string projectName,
-    address contractor,
-    address arbiter,
-    string termsHash,
-    string repo,
-    string description,
-    address tokenAddress  // address(0) for native
-);
-```
-
-### Project Events
-
-```solidity
+// Projects
 event SetParties(address _contractor, address _arbiter, string _termsHash);
-event SendFunds(address who, uint256 howMuch, uint immediateBps);
+event SendFunds(address who, uint256 howMuch, uint256 immediateBps);
 event ContractSigned(address contractor);
-event VotedToRelease(address who, uint votingPower);
-event VotedToDispute(address who, uint votingPower);
+event ImmediateFundsReleased(address contractor, uint256 amount);
+event BackerVoteCast(address indexed voter, uint256 votingPower, bool forDispute);
 event ProjectDisputed(address by);
 event ArbitrationDecision(address arbiter, uint256 percent, string rulingHash);
 event ArbitrationAppealed(address indexed appealer, uint256 indexed proposalId);
 event ArbitrationFinalized(address indexed finalizer);
 event DaoOverruled(address indexed timelock, uint256 percent, string rulingHash);
-event DaoVetoed(address indexed timelock);
+event VetoedByDao(address indexed timelock);
 event ContractorPaid(address contractor, uint256 amount);
+event AuthorPaid(address author, uint256 amount);
 event ContributorWithdrawn(address contributor, uint256 amount);
-event ArbitrationFeeReclaimed(address who, uint256 amount);
-event ProjectReimbursed(address contractor);
+event ArbitrationStakeReclaimed(address contractor, uint256 amount);
 event ProjectClosed(address by);
-```
+event OrphanedTokensSwept(address indexed token, uint256 amount);      // ERC20Project only
 
-### Governance Events
+// RepToken (plus ERC20Votes DelegateChanged / DelegateVotesChanged)
+event NewRewardEpoch(uint256 indexed epochId, uint256 budget, address indexed paymentToken, uint16 delegateShareBps);
+event RewardClaimed(address indexed account, uint256 indexed epochId, uint256 amount);
+event DelegateShareSet(uint16 delegateShareBps);
+event ReputationClaimedFromEconomy(address indexed user, uint256 amount);
+event DefaultDelegateUpdated(address indexed previous, address indexed current);
+event AutoDelegateExemptSet(address indexed account, bool exempt);
+event MinterSet(address indexed account, bool allowed);
+event AutoDelegated(address indexed account, address indexed delegatee);
 
-```solidity
-// Governor (OpenZeppelin)
-event ProposalCreated(
-    uint256 proposalId,
-    address proposer,
-    address[] targets,
-    uint256[] values,
-    string[] signatures,
-    bytes[] calldatas,
-    uint256 voteStart,
-    uint256 voteEnd,
-    string description
-);
-event VoteCast(
-    address indexed voter,
-    uint256 proposalId,
-    uint8 support,
-    uint256 weight,
-    string reason
-);
-event ProposalQueued(uint256 proposalId, uint256 eta);
-event ProposalExecuted(uint256 proposalId);
-event ProposalCanceled(uint256 proposalId);
+// Registry
+event RegistryUpdated(string key, string value);
+event ReceivedETH(address indexed from, uint256 amount);
+event ReceivedERC721(address indexed from, address indexed token, uint256 tokenId);
+event TransferredETH(address indexed to, uint256 amount);
+event TransferredERC20(address indexed token, address indexed to, uint256 amount);
+event TransferredERC721(address indexed token, address indexed to, uint256 tokenId);
+event JurisdictionAddressSet(address indexed jurisdiction);
+event FundsEarmarked(bytes32 indexed purpose, uint256 amount);
+event EarmarkedFundsWithdrawn(bytes32 indexed purpose, uint256 amount);
+event EarmarkedFundsDisbursed(address indexed recipient, bytes32 indexed purpose, uint256 amount);
+event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+event SpendCapSet(address indexed token, uint256 maxPerWindow);
+event WindowDurationSet(uint256 windowDuration);
+event SpendWindowReset(address indexed token, uint256 windowStart);
 
-// RepToken
-event PassiveIncomeEpochStarted(uint256 epochId, uint256 budget, address paymentToken);
-event PassiveIncomeClaimed(address indexed claimant, uint256 epochId, uint256 amount);
-event DelegateRewardEpochStarted(uint256 epochId, uint256 budget, address paymentToken);
-event DelegateRewardClaimed(address indexed claimant, uint256 epochId, uint256 amount);
-event ReputationClaimed(address indexed claimant, uint256 amount);
+// Governor (OpenZeppelin): ProposalCreated, VoteCast, VoteCastWithParams, ProposalQueued,
+// ProposalExecuted, ProposalCanceled
 ```
 
 ---
 
-## Deployed Addresses
+## Constants and defaults
 
-### Etherlink Shadownet (chainId 127823)
+| Constant | Value | Where |
+|----------|-------|-------|
+| `ARBITRATION_TIMEOUT` | `150 days` | projects |
+| `MIN_PLATFORM_FEE_BPS` | `100` (1%); ceiling 5000 in `setPlatformFee` | Economy |
+| `NATIVE_CURRENCY` / `NATIVE_TOKEN` | `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` | Economy / Registry |
+| `MAX_DELEGATE_SHARE_BPS` | `2500` | RepToken |
+| `PARITY_ONE` | `1e18` | RepToken, CoinOffering, AutonetVault |
 
-Deployed 2026-10-11. Live addresses are kept in Firestore `contracts/Etherlink-Shadownet`; the old Ghostnet testnet is retired.
+Economy constructor defaults (TrustlessFactory overrides all but `maxImmediateBps` and the arbitration fee, which comes from step 1):
 
-| Contract | Address |
-|----------|---------|
-| StandardFactory (wrapper) | `0x18A6cFc4E2e99C7f164Fc0857Bc2985D8CF629a2` |
-| StandardFactoryTransferable (wrapper_t) | `0xfA5Df76fEF1c434dfAb764F837C6b2cf42A6685D` |
-| StandardFactoryWrapped (wrapper_w) | `0x7BCFa3C390C9f004b0e43019094f4f6208e97c2D` |
-| TrustlessFactory (wrapper_trustless) | `0xE748fD0cE8aCFE3c187C6e16ABB6Ba6341Dd380F` |
-| NativeProject impl | `0x422E09547f732f7aE1177Be0C42B6d3903fc9f3A` |
-| ERC20Project impl | `0xc873836843DA3C03D8A4aD08e99C3009b88fD179` |
-| InfrastructureFactory | `0xBb334a55096cDf2B7C46406c119eB989CCA4fbEb` |
-| DAOFactory | `0x432583bdEc29722d0593b1F3E198B793A5b9423F` |
-| RepTokenFactory | `0xDa57341ee91Fc987E4F56c560bf71dfAC705eF73` |
-| EconomyFactory | `0x36d6364E7191C31272a2D456D02178f58a457373` |
-| WrappedRepTokenFactory | `0x61597CeDA571c910430b4Bad89F8f5939C91201E` |
-
-### Network Configuration
-
-| Network | Chain ID | RPC URL |
-|---------|----------|---------|
-| Etherlink Testnet | 128123 | `https://node.ghostnet.etherlink.com` |
-| Etherlink Mainnet | 42793 | `https://node.mainnet.etherlink.com` |
-| Localhost (Hardhat) | 31337 | `http://127.0.0.1:8545` |
-
----
-
-## Constants
-
-### Project Contract Constants
-
-```solidity
-uint constant ARBITRATION_TIMEOUT = 150 days;  // Time for arbiter to rule
-uint constant BPS_DENOMINATOR = 10000;          // Basis points denominator
-```
-
-### Default Parameter Values
-
-| Parameter | Default Value | Unit |
-|-----------|---------------|------|
-| `arbitrationFeeBps` | 1000 | bps (10%) |
-| `platformFeeBps` | 100 | bps (1%) |
-| `authorFeeBps` | 100 | bps (1%) |
-| `coolingOffPeriod` | 120 | seconds |
-| `backersVoteQuorumBps` | 7000 | bps (70%) |
-| `projectThreshold` | 0 | tokens |
-| `appealPeriod` | 604800 | seconds (7 days) |
-| `maxImmediateBps` | 2000 | bps (20%) |
-
----
-
-## Further Reading
-
-- [Architecture](architecture.md) - System design and contract relationships
-- [DAO Governance](dao-governance.md) - Voting and treasury management
-- [Trustless Economy](economy.md) - Project lifecycle and dispute resolution
-- [OpenZeppelin Governor](https://docs.openzeppelin.com/contracts/5.x/governance) - Base framework documentation
-- [OpenZeppelin ERC20Votes](https://docs.openzeppelin.com/contracts/5.x/api/token/erc20#ERC20Votes) - Voting token documentation
+| Parameter | Default |
+|-----------|---------|
+| `arbitrationFeeBps` | constructor arg |
+| `platformFeeBps` | 100 (1%) |
+| `authorFeeBps` | 100 (1%) |
+| `coolingOffPeriod` | 120 s (floored by `effectiveCoolingOffPeriod`) |
+| `backersVoteQuorumBps` | 7000 (70%) |
+| `projectThreshold` | 0 |
+| `appealPeriod` | 7 days |
+| `maxImmediateBps` | 2000 (20%) |
+| RepToken `delegateShareBps` | 100 (1%) |
+| Registry `windowDuration` | 7 days; caps default to 0 (unmetered) |

@@ -1,425 +1,213 @@
 # Architecture
 
-This document describes the high-level system design of On-Chain Jurisdiction, including contract relationships, deployment patterns, and data flow.
+How the contracts fit together, how a jurisdiction is deployed, and how off-chain components (indexer, Firestore, the two web apps) consume it. Governance mechanics are in [governance.md](governance.md); the marketplace is in [economy.md](economy.md); API detail is in [technical-reference.md](technical-reference.md); live addresses are in [deployments.md](deployments.md).
 
-## System Overview
+## System overview
 
-On-Chain Jurisdiction consists of two integrated systems:
+A **jurisdiction** is a set of contracts sharing one Timelock as its on-chain identity:
 
-1. **DAO Governance** - Token-based voting and treasury management
-2. **Trustless Economy** - Escrow-based marketplace with dispute resolution
+- **Governance**: Governor, Timelock, Registry (treasury + config), RepToken (voting power).
+- **Economy** (economy DAOs only): an `Economy` contract that clones escrow projects and feeds earned and spent amounts back into reputation.
+- **Satellites** (optional): contracts that plug into the RepToken, Registry and Timelock, mainly for Autonet. See [autonet.md](autonet.md).
 
-Both systems share a common governance token (RepToken), creating a feedback loop where economic activity generates governance power.
-
-## Contract Hierarchy
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              FACTORY LAYER                                   │
-│                                                                              │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐   │
-│  │ StandardFactory  │  │ TrustlessFactory │  │ StandardFactoryWrapped   │   │
-│  │ (DAO only)       │  │ (DAO + Economy)  │  │ (Wrapped token DAO)      │   │
-│  └────────┬─────────┘  └────────┬─────────┘  └────────────┬─────────────┘   │
-│           │                     │                          │                 │
-│           └─────────────────────┴──────────────────────────┘                 │
-│                                 │                                            │
-│                    ┌────────────┴────────────┐                               │
-│                    │      SUB-FACTORIES      │                               │
-│                    │                         │                               │
-│                    │  • InfrastructureFactory│                               │
-│                    │  • DAOFactory           │                               │
-│                    │  • RepTokenFactory      │                               │
-│                    │  • EconomyFactory       │                               │
-│                    │  • WrappedRepTokenFactory                               │
-│                    └────────────┬────────────┘                               │
-└─────────────────────────────────┼────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           GOVERNANCE LAYER                                   │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                         HomebaseDAO                                  │    │
-│  │                      (Governor Contract)                             │    │
-│  │                                                                      │    │
-│  │  Inherits from OpenZeppelin:                                         │    │
-│  │  • Governor                    • GovernorVotes                       │    │
-│  │  • GovernorSettings            • GovernorVotesQuorumFraction         │    │
-│  │  • GovernorCountingSimple      • GovernorTimelockControl             │    │
-│  └──────────────────────────────────┬──────────────────────────────────┘    │
-│                                     │                                        │
-│               ┌─────────────────────┼─────────────────────┐                  │
-│               │                     │                     │                  │
-│               ▼                     ▼                     ▼                  │
-│  ┌────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐   │
-│  │ TimelockController │  │      RepToken       │  │      Registry       │   │
-│  │                    │  │  (Governance Token) │  │     (Treasury)      │   │
-│  │ • Execution delay  │  │                     │  │                     │   │
-│  │ • Role management  │  │ • ERC20Votes        │  │ • ETH/ERC20/ERC721  │   │
-│  │ • Security buffer  │  │ • Reputation claim  │  │ • Config store      │   │
-│  └────────────────────┘  │ • Incentive epochs  │  │ • Earmarking        │   │
-│                          └──────────┬──────────┘  └─────────────────────┘   │
-│                                     │                                        │
-└─────────────────────────────────────┼────────────────────────────────────────┘
-                                      │
-                                      │ (Economy DAOs only)
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            ECONOMY LAYER                                     │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                           Economy                                    │    │
-│  │                    (Marketplace Contract)                            │    │
-│  │                                                                      │    │
-│  │  • Project deployment via clone pattern                              │    │
-│  │  • User profile tracking (earnings, spendings, roles)                │    │
-│  │  • DAO-controlled parameters (fees, periods, thresholds)             │    │
-│  └──────────────────────────────────┬──────────────────────────────────┘    │
-│                                     │                                        │
-│                    ┌────────────────┴────────────────┐                       │
-│                    │                                 │                       │
-│                    ▼                                 ▼                       │
-│       ┌────────────────────────┐       ┌────────────────────────┐           │
-│       │     NativeProject      │       │     ERC20Project       │           │
-│       │   (ETH/XTZ Escrow)     │       │   (Token Escrow)       │           │
-│       │                        │       │                        │           │
-│       │ • Multi-stage lifecycle│       │ • Same lifecycle       │           │
-│       │ • Backer voting        │       │ • ERC20 handling       │           │
-│       │ • Arbitration          │       │ • Token sweeping       │           │
-│       │ • DAO appeals          │       │                        │           │
-│       └────────────────────────┘       └────────────────────────┘           │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Contract Relationships
-
-### Ownership and Control
+## Contract graph
 
 ```
-                    ┌─────────────────┐
-                    │  TimelockController  │
-                    │  (Ultimate Authority)│
-                    └──────────┬──────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          │                    │                    │
-          ▼                    ▼                    ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│    Registry     │  │    RepToken     │  │    Economy      │
-│    (owner)      │  │    (admin)      │  │  (protected)    │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-                                                   │
-                                          ┌────────┴────────┐
-                                          ▼                 ▼
-                                   ┌────────────┐    ┌────────────┐
-                                   │NativeProject│   │ERC20Project│
-                                   │(daoTimelock)│   │(daoTimelock)│
-                                   └────────────┘    └────────────┘
+                         +-----------------------+
+                         |  HomebaseDAO          |  OZ Governor (votes from RepToken)
+                         |  (Governor)           |
+                         +-----------+-----------+
+                                     | sole PROPOSER
+                                     v
++-----------------+  admin   +-------+---------------+  owner   +-------------------+
+|  RepToken       |<---------+  TimelockController   +--------->|  Registry         |
+|  ERC20Votes,    |          |  executes everything; |          |  treasury, config,|
+|  reward epochs, |          |  anyone may execute   |          |  earmarks, cap    |
+|  minters        |          +---+-------------+-----+          +---------+---------+
++--+-----+----+---+              |             |                          ^
+   |     |    |   jurisdiction   |             | onlyGovernance           | fees, sweeps,
+   |     |    +------------------|-------------|--------------------------+ earmarks /
+   |     |      earmark/disburse |             v                            disbursements
+   |     |                       |   +---------+-----------+
+   |     | getUser() (rep pull)  |   |  Economy            |
+   |     +---------------------->|   |  clones projects,   |
+   |                             |   |  user profiles      |
+   |                             |   +----+-----------+----+
+   |                             |        | Clones    | Clones
+   |                             |        v           v
+   |                             |   NativeProject  ERC20Project   (one clone per project)
+   |                             +-->  daoVeto / daoOverrule gated to the Timelock
+   |
+   |  minters / readers
+   v
+Satellites: CoinOffering, AutonetRepClaim, AutonetVault, EvolutionProposal,
+            CapabilityScorecard, ReputationMirror (retired)
 ```
 
-- **TimelockController** owns/controls all other contracts
-- **HomebaseDAO** is the only proposer to the Timelock
-- **Anyone** can execute queued proposals (executor role granted to address(0))
-- **Projects** reference the Timelock for DAO veto and appeal overrides
+### Who controls what
 
-### Data Flow
+| Contract | Control after deployment |
+|---|---|
+| Governor | Self-governed: settings changes are proposals executed via the Timelock |
+| Timelock | Governor is the only proposer; `EXECUTOR_ROLE` is `address(0)`; its own admin; nobody can cancel queued operations |
+| Registry | `owner` = Timelock (treasury ops, earmark release). `jurisdictionAddress` = RepToken (earmark, disburse). `wrapper` = factory (Standard) or none (Trustless) for registry edits |
+| RepToken | `admin` = Timelock (mint, burn, setters); immutable `timelockAddress` gates reward epochs; `minters` mint |
+| Economy | `onlyGovernance`: `admin` until DAO addresses are set, then the Timelock forever |
+| Projects | Parties act directly; the Timelock can `daoVeto` and `daoOverrule` (in `Appeal`) |
 
-```
-┌──────────────┐     sendFunds()      ┌──────────────┐
-│    Backer    │─────────────────────►│   Project    │
-└──────────────┘                      │   Contract   │
-                                      └──────┬───────┘
-                                             │
-                  ┌──────────────────────────┼──────────────────────────┐
-                  │                          │                          │
-                  ▼                          ▼                          ▼
-       updateEarnings()           updateSpendings()          Platform fees
-                  │                          │                          │
-                  ▼                          ▼                          ▼
-         ┌────────────────────────────────────────────────────┐   ┌──────────┐
-         │                     Economy                         │   │ Registry │
-         │                                                     │   │(Treasury)│
-         │  earnings[user][token] += amount                    │   └──────────┘
-         │  spendings[user][token] += amount                   │
-         └─────────────────────────┬───────────────────────────┘
-                                   │
-                                   │ claimReputationFromEconomy()
-                                   ▼
-                          ┌────────────────┐
-                          │    RepToken    │
-                          │                │
-                          │  _mint(user,   │
-                          │   reputation)  │
-                          └────────┬───────┘
-                                   │
-                                   │ delegate()
-                                   ▼
-                          ┌────────────────┐
-                          │  HomebaseDAO   │
-                          │                │
-                          │  Voting power  │
-                          │  active        │
-                          └────────────────┘
-```
+### Economy and project clones
 
-## Deployment Patterns
+`Economy` holds `nativeProjectImplementation` and `erc20ProjectImplementation`. `createProject` / `createERC20Project` require the caller to hold at least `projectThreshold` REP, then `Clones.clone` the implementation (EIP-1167), initialize it with the Timelock and Governor addresses, and mark it in `isProjectContract`. Only marked projects can call `updateEarnings`, `updateSpendings`, `registerBacker` and `registerProjectRoles`, which build the per-user profile that `RepToken.claimReputationFromEconomy` reads. Platform fees go straight to the Registry.
 
-### Standard DAO Deployment
+`setImplementations` is governance-gated and affects only future projects. Existing clones keep their implementation.
 
-The StandardFactory deploys a complete DAO in a single transaction:
+**Admin hand-off.** The `Economy` constructor sets `admin = msg.sender`. `EconomyFactory` immediately calls `transferAdmin(caller)`, so the top-level factory is admin. While `timelockAddress == 0`, `onlyGovernance` means `admin`; `setDaoAddresses` (admin only, once) sets the Timelock, after which `onlyGovernance` means the Timelock and `transferAdmin` is disabled.
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                      StandardFactory.deployDAOwithToken()               │
-└────────────────────────────────────────────────────────────────────────┘
-                                    │
-        ┌───────────────────────────┼───────────────────────────┐
-        │                           │                           │
-        ▼                           ▼                           ▼
-┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐
-│InfrastructureFactory│  │  RepTokenFactory  │   │    DAOFactory     │
-│                     │  │                   │    │                   │
-│ deployTimelock()    │  │ deployRepToken()  │   │   deployDAO()     │
-│ deployRegistry()    │  │                   │    │                   │
-└───────────┬─────────┘  └────────┬──────────┘    └────────┬──────────┘
-            │                     │                        │
-            ▼                     ▼                        ▼
-     TimelockController      RepToken                 HomebaseDAO
-     Registry
-                                    │
-                                    ▼
-                    ┌───────────────────────────────────┐
-                    │    _finalizeDeployment()          │
-                    │                                   │
-                    │ 1. Set Registry.jurisdictionAddr  │
-                    │ 2. Transfer RepToken.admin        │
-                    │ 3. Transfer Registry.owner        │
-                    │ 4. Grant Timelock roles           │
-                    │ 5. Revoke factory admin           │
-                    └───────────────────────────────────┘
-```
+**Cooling-off floor.** `effectiveCoolingOffPeriod()` is `max(coolingOffPeriod, votingDelay + votingPeriod + timelock minDelay)`, read live from the Governor and Timelock, so the jurisdiction always has time to pass a veto before a contractor can sign.
 
-### Economy DAO Deployment
+### Satellites
 
-The TrustlessFactory uses a 3-step deployment for flexibility:
+All live in this repo and are deployed by scripts, not factories. Each needs a governance action to be wired in (minter grant, auto-delegate exemption, payment-token whitelist in the Registry).
+
+| Contract | Relationship to the jurisdiction |
+|---|---|
+| `CoinOffering` | Sells a transferable RepToken for payment tokens priced by a Registry parity; payment goes straight to the Registry; mints to buyers as a RepToken minter |
+| `AutonetVault` | Same shape, but mints ATN on the external Autonet `Substrate` contract; payment to the Registry |
+| `AutonetRepClaim` | RepToken minter: mints REP against a user's ratified ATN earnings on `Substrate` |
+| `EvolutionProposal` | ATN-staked improvement proposals; reads Registry config, Timelock-gated settings |
+| `CapabilityScorecard` | Standalone module scores and reward multipliers; own admin and evaluators |
+| `ReputationMirror` | Retired in favour of `AutonetRepClaim`; kept for history |
+
+`Substrate` and the ATN token live in the separate Autonet repo. Details in [autonet.md](autonet.md).
+
+### Debates
+
+`DebatesFactory` is one network-wide contract, not part of any suite. It deploys `Debate` instances against any `IVotes` token and has no authority over the jurisdiction. See [governance.md](governance.md#debates).
+
+## Deployment
+
+### Sub-factories
+
+Top-level factories delegate bytecode to small sub-factories so no single contract exceeds the size limit:
+
+| Sub-factory | Deploys | Notes |
+|---|---|---|
+| `InfrastructureFactory` | `TimelockController(delay, [], [], admin)`, `Registry(owner, wrapper)` | Caller passes itself as temporary admin/owner |
+| `DAOFactory` | `HomebaseDAO` from `daoSettings[4]` = `[votingDelayMin, votingPeriodMin, threshold, quorum]` | |
+| `RepTokenFactory` | `RepToken`, then `setAdmin(caller)` | |
+| `WrappedRepTokenFactory` | `WrappedRepToken`, then `setAdmin(caller)` | |
+| `EconomyFactory` | `Economy(arbitrationFeeBps)`, then `transferAdmin(caller)` | |
+
+Sub-factories are permissionless; anyone can call them. The security of a suite comes from the top-level factory holding every admin role until it finalizes.
+
+### Top-level factories
+
+| Factory | Firestore key | Token | Transactions | Event |
+|---|---|---|---|---|
+| `StandardFactory` | `wrapper` | RepToken, non-transferable | 1 | `NewDaoCreated` |
+| `StandardFactoryNonTransferable` | | RepToken, non-transferable | 1 | `NewDaoCreated` |
+| `StandardFactoryTransferable` | `wrapper_t` | RepToken, transferable | 1 | `NewDaoCreated` |
+| `StandardFactoryWrapped` | `wrapper_w` | WrappedRepToken over an existing ERC20 | 1 | `DaoWrappedDeploymentInfo` |
+| `TrustlessFactory` | `wrapper_trustless` | RepToken, non-transferable, plus Economy | 3 | `SuiteConfigured`, `NewDaoCreated` |
+
+### Single-transaction (Standard factories)
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    STEP 1: deployInfrastructure()                        │
-│                                                                          │
-│    ┌────────────────┐   ┌────────────────┐   ┌────────────────┐         │
-│    │ EconomyFactory │   │InfrastructureF.│   │InfrastructureF.│         │
-│    │ deployEconomy()│   │ deployTimelock │   │ deployRegistry │         │
-│    └───────┬────────┘   └───────┬────────┘   └───────┬────────┘         │
-│            ▼                    ▼                    ▼                   │
-│         Economy           Timelock              Registry                 │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    STEP 2: deployDAOToken()                              │
-│                                                                          │
-│    ┌─────────────────┐                    ┌─────────────────┐            │
-│    │RepTokenFactory  │                    │   DAOFactory    │            │
-│    │deployRepToken() │                    │   deployDAO()   │            │
-│    └────────┬────────┘                    └────────┬────────┘            │
-│             ▼                                      ▼                     │
-│          RepToken                             HomebaseDAO                │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    STEP 3: configureAndFinalize()                        │
-│                                                                          │
-│    1. Set Economy implementations (NativeProject, ERC20Project)          │
-│    2. Configure Economy parameters (fees, periods, thresholds)           │
-│    3. Link RepToken ↔ Economy                                            │
-│    4. Set Registry.jurisdictionAddress                                   │
-│    5. Set Economy.daoAddresses                                           │
-│    6. Transfer RepToken.admin to Timelock                                │
-│    7. Transfer Registry.owner to Timelock                                │
-│    8. Configure Timelock roles (DAO as proposer, anyone as executor)     │
-│    9. Revoke factory's admin role                                        │
-└─────────────────────────────────────────────────────────────────────────┘
+deployDAOwithToken(params)
+  1. InfrastructureFactory.deployTimelock(this, executionDelay)
+  2. InfrastructureFactory.deployRegistry(owner = this, wrapper = this)
+  3. RepTokenFactory.deployRepToken(..., registry, timelockAddress = this, ...)
+  4. DAOFactory.deployDAO(token, timelock, name, settings)
+  5. finalize:
+       registry.setJurisdictionAddress(token)          (not in the Wrapped variant)
+       token.setAdmin(timelock)
+       registry.transferOwnership(timelock)
+       timelock: grant PROPOSER to DAO, EXECUTOR to address(0), revoke own admin
+       registry.batchEditRegistry(keys, values)        (via wrapper = this)
+  6. emit NewDaoCreated / DaoWrappedDeploymentInfo
 ```
 
-## Clone Pattern for Projects
+Step 3 passes the factory, not the Timelock, as the RepToken's immutable `timelockAddress`, which permanently disables reward epochs on Standard DAOs. See [governance.md](governance.md#known-caveats).
 
-The Economy contract uses OpenZeppelin's [Clones](https://docs.openzeppelin.com/contracts/5.x/api/proxy#Clones) library for gas-efficient project deployment:
+### Multi-step (TrustlessFactory)
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                           Economy Contract                              │
-│                                                                         │
-│  nativeProjectImplementation ─────► NativeProject (reference)           │
-│  erc20ProjectImplementation ──────► ERC20Project (reference)            │
-│                                                                         │
-│  createProject():                                                       │
-│    clone = Clones.clone(nativeProjectImplementation)                    │
-│    NativeProject(clone).initialize(...)                                 │
-│                                                                         │
-│  createERC20Project():                                                  │
-│    clone = Clones.clone(erc20ProjectImplementation)                     │
-│    ERC20Project(clone).initialize(...)                                  │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-Benefits:
-- **Gas efficient**: ~$0.10 per deployment vs ~$2+ for full contract
-- **Upgradeable implementations**: New projects use latest logic
-- **Consistent interface**: All projects share the same API
-
-## Security Model
-
-### Access Control Matrix
-
-| Action | Who Can Do It | Mechanism |
-|--------|---------------|-----------|
-| Create proposal | RepToken holders (>= threshold) | Governor.proposalThreshold |
-| Vote on proposal | Delegated RepToken holders | Governor.castVote |
-| Queue proposal | Anyone (if passed) | Governor.queue |
-| Execute proposal | Anyone (after delay) | Timelock.executorRole |
-| Transfer treasury | Timelock only | Registry._treasuryOps |
-| Edit registry | Timelock or wrapper | Registry._regedit |
-| Mint/burn RepToken | Timelock (via admin) | RepToken.admin |
-| Create project | RepToken holders (>= threshold) | Economy.projectThreshold |
-| Override arbitration | Timelock only | Project.daoOverrule |
-| Veto project | Timelock only | Project.daoVeto |
-
-### Timelock as Security Buffer
+An economy suite is too large for one transaction, so it is built over three calls by the same deployer. Each in-progress build is stored in `pendingDeployments[msg.sender]`, and every later step checks the caller's own record:
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                       PROPOSAL EXECUTION FLOW                         │
-│                                                                       │
-│  Proposal    ───►    Voting     ───►    Queue     ───►    Execute    │
-│  Created           Period             in Timelock        After Delay │
-│     │                 │                    │                  │       │
-│     │                 │                    │                  │       │
-│     ▼                 ▼                    ▼                  ▼       │
-│  Block N          Block N+X           Block N+X+Y        Block N+X+Y+Z│
-│                                                                       │
-│  [─────────────────────── Security Window ───────────────────────]    │
-│                                                                       │
-│  During this window, users can:                                       │
-│  • Review the proposal contents                                       │
-│  • Exit the system (sell tokens, withdraw from projects)              │
-│  • Coordinate response to malicious proposals                         │
-└──────────────────────────────────────────────────────────────────────┘
+tx 1  deployInfrastructure(timelockDelayMinutes, arbitrationFeeBps)
+        Economy, Timelock (admin = factory), Registry (owner = factory, no wrapper)
+        pendingDeployments[sender] = {economy, registry, timelock, delay}   (any older pending entry is discarded)
+        emit InfrastructureDeployed
+
+tx 2  deployDAOToken(registry, timelock, TokenParams, GovParams)
+        require registry/timelock == sender's pending infrastructure, token not yet deployed
+        RepToken (non-transferable, timelockAddress = real Timelock), HomebaseDAO
+        store token, dao, params
+        emit DAOTokenDeployed
+
+tx 3  configureAndFinalize(AddressParams, EconomyParams, keys, values)
+        require all five addresses == sender's pending record
+        economy: setImplementations, fees, cooling-off, backers quorum, threshold, appeal period
+        repToken.setEconomyAddress(economy); registry.setJurisdictionAddress(repToken)
+        registry.batchEditRegistry(keys, values)
+        economy.setDaoAddresses(timelock, registry, dao, repToken)   (Economy now Timelock-governed)
+        repToken.setAdmin(timelock); registry.transferOwnership(timelock)
+        timelock: PROPOSER to DAO, EXECUTOR to address(0), revoke factory admin
+        emit SuiteConfigured, NewDaoCreated; delete pendingDeployments[sender]
 ```
 
-### Snapshot-Based Voting
+Binding the build to its deployer fixes a hijack in the earlier design, where shared pending state let anyone call step 2 or 3 against someone else's half-built suite and install their own governor. `test/security.test.js` covers both attempts and an outsider configuring a half-deployed economy.
 
-Voting power is determined at proposal creation time, preventing:
+Note: `GovParams.timelockDelay` is passed to the Governor as the **voting delay** in minutes. The real Timelock delay is the `deployInfrastructure` argument.
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        FLASH LOAN ATTACK (PREVENTED)                  │
-│                                                                       │
-│  ❌ Attacker cannot:                                                  │
-│     1. Borrow tokens via flash loan                                   │
-│     2. Create/vote on proposal                                        │
-│     3. Return tokens                                                  │
-│                                                                       │
-│  ✓ Because voting power snapshot taken at proposal creation           │
-│  ✓ Attacker would need tokens BEFORE proposal exists                  │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-## State Management
-
-### RepToken Balance Tracking
-
-RepToken maintains historical balances for snapshot queries:
-
-```solidity
-mapping(address => Checkpoints.Trace208) private _balanceHistory;
-
-// On every transfer/mint/burn:
-function _update(address from, address to, uint256 value) internal {
-    super._update(from, to, value);
-    uint48 timestamp = clock();
-    if (from != address(0)) {
-        _balanceHistory[from].push(timestamp, uint208(balanceOf(from)));
-    }
-    if (to != address(0)) {
-        _balanceHistory[to].push(timestamp, uint208(balanceOf(to)));
-    }
-}
-```
-
-### Economy User Profiles
-
-The Economy contract tracks comprehensive user activity:
-
-```solidity
-// Per-user, per-token tracking
-mapping(address => mapping(address => uint)) public earnings;
-mapping(address => mapping(address => uint)) public spendings;
-
-// Role-based project lists
-mapping(address => address[]) public projectsAsAuthor;
-mapping(address => address[]) public projectsAsContractor;
-mapping(address => address[]) public projectsAsArbiter;
-```
-
-## Event-Driven Architecture
-
-All significant state changes emit events for off-chain indexing:
+## Off-chain: indexer, Firestore, apps
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         INDEXED EVENTS                                │
-│                                                                       │
-│  Factory Layer:                                                       │
-│  • NewDaoCreated(dao, token, members, amounts, name, ...)             │
-│                                                                       │
-│  Governance Layer:                                                    │
-│  • ProposalCreated(proposalId, proposer, targets, ...)                │
-│  • VoteCast(voter, proposalId, support, weight, reason)               │
-│  • ProposalQueued(proposalId, eta)                                    │
-│  • ProposalExecuted(proposalId)                                       │
-│                                                                       │
-│  Economy Layer:                                                       │
-│  • NewProject(contractAddress, projectName, contractor, arbiter, ...) │
-│  • SendFunds(who, howMuch, immediateBps)                              │
-│  • ContractSigned(contractor)                                         │
-│  • ProjectDisputed(by)                                                │
-│  • ArbitrationDecision(arbiter, percent, rulingHash)                  │
-│  • ArbitrationAppealed(appealer, proposalId)                          │
-│  • DaoOverruled(timelock, percent, rulingHash)                        │
-│  • ProjectClosed(by)                                                  │
-└──────────────────────────────────────────────────────────────────────┘
+     Etherlink (Shadownet today)
+   factories  Governors  RepTokens  Registries  Economies  Projects
+        \         |          |          |           |         /
+         +--------+----------+----------+-----------+--------+
+                                 | events (RPC polling)
+                                 v
+                  +----------------------------------+
+                  |  Python indexer (EC2,            |
+                  |  one service per network)        |
+                  |  apps: homebase, trustless, ...  |
+                  +---------+--------------+---------+
+                            |              |
+             Firestore homebase-6907d    Firestore trustless-58262
+             contracts/<network>         contracts/<network>
+             idaos<network>/<dao>/...    <network>/<economy>/projects/<project>
+                            |              |
+                            v              v
+                       werule.io      trustless.business
+                       (DAOs, votes,  (economies, projects,
+                        treasury)      disputes)
+                            \              /
+                             +-- wallets --+--> transactions go straight to the contracts
 ```
 
-## Gas Optimization Strategies
+- **Indexer** (`../indexer`, deployed on EC2 as `indexer@<network>`). The `homebase` app watches the four factory addresses from `contracts/<network>` (`wrapper`, `wrapper_t`, `wrapper_w`, `wrapper_trustless`) for `NewDaoCreated`, `DaoWrappedDeploymentInfo` and `SuiteConfigured`, then follows each new Governor, token and Registry (proposals, votes, delegation, transfers, `RegistryUpdated`). On `SuiteConfigured` it also writes the economy document into the trustless project. The `trustless` app then follows each Economy (`NewProject`) and every project clone (funding, signing, disputes, arbitration, appeals, payouts). It checkpoints `lastSyncedBlock` in `contracts/<network>`. Other apps (`afterme`, `autonet`) are out of scope here.
+- **Firestore**. Two Firebase projects, one per web app. `contracts/<network>` is the per-network config both the indexer and the apps read (RPC, factory and implementation addresses). Shadownet uses `contracts/Etherlink-Shadownet`, `idaosEtherlink-Shadownet` and `Etherlink-Shadownet/<economy>/projects`. Schema: [firestore-schema.md](firestore-schema.md).
+- **Apps**. werule.io is the DAO app (create DAOs, propose, vote, delegate, treasury). trustless.business is the economy app (create economies, projects, fund, sign, dispute, appeal). Both read indexed state from Firestore and send transactions from the user's wallet directly to the contracts.
 
-1. **Clone pattern** for project deployment (~$0.10 vs ~$2+)
-2. **Batch operations** in factories (single transaction deployment)
-3. **Checkpoint compression** using uint208 for balances
-4. **Minimal storage** in project contracts (derived values computed on read)
-5. **Event-based history** instead of on-chain arrays where possible
+## Where state lives
 
-## Upgrade Considerations
+| State | Location | Source of truth |
+|---|---|---|
+| Votes, delegation, balances, delegatee history | RepToken / WrappedRepToken checkpoints | Chain |
+| Proposals and vote tallies | Governor | Chain |
+| Queued operations | Timelock | Chain |
+| Treasury balances, earmarks, spend-cap windows | Registry | Chain |
+| Jurisdiction config (parities, grace period, descriptions) | Registry key/value store | Chain ([registry-settings.md](registry-settings.md)) |
+| Reward epochs and claims | RepToken | Chain (not indexed) |
+| Economy parameters, user earnings/spendings, project list | Economy | Chain |
+| Escrow balances, stage, parties, votes | Each project clone | Chain |
+| Factory and implementation addresses per network | Firestore `contracts/<network>` (both projects) | Firestore, mirrored in [deployments.md](deployments.md) |
+| DAO, proposal, member and project views | Firestore collections | Derived by the indexer; rebuildable from chain |
 
-The system is designed with limited upgradeability:
+Nothing in Firestore is authoritative for chain state: wiping a collection and replaying the indexer from the factory deployment block rebuilds it.
 
-| Component | Upgradeable? | Mechanism |
-|-----------|--------------|-----------|
-| Factory contracts | No | Deploy new factory, keep old DAOs |
-| HomebaseDAO | No | Deploy new DAO via governance proposal |
-| RepToken | No | Migrate via governance (snapshot + new token) |
-| Registry | No | Contents modifiable via governance |
-| Economy | No | New economy via governance proposal |
-| Project implementations | Yes | Economy.setImplementations() |
+## Upgradeability
 
-Project implementations can be upgraded by the DAO, affecting only **new** projects. Existing projects continue using their original implementation.
-
-## Further Reading
-
-- [DAO Governance](dao-governance.md) - Detailed governance mechanics
-- [Trustless Economy](economy.md) - Project lifecycle and dispute resolution
-- [Technical Reference](technical-reference.md) - Contract API documentation
-- [OpenZeppelin Governor](https://docs.openzeppelin.com/contracts/5.x/governance) - Base framework documentation
+Nothing is upgradeable in place. Factories are replaced by deploying new ones and updating `contracts/<network>`; existing DAOs are untouched. The Economy's project implementations can be swapped by governance (`setImplementations`), affecting only new projects. Registry contents and Governor settings change through proposals.

@@ -1,309 +1,86 @@
-# Immediate Release Feature
+# Immediate Release
 
-## Implementation Status: COMPLETE
+Backers can mark part of each contribution as **immediate**: it is paid to the contractor when the contract is signed, as operating capital. The rest is **locked** in escrow until the project closes. Backers price their trust in the contractor through the split.
 
-### Final Design Decisions
+Implemented in `contracts/NativeProject.sol` and `contracts/ERC20Project.sol`; the cap lives on `contracts/Economy.sol`. For the full project lifecycle see [economy.md](economy.md); for the parameter see [registry-settings.md](registry-settings.md).
 
-| Decision | Value | Rationale |
-|----------|-------|-----------|
-| **Max Immediate %** | 20% (2000 bps) | Limits risk while enabling operating capital |
-| **Fee Application** | Escrow release only | Immediate portion is fee-free; fees only on escrowed funds that flow to contractor |
-| **Voting Power** | Locked portion only | More trust given = less control needed |
-| **Arbitration Fee Basis** | Total project value | Reflects total value at stake regardless of split |
-| **DAO Control** | `maxImmediateBps` adjustable | DAO can tune cap via governance |
+## Rules
 
-### Key Implications
+| Rule | Behaviour |
+|------|-----------|
+| Cap | Each contribution's `immediateBps <= economy.maxImmediateBps()`. Default 2000 (20%), DAO-settable up to 5000 (50%) via `setMaxImmediateBps` |
+| Fees | The immediate payout goes through the same fee path as escrow: platform fee to the Registry, author fee to the author, net to the contractor |
+| Voting | Release/dispute weight is the backer's locked amount only. A backer with nothing locked cannot vote |
+| Quorum base | `totalLocked` (immediate funds are excluded) |
+| Arbitration fee base | `totalLocked * arbitrationFeeBps / 10000`, computed at signing |
+| Before signing | Withdrawals return the full contribution, immediate included |
+| DAO veto before signing | Backers get the immediate portion back too |
+| After signing | Immediate funds are gone for good; no outcome claws them back |
+| Defaults | Plain `sendFunds()`, native `receive()`, and the author's funding at `createProject` are 0% immediate |
 
-1. **Contractor Advantage**: Higher immediate % = lower effective platform/author fees
-2. **Backer Risk**: Immediate portion is non-recoverable if contractor fails to deliver
-3. **Clean Math**: No edge cases with negative earnings or uncollectable fees
-4. **Incentive Alignment**: Reputation matters more - trusted contractors attract immediate funding
-
----
-
-## Overview
-
-Allow backers to specify what portion of their contribution should be released to the contractor immediately upon signing, versus held in escrow until project completion.
-
-This enables contractors without capital to access operating funds while working, effectively turning backers into lenders who price their risk through the immediate/locked split.
-
-## Motivation
-
-The current system requires contractors to fund all operating costs out-of-pocket until project completion. This creates a barrier to entry for capable contractors who lack capital, and doesn't reflect how traditional business financing works.
-
-By letting backers choose their risk exposure, the market can price trust:
-- High-reputation contractors attract more immediate funding
-- New contractors start with mostly-locked contributions
-- Backers who offer immediate release are implicitly lending at favorable terms
-
-## Data Structure Changes
-
-### Per-Backer Contribution Tracking
+## Functions
 
 ```solidity
-// Replace single mapping:
-mapping(address => uint) public contributors;
+// NativeProject
+function sendFundsWithImmediate(uint immediateBps) public payable;
+function sendFunds() public payable;                  // 0% immediate
 
-// With structured contribution:
-struct Contribution {
-    uint total;           // Total amount contributed
-    uint immediateBps;    // Basis points released immediately (0-10000)
-}
+// ERC20Project (caller approves the project first)
+function sendFundsWithImmediate(uint256 amount, uint immediateBps) public;
+function sendFunds(uint256 amount) public;            // 0% immediate
+```
+
+Allowed in Open and Pending. Emits `SendFunds(who, amount, immediateBps)`.
+
+## Accounting
+
+Per backer, amounts are stored rather than derived, so repeated contributions with different splits accumulate exactly:
+
+```solidity
+struct Contribution { uint total; uint immediate; uint locked; }
 mapping(address => Contribution) public contributions;
 
-// Derived values:
-// immediate = (total * immediateBps) / 10000
-// locked = total - immediate
+uint public totalImmediate;     // sum of immediate portions
+uint public totalLocked;        // sum of locked portions
+uint public immediateReleased;  // set to totalImmediate at signing; 0 means never signed
 ```
 
-### Project-Level Tracking
+`immediate = amount * immediateBps / 10000`, `locked = amount - immediate`.
 
-```solidity
-uint public totalImmediate;    // Sum of all immediate portions (released at signing)
-uint public totalLocked;       // Sum of all locked portions (in escrow)
-uint public immediateReleased; // Tracks whether immediate funds have been paid out
+At `signContract()`: the arbitration fee is fixed from `totalLocked`, the contractor stakes half, `immediateReleased = totalImmediate`, and `totalImmediate` is paid out through `_payWithFees`. `ImmediateFundsReleased(contractor, net)` reports the contractor's net.
+
+## After close
+
+A closed project only distributes locked funds. `percent` (arbiter or DAO ruling) applies to the locked pool, not to the original total, so immediate funds are not counted against the contractor's share:
+
+```
+no arbitration:   backer exit = locked * (100 - disputeResolution) / 100
+                  (+ immediate, if the contract was never signed)
+arbitration:      pool = totalLocked - (arbitrationFee - arbitrationFee / 2)
+                  contractor = pool * percent / 100
+                  backer exit = pool * (100 - percent) / 100 * locked / totalLocked
 ```
 
-## Modified Functions
+What the backer spent, `spentBy(backer) = total - exit`, includes the immediate portion whenever the contract was signed. That is the basis for the backer's REP (see [economy.md](economy.md#reputation)).
 
-### sendFunds
+## Example
 
-```solidity
-function sendFunds(uint immediateBps) public payable {
-    require(stage == Stage.Open || stage == Stage.Pending);
-    require(immediateBps <= 10000, "Cannot exceed 100%");
+Backer A gives 6,000 at 20% immediate, backer B gives 4,000 at 0%. Platform and author fees 1%, arbitration fee 10%.
 
-    // Optional: DAO-controlled cap on immediate percentage
-    // require(immediateBps <= economy.maxImmediateBps());
+| | A | B | Total |
+|---|---|---|---|
+| Immediate | 1,200 | 0 | 1,200 |
+| Locked (vote weight) | 4,800 | 4,000 | 8,800 |
 
-    uint immediate = (msg.value * immediateBps) / 10000;
-    uint locked = msg.value - immediate;
+At signing the contractor stakes 440 and receives 1,200 - 12 platform - 11.88 author = 1,176.12.
 
-    if (contributions[msg.sender].total == 0) {
-        backers.push(msg.sender);
-    }
+If arbitration ends at 50%: pool = 8,800 - 440 = 8,360. Contractor gross 4,180. A gets 4,180 * 4,800 / 8,800 = 2,280; B gets 1,900. A spent 3,720, B spent 2,100.
 
-    contributions[msg.sender].total += msg.value;
-    // Note: Need to handle weighted average if backer adds more funds
+## Risks and mitigations
 
-    totalImmediate += immediate;
-    totalLocked += locked;
-    projectValue += msg.value;
-}
-```
-
-### signContract
-
-```solidity
-function signContract() public payable {
-    // ... existing checks ...
-
-    // Calculate arbitration fee on TOTAL project value
-    uint feeBps = IGovernedEconomy(address(economy)).arbitrationFeeBps();
-    arbitrationFee = (projectValue * feeBps) / 10000;
-    require(msg.value >= arbitrationFee / 2, "Must stake half the arbitration fee");
-
-    // Release immediate funds to contractor (minus platform fee)
-    if (totalImmediate > 0) {
-        uint platformFeeBps = IGovernedEconomy(address(economy)).platformFeeBps();
-        uint platformFee = (totalImmediate * platformFeeBps) / 10000;
-        uint toContractor = totalImmediate - platformFee;
-
-        immediateReleased = totalImmediate;
-
-        // Pay platform fee
-        if (platformFee > 0) {
-            payable(address(economy)).transfer(platformFee);
-        }
-
-        // Pay contractor
-        if (toContractor > 0) {
-            payable(contractor).transfer(toContractor);
-            economy.updateEarnings(contractor, toContractor, economy.NATIVE_CURRENCY());
-        }
-    }
-
-    stage = Stage.Ongoing;
-}
-```
-
-### Voting Functions
-
-Voting weight should be based on **locked portion only**:
-
-```solidity
-function voteToReleasePayment() public {
-    require(stage == Stage.Ongoing);
-
-    Contribution memory contrib = contributions[msg.sender];
-    uint lockedAmount = contrib.total - ((contrib.total * contrib.immediateBps) / 10000);
-
-    require(lockedAmount > 0, "Only backers with escrowed funds can vote");
-
-    // ... rest of voting logic using lockedAmount as weight ...
-}
-```
-
-**Rationale**: Backers who gave 100% immediate have already accepted the outcome. They have no funds at risk in escrow, so they shouldn't influence whether remaining escrow is released or disputed.
-
-### Dispute Resolution
-
-The dispute percentage applies to the **original total project value**. Immediate release is an advance against the contractor's eventual entitlement:
-
-```solidity
-function _finalizeDispute(uint256 percent, string memory rulingHash) private {
-    disputeResolution = percent;
-    ruling_hash = rulingHash;
-    stage = Stage.Closed;
-    arbitrationFeePaidOut = true;
-
-    uint contractorStake = arbitrationFee / 2;
-    uint contributorShare = arbitrationFee - contractorStake;
-    uint projectValueAfterArbFee = projectValue - contributorShare;
-
-    // Contractor's total entitlement based on original project value
-    uint totalEntitlement = (projectValueAfterArbFee * percent) / 100;
-
-    // Subtract what they already received
-    if (totalEntitlement > immediateReleased) {
-        availableToContractor = totalEntitlement - immediateReleased;
-    } else {
-        availableToContractor = 0;
-        // Contractor received more than entitled - unrecoverable without separate collateral
-    }
-
-    // ... arbiter payment logic unchanged ...
-}
-```
-
-### Contributor Withdrawal
-
-Backers can only withdraw their **locked portion** (pro-rata based on dispute resolution):
-
-```solidity
-function withdrawAsContributor() public {
-    require(stage == Stage.Open || stage == Stage.Pending || stage == Stage.Closed);
-
-    Contribution memory contrib = contributions[msg.sender];
-    require(contrib.total > 0, "No contributions to withdraw");
-
-    uint immediate = (contrib.total * contrib.immediateBps) / 10000;
-    uint locked = contrib.total - immediate;
-
-    contributions[msg.sender].total = 0;
-    contributions[msg.sender].immediateBps = 0;
-
-    uint256 exitAmount;
-    uint256 expenditure;
-
-    if (stage == Stage.Closed) {
-        // Immediate portion is gone (already released to contractor)
-        // Locked portion returned based on dispute resolution
-        if (arbitrationFeePaidOut) {
-            uint contributorArbFeeShare = (arbitrationFee / 2 * locked) / totalLocked;
-            uint remainingLocked = locked - contributorArbFeeShare;
-            exitAmount = (remainingLocked * (100 - disputeResolution)) / 100;
-        } else {
-            exitAmount = (locked * (100 - disputeResolution)) / 100;
-        }
-        expenditure = contrib.total - exitAmount; // Total spent = immediate + locked portion to contractor
-    } else {
-        // Pre-signing withdrawal: get everything back
-        exitAmount = contrib.total;
-        totalImmediate -= immediate;
-        totalLocked -= locked;
-        expenditure = 0;
-    }
-
-    // ... transfer logic ...
-}
-```
-
-## DAO-Controlled Parameters
-
-Consider adding to `Economy.sol`:
-
-```solidity
-uint public maxImmediateBps;  // Optional cap on immediate release (e.g., 5000 = 50%)
-
-function setMaxImmediateBps(uint newMax) external {
-    require(timelockAddress == address(0) || msg.sender == timelockAddress);
-    require(newMax <= 10000);
-    maxImmediateBps = newMax;
-}
-```
-
-This allows the DAO to set platform-wide limits if abuse is detected, while defaulting to permissionless (10000 = 100% allowed).
-
-## Security Considerations
-
-### Contractor Disappearance
-
-**Risk**: Contractor receives immediate funds and doesn't deliver.
-
-**Mitigations**:
-- Backer choice: they knowingly accepted this risk via their immediate %
-- Reputation damage: contractor's earnings are recorded, but future opportunities depend on completion
-- DAO oversight: patterns of abandonment can result in rep burning
-
-### Platform Fee Collection
-
-Platform fee on immediate portion **must** be collected at signing, not withdrawal. Otherwise, contractor disappearance means DAO receives nothing.
-
-### Voting Power Gaming
-
-**Risk**: Contractor uses sock puppet to fund with high immediate %, then votes to release.
-
-**Mitigation**: Voting weight = locked portion only. A 100% immediate backer has zero voting power.
-
-### Reputation Farming
-
-**Risk**: Fake projects to inflate reputation.
-
-**Mitigation**: Existing DAO oversight. Platform fees make farming expensive, and DAO can burn farmed rep if work isn't meaningful. This is not a new attack vector—immediate release doesn't change the economics significantly.
-
-### Dispute Math Clarity
-
-The `disputeResolution` percentage always refers to contractor's share of the **original total**. Immediate release is an advance, not a bonus. If arbiter rules 30% to contractor but they already received 40% immediately, they get nothing more from escrow (and technically owe 10%, but this is unenforceable without additional collateral).
-
-## UI/UX Considerations
-
-### For Backers
-
-- Slider or input for "Immediate Release %" when funding
-- Clear warning: "This portion cannot be recovered if the contractor doesn't deliver"
-- Show contractor's track record prominently
-
-### For Contractors
-
-- Display total immediate vs locked funding
-- Show "Available on signing" amount
-- Reputation requirements (if any) for high-immediate projects
-
-### For Project Display
-
-- Show funding breakdown: X ETH immediate / Y ETH escrowed
-- Voting power displayed as escrowed amount only
-
-## Migration Path
-
-This is a breaking change to the Project contract structure. Options:
-
-1. **New contract versions**: Deploy `NativeProjectV2` and `ERC20ProjectV2` with immediate release support. Existing projects continue on V1.
-
-2. **Factory update**: Update `Economy.setImplementations()` to point to new implementations. New projects get the feature; existing projects unchanged.
-
-Recommend option 2 for simplicity.
-
-## Open Questions
-
-1. **Author fee on immediate**: Should author fee also be collected at signing for the immediate portion? Probably yes, for same reason as platform fee.
-
-2. **Multiple funding rounds**: If a backer adds more funds, how to handle the weighted average of their immediate %? Options:
-   - Reject (must withdraw and re-fund to change)
-   - Track per-deposit
-   - Weighted average
-
-3. **Minimum lock requirement**: Should there be a minimum locked % to create a project at all? E.g., "At least 20% must be escrowed" to ensure some dispute leverage exists.
-
-4. **Reputation threshold for high immediate**: Should contractors need minimum reputation to accept projects with >X% immediate funding? This protects backers from brand-new contractors taking high-immediate and disappearing.
+| Risk | Mitigation |
+|------|-----------|
+| Contractor takes the advance and disappears | Backer chose the exposure; cap bounds it; the DAO can veto during cooling-off, which is at least a full proposal lifecycle (see [economy.md](economy.md#cooling-off)) |
+| Contractor's sock puppet funds at high immediate % to control the vote | Immediate funds carry no vote |
+| REP farming via immediate release plus `reimburse()` | Every REP-earning payout pays the platform fee (floor 1%), so each REP minted costs the farmer at least that fee in the treasury (`test/security.test.js`) |
+| Arbitration leaves the contractor over-advanced | Accepted: the ruling splits only the locked pool; the advance is the backer's sunk risk |

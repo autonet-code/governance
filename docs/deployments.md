@@ -1,0 +1,108 @@
+# Deployments
+
+Addresses, build commands, deploy scripts and the local end-to-end harnesses. API details are in [technical-reference.md](technical-reference.md); the Autonet genesis flow is in [autonet.md](autonet.md).
+
+## Deployed addresses
+
+### Etherlink Shadownet (chainId 127823)
+
+Deployed 2026-10-11. **The source of truth is Firestore `contracts/Etherlink-Shadownet`** (in both `homebase-6907d` and `trustless-58262`); the web apps and the indexer read factory and implementation addresses from there. The old Ghostnet testnet (chainId 128123) is retired.
+
+| Contract | Firestore field | Address |
+|----------|-----------------|---------|
+| StandardFactory | `wrapper` | `0x18A6cFc4E2e99C7f164Fc0857Bc2985D8CF629a2` |
+| StandardFactoryTransferable | `wrapper_t` | `0xfA5Df76fEF1c434dfAb764F837C6b2cf42A6685D` |
+| StandardFactoryWrapped | `wrapper_w` | `0x7BCFa3C390C9f004b0e43019094f4f6208e97c2D` |
+| TrustlessFactory | `wrapper_trustless` | `0xE748fD0cE8aCFE3c187C6e16ABB6Ba6341Dd380F` |
+| NativeProject implementation | `nativeProjectImpl` | `0x422E09547f732f7aE1177Be0C42B6d3903fc9f3A` |
+| ERC20Project implementation | `erc20ProjectImpl` | `0xc873836843DA3C03D8A4aD08e99C3009b88fD179` |
+| InfrastructureFactory | | `0xBb334a55096cDf2B7C46406c119eB989CCA4fbEb` |
+| DAOFactory | | `0x432583bdEc29722d0593b1F3E198B793A5b9423F` |
+| RepTokenFactory | | `0xDa57341ee91Fc987E4F56c560bf71dfAC705eF73` |
+| EconomyFactory | | `0x36d6364E7191C31272a2D456D02178f58a457373` |
+| WrappedRepTokenFactory | | `0x61597CeDA571c910430b4Bad89F8f5939C91201E` |
+
+The project implementations were redeployed after the factory suite (for `ArbitrationStakeReclaimed`), so they differ from the ones in `deployments/etherlink-shadownet-full-suite.json`. Economies created through the web app take implementation addresses from Firestore, so project-only changes do not need a factory redeploy.
+
+Autonet satellites on Shadownet (vault, REP claim, Substrate) are recorded in each jurisdiction's own Registry under `jurisdiction.autonet.substrate`, `jurisdiction.autonet.vault` and `jurisdiction.autonet.rep_claim`. Read them from there rather than from `deployments/autonet-jurisdiction-ets.json`, which records an earlier (2026-07-08) attachment with different addresses.
+
+### Networks (`hardhat.config.js`)
+
+| Name | Chain ID | RPC | Status |
+|------|----------|-----|--------|
+| `ets` | 127823 | `https://node.shadownet.etherlink.com` | **Current testnet** |
+| `etm` | 42793 | `https://node.mainnet.etherlink.com` | Mainnet |
+| `et` | 128123 | `https://node.ghostnet.etherlink.com` | Retired (Ghostnet) |
+| `baseSepolia` | 84532 | `https://sepolia.base.org` | Used for CoinOffering tests |
+| `sepolia` | 11155111 | Infura | |
+| `localhost` / `hardhat` | 31337 | `http://127.0.0.1:8545` | Local |
+| `ganache` | 1337 | `http://127.0.0.1:7545` | Local |
+
+Block explorer verification (`npx hardhat verify`) is configured for `et`, `ets` and `etm` via Blockscout.
+
+## Prerequisites
+
+- Node.js 18+ and npm.
+- `config.js` in the repo root (gitignored) exporting `INFURA_API_KEY`, `SEPOLIA_PRIVATE_KEY` and `PRIVATE_KEY` (hex, without `0x`). `hardhat.config.js` requires it even for local runs.
+- For the indexer harnesses: Python 3 with the indexer's requirements, the Firebase CLI (Firestore emulator), and the indexer's service-account files (`homebase.json`, `secrets/trustless.json`). The UI harness also needs Flutter and chromedriver.
+
+## Build and test
+
+```bash
+npm install
+npx hardhat compile          # solc 0.8.26, cancun, optimizer 200 runs, viaIR
+npx hardhat test             # all tests
+npx hardhat test test/security.test.js
+```
+
+`npm test` is a placeholder in `package.json` and fails; use `npx hardhat test`.
+
+## Deploy scripts
+
+Run with `npx hardhat run <script> --network <name>`.
+
+| Script | What it does |
+|--------|--------------|
+| `scripts/deployFullFactorySuiteShadownet.js` | **Current.** Fresh full suite on `ets`: base factories, all four wrappers, project implementations. Writes `deployments/etherlink-shadownet-full-suite.json` with the Firestore field mapping |
+| `scripts/deployProjectImplsShadownet.js` | Redeploys only `NativeProject` and `ERC20Project` (refuses any chain but 127823). Update `nativeProjectImpl` / `erc20ProjectImpl` in Firestore afterwards |
+| `scripts/deployStandardFactory.js` | Fresh sub-factories plus `StandardFactory`. Writes `deployments/etherlink-testnet-standard.json` (Ghostnet-era name) |
+| `scripts/deployStandardFactoryTransferable.js`, `deployStandardFactoryWrapped.js`, `deployStandardNonTransferable.js` | The other standard wrappers |
+| `scripts/deployTrustlessFactory.js` | Project implementations, sub-factories and `TrustlessFactory`. Writes `deployments/etherlink-shadownet-trustless.json` |
+| `scripts/deployTestEconomyDAO.js` | Creates a test economy DAO through the 3-step flow |
+| `scripts/deploy-autonet-jurisdiction.js` | Autonet jurisdiction: DAO suite plus genesis satellites, with `PREDICT_VAULT` / `RESUME` modes. See [autonet.md](autonet.md#genesis-choreography) |
+| `scripts/deploy-autonet-vault.js`, `deploy-autonet-rep-claim.js`, `deploy-reputation-mirror.js` | Individual Autonet satellites; print the governance calldata they need |
+| `scripts/deployCOLocal.js`, `deployTestCOShadownet.js`, `deployTestCOBaseSepolia.js` | Isolated CoinOffering stacks (Registry, transferable RepToken, test USDC) |
+| `scripts/updateFirestoreShadownet.js`, `backupFirestoreAddresses.js` | Write / back up Firestore address docs |
+
+Older one-off scripts (`redeploy*`, `check*`, `debug*`, `deployAllToMainnet.js` and similar) are historical and target previous deployments.
+
+Factory timing units: governor voting delay and period are **minutes** (multiplied by 60 on-chain, timestamp clock). TrustlessFactory's timelock delay is minutes; the standard factories' `executionDelay` is seconds. `deploy-autonet-jurisdiction.js` takes seconds via env and converts.
+
+## Local end-to-end harnesses
+
+### `scripts/e2eLocal.js`
+
+Contracts-only smoke run against a live node:
+
+```bash
+npx hardhat node
+npx hardhat run scripts/e2eLocal.js --network localhost
+```
+
+Deploys the factory suite, creates an economy DAO through the 3-step TrustlessFactory flow, sets parities with werule's encoding (`parity * 10^(36 - decimals)`), runs a native and a 6-decimal ERC20 project with immediate release, and checks: Economy admin frozen, cooling-off equal to the proposal lifecycle, treasury platform fees, and contractor and backer REP. Prints `PASS`/`FAIL` per check and exits non-zero on any failure.
+
+### `scripts/indexer-e2e/` (contracts plus indexer plus Firestore emulator)
+
+All Firestore writes go to the emulator (`FIRESTORE_EMULATOR_HOST=127.0.0.1:8080` is forced), never production.
+
+| File | Role |
+|------|------|
+| `run.sh <indexer dir> [--replay]` | Needs `npx hardhat node` and `firebase emulators:start --only firestore` running. Clears both emulator projects and the indexer's local state, runs `deploy.js` and `seed_emulator.py`, starts the indexer (`app.py localhost homebase trustless --no-alerts`), runs `events.js`, waits until the indexer log is quiet for 15 s, then runs `verify.py`. `--replay` rewinds both checkpoints to block 1, restarts the indexer and verifies again to catch double counting |
+| `deploy.js` | Deploys all factories and project implementations to the local node; writes `out/deployment.json` in the Firestore `contracts/<network>` shape |
+| `seed_emulator.py <indexer dir>` | Writes `out/deployment.json` to `contracts/Localhost` in both emulator projects (`homebase`, `trustless`) |
+| `events.js` | Emits every DAO and trustless event type the indexer handles (standard, transferable, wrapped and economy DAOs; proposals through execute; delegation; project flows) and records expectations in `out/manifest.json` |
+| `verify.py <indexer dir>` | Compares emulator documents (`idaosLocalhost`, members, proposals, votes, registry, economy and project docs) with the manifest. `PASS`/`FAIL` lines, exit 1 on any failure |
+| `ui.sh <indexer dir> <app dir> <integration test>` | UI write flows. Needs the emulator and chromedriver (port 4444). Restarts the hardhat node so chain time matches the browser, deploys, seeds, starts the indexer with `--skip-historical`, runs `ui_setup.js`, then `flutter drive` on Chrome with the addresses passed as `--dart-define`s |
+| `ui_setup.js` | On a fresh chain without time travel: an economy DAO for trustless flows and a standard DAO with an open proposal for werule voting. Writes `out/ui.json` |
+
+The shell scripts use PowerShell to stop the indexer and free ports, so they are written for Git Bash on Windows.

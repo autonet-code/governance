@@ -160,7 +160,7 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         }
     }
 
-    // Canonical parity convention (see docs/ECONOMY_REGISTRY_SETTINGS.md):
+    // Canonical parity convention (see docs/registry-settings.md):
     // parity is an 18-decimal fixed-point multiplier. parity == 1e18 means 1:1.
     // reputation = amount * parity / 1e18. This is decimal-correct for any
     // payment-token decimals: the registry value bakes in the decimal adjustment

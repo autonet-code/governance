@@ -5,7 +5,7 @@ This document describes the Firestore database structure for the Trustless Econo
 ## Overview
 
 The Trustless Economy uses a hierarchical structure where:
-- **Network** is the root collection (e.g., `Etherlink-Testnet`)
+- **Network** is the root collection (e.g., `Etherlink-Shadownet`)
 - **Economy** documents represent deployed Economy DAOs
 - **Projects** are nested subcollections within each Economy
 
@@ -23,7 +23,7 @@ contracts/                                    [collection - configuration]
         ├── nativeProjectImpl: string         [NativeProject implementation]
         └── erc20ProjectImpl: string          [ERC20Project implementation]
 
-{networkName}/                                [collection - e.g., "Etherlink-Testnet"]
+{networkName}/                                [collection - e.g., "Etherlink-Shadownet"]
   └── {economyAddress}/                       [document - Economy instance]
         ├── address: string                   [Economy contract address]
         ├── daoAddress: string                [Governor contract address]
@@ -60,7 +60,7 @@ Network configuration document. Contains factory addresses and network settings.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `chainId` | number | Network chain ID (e.g., 128123 for Etherlink Testnet) |
+| `chainId` | number | Network chain ID (e.g., 127823 for Etherlink Shadownet) |
 | `rpc` | string | RPC endpoint URL |
 | `blockExplorer` | string | Block explorer base URL |
 | `symbol` | string | Native currency symbol (e.g., "XTZ") |
@@ -69,7 +69,7 @@ Network configuration document. Contains factory addresses and network settings.
 | `nativeProjectImpl` | string | NativeProject implementation address |
 | `erc20ProjectImpl` | string | ERC20Project implementation address |
 
-**Example path:** `contracts/Etherlink-Testnet`
+**Example path:** `contracts/Etherlink-Shadownet`
 
 ### `{networkName}/{economyAddress}`
 
@@ -86,7 +86,7 @@ Economy document. Created when a new Economy DAO is deployed via TrustlessFactor
 | `createdAt` | timestamp | Deployment timestamp |
 | `createdAtBlock` | number | Block number of deployment |
 
-**Example path:** `Etherlink-Testnet/0xB40e377b3633B12a04804A5007c0B47dE21cB3bC`
+**Example path:** `Etherlink-Shadownet/0xB40e377b3633B12a04804A5007c0B47dE21cB3bC`
 
 ### `{networkName}/{economyAddress}/projects/{projectAddress}`
 
@@ -109,7 +109,7 @@ Project document. Created when a new project is created within an Economy.
 | `votesToRelease` | array | Addresses of backers voting to release funds |
 | `votesToDispute` | array | Addresses of backers voting to dispute |
 
-**Example path:** `Etherlink-Testnet/0xB40e377b3633B12a04804A5007c0B47dE21cB3bC/projects/0x1234...`
+**Example path:** `Etherlink-Shadownet/0xB40e377b3633B12a04804A5007c0B47dE21cB3bC/projects/0x1234...`
 
 ## Project Stages
 
@@ -136,13 +136,13 @@ The `stage` field indicates the project's lifecycle state:
 
 ### Get all Economies on a network
 ```javascript
-const economies = await db.collection('Etherlink-Testnet').get();
+const economies = await db.collection('Etherlink-Shadownet').get();
 ```
 
 ### Get all projects in an Economy
 ```javascript
 const projects = await db
-  .collection('Etherlink-Testnet')
+  .collection('Etherlink-Shadownet')
   .doc(economyAddress)
   .collection('projects')
   .get();
@@ -151,7 +151,7 @@ const projects = await db
 ### Get projects by author
 ```javascript
 const myProjects = await db
-  .collection('Etherlink-Testnet')
+  .collection('Etherlink-Shadownet')
   .doc(economyAddress)
   .collection('projects')
   .where('author', '==', userAddress)
@@ -161,7 +161,7 @@ const myProjects = await db
 ### Get open projects
 ```javascript
 const openProjects = await db
-  .collection('Etherlink-Testnet')
+  .collection('Etherlink-Shadownet')
   .doc(economyAddress)
   .collection('projects')
   .where('stage', '==', 'open')
@@ -202,5 +202,5 @@ Projects are now nested under their parent Economy:
 | Environment | Network Name |
 |-------------|--------------|
 | Mainnet | `Etherlink` |
-| Testnet | `Etherlink-Testnet` |
+| Testnet | `Etherlink-Shadownet` |
 | Localhost | `Localhost` |

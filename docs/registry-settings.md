@@ -1,143 +1,91 @@
-# Economy DAO Settings Reference
+# Economy DAO Settings
 
-This document describes all configurable parameters for an Economy DAO, where they are stored, and how they are modified through governance.
+Every configurable value of an economy DAO, where it lives, and how to change it. Values live in two places: typed parameters on the Economy contract, and string key/value pairs in the Registry. After deployment both are changed only by DAO proposals executed by the Timelock (see [governance.md](governance.md)).
 
----
+Related: [economy.md](economy.md) (what the parameters do in the project lifecycle), [immediate-release.md](immediate-release.md), [technical-reference.md](technical-reference.md), [architecture.md](architecture.md).
 
-## Parameters Stored on the Economy Contract
+## Economy contract parameters
 
-These parameters are stored directly on the Economy contract and are modified by calling setter functions through DAO proposals targeting the Economy contract.
+Setters are `onlyGovernance`: the Economy's `admin` until `setDaoAddresses` runs, the Timelock after. The TrustlessFactory sets the initial values (except `arbitrationFeeBps` and `maxImmediateBps`) inside `configureAndFinalize`, then sets the DAO addresses.
 
-| Parameter | Type | Description | Default | Setter Function |
-|-----------|------|-------------|---------|-----------------|
-| `platformFeeBps` | uint | Platform fee on project completions (basis points) | 100 (1%) | `setPlatformFee(uint)` |
-| `authorFeeBps` | uint | Fee paid to project authors (basis points) | 100 (1%) | `setAuthorFee(uint)` |
-| `nativeArbitrationFee` | uint | Arbitration fee for native currency projects (wei) | 0 | `setNativeArbitrationFee(uint)` |
-| `coolingOffPeriod` | uint | Time before funds release after completion (seconds) | 120 (2 min) | `setCoolingOffPeriod(uint)` |
-| `appealPeriod` | uint | Time to appeal arbiter decisions (seconds) | 604800 (7 days) | `setAppealPeriod(uint)` |
-| `projectThreshold` | uint | Min RepToken balance to create projects (wei) | 0 | `setProjectThreshold(uint)` |
-| `backersVoteQuorumBps` | uint | Quorum for backer dispute votes (basis points, 50-99%) | 7000 (70%) | `setBackersVoteQuorum(uint)` |
+| Parameter | Unit | Default | Bounds | Setter | Read by projects |
+|-----------|------|---------|--------|--------|------------------|
+| `platformFeeBps` | bps | 100 (1%) | 100 (`MIN_PLATFORM_FEE_BPS`) to 5000 | `setPlatformFee(uint)` | On every fee-path payout |
+| `authorFeeBps` | bps of payout after platform fee | 100 (1%) | none | `setAuthorFee(uint)` | On every contractor payout |
+| `arbitrationFeeBps` | bps of `totalLocked` | constructor argument (`deployInfrastructure(timelockDelayMinutes, arbitrationFeeBps)`) | none | `setArbitrationFee(uint)` | Once, at signing |
+| `coolingOffPeriod` | seconds | 120 | none; effective value is `max(coolingOffPeriod, proposalLifecycle())` | `setCoolingOffPeriod(uint)` | Once, when parties are set |
+| `backersVoteQuorumBps` | bps of `totalLocked` | 7000 (70%) | 5000 to 9900 | `setBackersVoteQuorum(uint)` | On each backer vote |
+| `projectThreshold` | REP (18 decimals) | 0 | none | `setProjectThreshold(uint)` | REP balance to create a project; voting power to appeal |
+| `appealPeriod` | seconds | 604800 (7 days) | none | `setAppealPeriod(uint)` | At ruling and appeal; also the arbiter's exclusive window |
+| `maxImmediateBps` | bps per contribution | 2000 (20%) | 0 to 5000 | `setMaxImmediateBps(uint)` | On each contribution |
+| implementations | addresses | unset | none | `setImplementations(native, erc20)` | New projects only |
 
-### Example Proposal: Update Platform Fee
+Fixed constants on projects: `ARBITRATION_TIMEOUT = 150 days`.
 
-```
-Title: Update Platform Fee to 2%
-Type: Contract Call
-Target: Economy Contract (0x...)
-Function: setPlatformFee(uint newFeeBps)
-Calldata: setPlatformFee(200)
-```
+`proposalLifecycle()` is `governor.votingDelay() + governor.votingPeriod() + timelock.getMinDelay()`; `effectiveCoolingOffPeriod()` exposes the result. Both use seconds (the Governor clock is timestamp based).
 
----
+`EconomyParams.arbitrationFeeBps` in `configureAndFinalize` is ignored: the fee comes from `deployInfrastructure`.
 
-## Parameters Stored in the DAO Registry
-
-These parameters are stored in the Registry contract as key-value string pairs. The RepToken contract reads these values when calculating reputation from economic activity.
-
-### Token Parity Settings
-
-Used by RepToken to convert token amounts to reputation when users claim reputation from their economic activity.
-
-| Registry Key Format | Value Type | Description |
-|---------------------|------------|-------------|
-| `jurisdiction.parity.{tokenAddress}` | uint as string (18 decimals) | Reputation multiplier for earnings/spendings in this token |
-
-**Key Format**: `jurisdiction.parity.` + lowercase hex address of the token
-
-**Value Format**: String representation of uint256 with 18 decimal precision
-- `"1000000000000000000"` = 1:1 parity (1 token = 1 reputation)
-- `"2000000000000000000"` = 2:1 parity (1 token = 2 reputation)
-- `"500000000000000000"` = 0.5:1 parity (1 token = 0.5 reputation)
-
-**Special Address for Native Currency**: `0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`
-
-### Example Registry Entries
-
-#### Native Currency (XTZ) Parity
-```
-Key:   jurisdiction.parity.0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-Value: "1000000000000000000"
-```
-This means: 1 XTZ earned/spent = 1 RepToken
-
-#### USDC Token Parity (example address)
-```
-Key:   jurisdiction.parity.0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48
-Value: "1000000000000000000000000000000"
-```
-This means: 1 USDC (6 decimals) = 1 RepToken (adjusted for decimal difference)
-
-### Benefits Claim Grace Period
-
-Used by the Registry's `reclaimEarmarkedFunds` function to determine when unclaimed epoch rewards can be reclaimed by the DAO.
-
-| Registry Key | Value Type | Description |
-|--------------|------------|-------------|
-| `benefits.claim.gracePeriod` | uint as string (seconds) | Time after epoch ends before DAO can reclaim unclaimed funds |
+### Example proposal
 
 ```
-Key:   benefits.claim.gracePeriod
-Value: "2592000"
+Target:   Economy (0x...)
+Value:    0
+Calldata: setPlatformFee(200)        // 2%
 ```
-This means: 30 days grace period for members to claim rewards
 
----
+A value outside the bounds makes the proposal revert at execution.
 
-## How to Set Registry Values
+## Registry keys
 
-Registry entries are modified through DAO proposals that call the Registry contract.
+The Registry stores string keys and string values. Edits are allowed from the `owner` (the Timelock after deployment) or the `wrapper`. Initial keys can be passed to `configureAndFinalize` as `_registryKeys` / `_registryValues`.
 
-### Single Entry Update
+### `jurisdiction.parity.<token>`
+
+REP minted per unit of a payment token. Read by `RepToken.claimReputationFromEconomy()` (and by the CoinOffering and AutonetVault contracts, which use the same convention).
+
+| | |
+|---|---|
+| Key | `jurisdiction.parity.` + lowercase `0x` hex address (`Strings.toHexString`) |
+| Native currency | `jurisdiction.parity.0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee` |
+| Value | decimal string, 18-decimal fixed point: `reputation = amount * parity / 1e18` |
+| Missing or `0` | No REP for that token |
+
+The decimal adjustment is baked into the value:
+
+| Token | Desired rate | Value |
+|-------|--------------|-------|
+| Native (18 decimals) | 1 token = 1 REP | `1000000000000000000` |
+| Native | 1 token = 0.5 REP | `500000000000000000` |
+| 6-decimal stablecoin | 1 token = 1 REP | `1000000000000000000000000000000` (1e30) |
+
+Parity is applied when the user claims, to the unclaimed delta of their earnings and spending in that token, so a parity change affects only amounts not yet claimed.
+
+### `benefits.claim.gracePeriod`
+
+Seconds after the next reward epoch starts before `Registry.reclaimEarmarkedFunds(epochId, token)` can release an epoch's unclaimed budget. Required: reclaim reverts while it is unset. Example `2592000` (30 days).
+
+### Treasury inflows from the economy
+
+Not settings, but the Registry is where economy money lands: platform fees and forfeited arbitration fees are sent directly from projects; `Economy.withdrawNative()` / `withdrawTokens(token)` (Timelock only) sweep anything sent to the Economy itself; `ERC20Project.sweepOrphanedTokens(token)` sends stray tokens. Outflows are subject to the Registry's spend caps and earmarks (see [governance.md](governance.md)).
+
+### Example proposals
 
 ```
-Title: Set XTZ Parity to 1:1
-Type: Contract Call
-Target: Registry Contract (0x...)
-Function: editRegistry(string key, string value)
+Target:   Registry (0x...)
 Calldata: editRegistry("jurisdiction.parity.0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "1000000000000000000")
 ```
 
-### Batch Update (Multiple Entries)
-
 ```
-Title: Configure Token Parities
-Type: Contract Call
-Target: Registry Contract (0x...)
-Function: batchEditRegistry(string[] keys, string[] values)
+Target:   Registry (0x...)
 Calldata: batchEditRegistry(
-  ["jurisdiction.parity.0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "jurisdiction.parity.0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"],
-  ["1000000000000000000", "1000000000000000000000000000000"]
-)
+  ["jurisdiction.parity.0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "benefits.claim.gracePeriod"],
+  ["1000000000000000000", "2592000"])
 ```
 
----
+## Events
 
-## Summary: Where to Find Each Setting
-
-| Setting | Location | How to Modify |
-|---------|----------|---------------|
-| Platform fee | Economy contract | Proposal → `economy.setPlatformFee()` |
-| Author fee | Economy contract | Proposal → `economy.setAuthorFee()` |
-| Native arbitration fee | Economy contract | Proposal → `economy.setNativeArbitrationFee()` |
-| Cooling off period | Economy contract | Proposal → `economy.setCoolingOffPeriod()` |
-| Appeal period | Economy contract | Proposal → `economy.setAppealPeriod()` |
-| Project threshold | Economy contract | Proposal → `economy.setProjectThreshold()` |
-| Backers vote quorum | Economy contract | Proposal → `economy.setBackersVoteQuorum()` |
-| Token parity (reputation) | Registry contract | Proposal → `registry.editRegistry()` |
-| Benefits grace period | Registry contract | Proposal → `registry.editRegistry()` |
-
----
-
-## Events Emitted on Changes
-
-### Economy Contract Events
-- `PlatformFeeSet(uint newFeeBps)`
-- `AuthorFeeSet(uint newFeeBps)`
-- `NativeArbitrationFeeSet(uint newFee)`
-- `CoolingOffPeriodSet(uint newPeriod)`
-- `AppealPeriodSet(uint newPeriod)`
-- `ProjectThresholdSet(uint newThreshold)`
-- `BackersVoteQuorumSet(uint newQuorumBps)`
-
-### Registry Contract Events
-- `RegistryUpdated(string key, string value)`
+| Contract | Event |
+|----------|-------|
+| Economy | `PlatformFeeSet`, `AuthorFeeSet`, `ArbitrationFeeSet`, `CoolingOffPeriodSet`, `BackersVoteQuorumSet`, `ProjectThresholdSet`, `AppealPeriodSet`, `MaxImmediateBpsSet`, `DaoAddressesSet`, `AdminTransferred` |
+| Registry | `RegistryUpdated(key, value)` from `editRegistry` only. `batchEditRegistry` emits nothing, so indexers must read batched keys from the transaction or the factory's `NewDaoCreated` event |

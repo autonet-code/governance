@@ -14,7 +14,7 @@ Decentralized justice platforms are blockchain-based systems designed to settle 
 - Jurors stake PNK tokens to be eligible for selection
 - Random selection weighted by stake amount
 - Jurors vote on disputes; those in the minority lose their stake
-- Based on Schelling Point game theory—jurors are incentivized to vote with the majority, which theoretically converges on truth
+- Based on Schelling Point game theory: jurors are incentivized to vote with the majority, which theoretically converges on truth
 
 **Features:**
 - Multi-level appeals (each round doubles jurors + 1)
@@ -23,7 +23,7 @@ Decentralized justice platforms are blockchain-based systems designed to settle 
 - Integration via arbitration standard (ERC-792)
 
 **Limitations:**
-- External service model—disputes are referred to Kleros, not native to the organization
+- External service model: disputes are referred to Kleros, not native to the organization
 - Jurors have no relationship to the underlying business or community
 - Governance power comes from token purchases, not productive contribution
 - No integrated economic activity or treasury management
@@ -73,7 +73,7 @@ Most existing solutions share these characteristics:
 
 ### The Arbitration-as-a-Service Model
 
-Kleros and Aragon Court are fundamentally **arbitration services**—external dispute resolution mechanisms that other smart contracts can invoke. This architecture:
+Kleros and Aragon Court are fundamentally **arbitration services**, external dispute resolution mechanisms that other smart contracts can invoke. This architecture:
 
 1. Solves the "neutral third party" problem
 2. Creates a marketplace for dispute resolution

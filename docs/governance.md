@@ -1,660 +1,263 @@
-# DAO Governance
+# Governance
 
-This document explains how governance works in On-Chain Jurisdiction, covering the proposal lifecycle, voting mechanics, treasury management, and reputation system.
+How a jurisdiction governs itself: the Governor, its Timelock, the RepToken that carries voting power, reward epochs, and the Registry that holds the treasury and configuration. For how these contracts are deployed and wired together, see [architecture.md](architecture.md). For function-level API detail, see [technical-reference.md](technical-reference.md).
 
-## Overview
+Sources: `contracts/Dao.sol`, `RepToken.sol`, `WrappedRepToken.sol`, `Registry.sol`, `IJurisdictionData.sol`, `IAdminToken.sol`, `contracts/factories/`, `contracts/debates/`. Behaviour described here is exercised by `test/dao-governance*.test.js`, `test/reward-epochs.test.js`, `test/default-delegate.test.js`, `test/treasury-spend-guard.test.js` and `test/security.test.js`.
 
-The governance system enables token holders to collectively make decisions about:
+## Contracts at a glance
 
-- **Treasury management**: Spending, investing, or distributing funds
-- **Parameter changes**: Adjusting fees, thresholds, and time periods
-- **Reputation management**: Minting or burning tokens for contributors
-- **Economy oversight**: Appealing arbitration decisions, vetoing bad projects
-- **Registry configuration**: Setting metadata and system parameters
+| Contract | Role | Controlled by (after deployment) |
+|---|---|---|
+| `HomebaseDAO` (`Dao.sol`) | OpenZeppelin 5.x Governor: proposals and votes | Itself (settings changes go through proposals) |
+| `TimelockController` (OZ) | Executes passed proposals after a delay; the jurisdiction's identity on-chain | Governor is the only proposer; anyone may execute |
+| `RepToken` | ERC20Votes reputation token, reward epochs, Economy reputation pull | `admin` = Timelock, plus `timelockAddress` for epoch functions |
+| `WrappedRepToken` | ERC20Votes wrapper over an existing ERC20 (wrapped-token DAOs) | `admin` = Timelock (no other admin powers) |
+| `Registry` | Treasury (native, ERC20, ERC721), key/value config, earmarks, spend cap | `owner` = Timelock |
 
-All governance actions follow the same pattern: **propose → vote → queue → execute**.
+Every governance action follows the same path: **propose, vote, queue, execute**. The Timelock is the `msg.sender` of every executed action, so anything gated to "the DAO" is gated to the Timelock address.
 
-## OpenZeppelin Governor Framework
+## The Governor (`HomebaseDAO`)
 
-Our DAO contract (`HomebaseDAO`) inherits from [OpenZeppelin's Governor](https://docs.openzeppelin.com/contracts/5.x/governance) framework, combining multiple extensions:
+`HomebaseDAO` composes these OpenZeppelin extensions with no custom logic beyond the required overrides:
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           HomebaseDAO                                    │
-│                                                                          │
-│  ┌────────────────────────────────────────────────────────────────────┐ │
-│  │                          Governor (Base)                           │ │
-│  │  Core proposal/voting lifecycle, state machine, execution          │ │
-│  └────────────────────────────────────────────────────────────────────┘ │
-│                                    │                                     │
-│       ┌────────────────────────────┼────────────────────────────┐        │
-│       │                            │                            │        │
-│       ▼                            ▼                            ▼        │
-│  ┌─────────────┐           ┌─────────────┐           ┌─────────────────┐│
-│  │GovernorSettings│        │GovernorVotes│          │GovernorTimelock  ││
-│  │             │           │             │           │Control          ││
-│  │votingDelay  │           │Uses IVotes  │           │                 ││
-│  │votingPeriod │           │token for    │           │Queues actions   ││
-│  │proposalThres│           │voting power │           │in Timelock      ││
-│  └─────────────┘           └─────────────┘           └─────────────────┘│
-│       │                            │                            │        │
-│       │                            │                            │        │
-│       ▼                            ▼                            ▼        │
-│  ┌──────────────────┐    ┌───────────────────┐    ┌───────────────────┐ │
-│  │GovernorCounting  │    │GovernorVotesQuorum│    │                   │ │
-│  │Simple            │    │Fraction           │    │                   │ │
-│  │                  │    │                   │    │                   │ │
-│  │For/Against/      │    │Quorum as % of     │    │                   │ │
-│  │Abstain voting    │    │total supply       │    │                   │ │
-│  └──────────────────┘    └───────────────────┘    └───────────────────┘ │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+| Extension | Effect |
+|---|---|
+| `GovernorSettings` | `votingDelay`, `votingPeriod`, `proposalThreshold`, changeable later by proposal |
+| `GovernorCountingSimple` | Against (0), For (1), Abstain (2) |
+| `GovernorVotes` | Voting power from the token's `IVotes` checkpoints |
+| `GovernorVotesQuorumFraction` | Quorum as a percentage of total supply at the snapshot |
+| `GovernorTimelockControl` | Passed proposals are queued in and executed by the Timelock |
 
-### Extension Summary
-
-| Extension | Purpose | Configuration |
-|-----------|---------|---------------|
-| `GovernorSettings` | Configurable voting parameters | Set at deployment |
-| `GovernorCountingSimple` | For/Against/Abstain vote counting | Standard 3-way voting |
-| `GovernorVotes` | Token-based voting power | Uses RepToken (IVotes) |
-| `GovernorVotesQuorumFraction` | Percentage-based quorum | % of total supply |
-| `GovernorTimelockControl` | Timelock integration | Execution delay |
-
-## Proposal Lifecycle
-
-### State Diagram
-
-```
-                                   ┌─────────────┐
-                                   │  Canceled   │
-                                   └──────▲──────┘
-                                          │ cancel()
-                                          │
-┌──────────┐    wait     ┌──────────┐    │    ┌───────────┐
-│ Pending  │────────────►│  Active  │────┼───►│ Defeated  │
-└──────────┘  votingDelay└────┬─────┘    │    └───────────┘
-                              │          │         ▲
-                              │          │         │ quorum not met
-                              │ voting   │         │ OR more against
-                              │ period   │         │
-                              │          │         │
-                              ▼          │    ┌────┴────┐
-                         ┌──────────┐   │    │         │
-                         │Succeeded │───┘    │ Expired │
-                         └────┬─────┘        │         │
-                              │              └────▲────┘
-                              │ queue()           │
-                              ▼                   │ queue timeout
-                         ┌──────────┐             │
-                         │ Queued   │─────────────┘
-                         └────┬─────┘
-                              │ execute()
-                              │ after timelock delay
-                              ▼
-                         ┌──────────┐
-                         │ Executed │
-                         └──────────┘
-```
-
-### Step-by-Step Process
-
-#### 1. Delegation (Required First Step)
-
-Before participating in governance, token holders must delegate their voting power. This can be self-delegation or delegation to a representative:
-
-```solidity
-// Self-delegate to activate your own voting power
-repToken.delegate(myAddress);
-
-// Or delegate to a trusted representative
-repToken.delegate(representativeAddress);
-```
-
-**Why delegation?** The Governor framework uses checkpointed voting power to prevent flash loan attacks. Delegation triggers the checkpoint creation.
-
-#### 2. Proposal Creation
-
-Any member with tokens >= `proposalThreshold` can create a proposal:
-
-```solidity
-// Encode the action(s) to execute
-bytes memory calldata = abi.encodeWithSignature(
-    "transferETH(address,uint256)",
-    recipientAddress,
-    1 ether
-);
-
-// Create the proposal
-uint256 proposalId = dao.propose(
-    [registryAddress],    // Target contracts
-    [0],                  // ETH values to send
-    [calldata],           // Encoded function calls
-    "Transfer 1 ETH to contributor for Q4 work"
-);
-```
-
-A proposal can contain **multiple actions** that execute atomically:
-
-```solidity
-// Multiple actions in one proposal
-address[] memory targets = new address[](2);
-uint256[] memory values = new uint256[](2);
-bytes[] memory calldatas = new bytes[](2);
-
-// Action 1: Mint tokens
-targets[0] = repTokenAddress;
-values[0] = 0;
-calldatas[0] = abi.encodeWithSignature("mint(address,uint256)", recipient, 1000e18);
-
-// Action 2: Update registry
-targets[1] = registryAddress;
-values[1] = 0;
-calldatas[1] = abi.encodeWithSignature("editRegistry(string,string)", "contributor.bonus", "approved");
-
-uint256 proposalId = dao.propose(targets, values, calldatas, "Reward contributor");
-```
-
-#### 3. Voting Delay
-
-After creation, the proposal enters a waiting period (configurable, e.g., 1 minute to 7 days). This allows:
-
-- Token holders to see the proposal
-- Members to delegate if they haven't already
-- Discussion and deliberation
-
-#### 4. Voting Period
-
-Once the delay passes, voting opens. Members cast votes:
-
-```solidity
-// Vote in favor
-dao.castVote(proposalId, 1);  // 0 = Against, 1 = For, 2 = Abstain
-
-// Vote with reason (stored in event)
-dao.castVoteWithReason(proposalId, 1, "This contributor delivered excellent work");
-
-// Vote by signature (gasless voting)
-dao.castVoteBySig(proposalId, support, voter, signature);
-```
-
-**Vote weight** equals the voter's delegated voting power at the **proposal creation block** (snapshot).
-
-#### 5. Proposal Outcome
-
-When voting ends, the proposal state becomes:
-
-- **Succeeded**: More For than Against, and quorum met
-- **Defeated**: More Against than For, or quorum not met
-
-Quorum = `(totalSupply * quorumFraction) / 100` at proposal creation time.
-
-#### 6. Queue
-
-Successful proposals must be queued in the Timelock:
-
-```solidity
-// Anyone can queue a successful proposal
-dao.queue(targets, values, calldatas, descriptionHash);
-```
-
-The `descriptionHash` must match: `keccak256(bytes(description))`.
-
-#### 7. Execution Delay
-
-The proposal waits in the Timelock for the configured delay. This security window allows:
-
-- Community review of what will execute
-- Members to exit if they disagree with the outcome
-- Coordination of response to malicious proposals
-
-#### 8. Execute
-
-After the delay, anyone can execute:
-
-```solidity
-// Anyone can execute after the timelock delay
-dao.execute(targets, values, calldatas, descriptionHash);
-```
-
-The Timelock calls each target with its value and calldata.
-
-## Governance Parameters
-
-### Configuration at Deployment
+Constructor:
 
 ```solidity
 HomebaseDAO(
-    _token,           // RepToken address
-    _timelock,        // TimelockController address
-    name,             // DAO name (e.g., "Acme DAO")
-    minsDelay,        // Voting delay in minutes
-    minsVoting,       // Voting period in minutes
-    pThreshold,       // Proposal threshold (tokens needed to propose)
-    qvrm              // Quorum fraction (0-100, as percentage)
+    IVotes _token,                 // RepToken or WrappedRepToken
+    TimelockController _timelock,
+    string memory name,
+    uint48 minsDelay,              // voting delay, MINUTES (converted to seconds)
+    uint32 minsVoting,             // voting period, MINUTES (converted to seconds)
+    uint256 pThreshold,            // votes needed to propose (token base units)
+    uint8 qvrm                     // quorum numerator, out of 100
 )
 ```
 
-### Recommended Values
+**Clock.** Both token types use `CLOCK_MODE() = "mode=timestamp"`, so every snapshot, delay and period is in seconds of `block.timestamp`, not block numbers.
 
-| Parameter | Development | Production | Notes |
-|-----------|-------------|------------|-------|
-| Voting Delay | 1 minute | 1-2 days | Time to review proposal |
-| Voting Period | 5 minutes | 3-7 days | Time to cast votes |
-| Proposal Threshold | 0 | 1-5% of supply | Prevents spam |
-| Quorum Fraction | 4% | 4-20% | Minimum participation |
-| Execution Delay | 1 minute | 1-2 days | Security buffer |
+### Proposal lifecycle
 
-## RepToken: Governance Token
-
-RepToken is an ERC20Votes token with special features for On-Chain Jurisdiction.
-
-### Core Properties
-
-```solidity
-contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionData {
-    bool public immutable isTransferable;      // Can tokens be transferred?
-    address public admin;                       // Who can mint/burn?
-    address public economyAddress;              // Linked Economy contract
-}
 ```
+            propose()                    votingDelay elapses
+  ------------------------> Pending ---------------------------> Active
+                              |                                    |
+                    cancel()  |                     votingPeriod   |
+                (proposer,    v                       elapses      v
+                 Pending only) Canceled          +-----------------+-----------------+
+                                                 |                                   |
+                                     quorum met AND For > Against           otherwise
+                                                 v                                   v
+                                             Succeeded                           Defeated
+                                                 | queue()  (anyone)
+                                                 v
+                                               Queued
+                                                 | Timelock minDelay elapses, execute() (anyone)
+                                                 v
+                                              Executed
+```
+
+There is no `Expired` state in practice: the OZ `TimelockController` has no grace period, so a queued proposal stays executable indefinitely.
+
+1. **Delegate.** Voting power is `getVotes`, which only counts delegated balances. A holder must call `delegate(self)` or `delegate(rep)`. The exception is a RepToken with a `defaultDelegate` configured (see below), which auto-delegates new holders.
+2. **Propose.** `propose(targets, values, calldatas, description)`. The proposer needs `getVotes(proposer, now - 1) >= proposalThreshold`. Multiple actions in one proposal execute atomically.
+3. **Voting delay.** The snapshot timepoint is `proposal time + votingDelay`. Delegations made during the delay still count.
+4. **Vote.** `castVote`, `castVoteWithReason`, `castVoteWithReasonAndParams`, or `castVoteBySig`. Weight is the voter's votes at the snapshot. Delegation is one hop: a delegate cannot pass received votes on.
+5. **Outcome.** Succeeded if `For > Against` (ties fail) and `For + Abstain >= quorum`, where `quorum = totalSupplyAtSnapshot * qvrm / 100`.
+6. **Queue.** Anyone calls `queue(targets, values, calldatas, keccak256(bytes(description)))`.
+7. **Execute.** After the Timelock's `minDelay`, anyone calls `execute(...)` with the same arguments.
+
+### Timelock roles
+
+The factories deploy the Timelock with empty proposer and executor lists and the factory as temporary admin, then finalize:
+
+| Role | Holder after deployment |
+|---|---|
+| `PROPOSER_ROLE` | The Governor only |
+| `EXECUTOR_ROLE` | `address(0)`, i.e. anyone |
+| `CANCELLER_ROLE` | Nobody (it is only auto-granted to constructor proposers, and there are none) |
+| `DEFAULT_ADMIN_ROLE` | The Timelock itself (OZ default); the factory's grant is revoked |
+
+Consequences: role changes are possible, but only through a proposal executed by the Timelock. A queued operation cannot be cancelled by anyone, and the Governor's own `cancel` only works while a proposal is `Pending`.
+
+### Parameters by factory
+
+Voting delay and period are always minutes (the Governor converts). Timelock delay units differ by factory:
+
+| Factory | Voting delay / period / threshold / quorum | Timelock delay |
+|---|---|---|
+| `StandardFactory`, `StandardFactoryNonTransferable`, `StandardFactoryTransferable` | Last four entries of `initialAmounts` (appended after the member amounts) | `executionDelay`, passed straight through, seconds |
+| `StandardFactoryWrapped` | `governanceSettings[4]` | `executionDelay`, seconds |
+| `TrustlessFactory` | `GovParams`: note that the field named `timelockDelay` is used as the **voting delay** (minutes) | `deployInfrastructure(timelockDelayInMinutes, ...)`, minutes |
+
+## RepToken
+
+`RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionData`, 18 decimals, timestamp clock.
+
+### Authority
+
+Two addresses matter, and they are set differently:
+
+- `admin`: starts as the deployer (`RepTokenFactory`), handed to the calling top-level factory, then to the Timelock in finalization. `setAdmin` is admin-only and rejects `address(0)`.
+- `timelockAddress`: **immutable**, set in the constructor. Reward epoch functions (`startNewRewardEpoch`, `setDelegateShareBps`) check this address, not `admin`.
+
+| Function | Caller |
+|---|---|
+| `mint(to, amount)` | `admin` or an address in `minters` |
+| `burn(from, amount)` | `admin` only |
+| `setMinter`, `setDefaultDelegate`, `setAutoDelegateExempt` | `admin` or `timelockAddress` |
+| `setEconomyAddress` | `admin` or `timelockAddress`, once only |
+| `startNewRewardEpoch`, `setDelegateShareBps` | `timelockAddress` only |
+| `setAdmin` | `admin` only |
 
 ### Transferability
 
-RepTokens can be configured as:
+`isTransferable` is immutable. When false, `transfer` and `transferFrom` revert; minting and burning still work. `TrustlessFactory` always deploys non-transferable tokens; `StandardFactory` and `StandardFactoryNonTransferable` deploy non-transferable; `StandardFactoryTransferable` deploys transferable.
 
-**Non-Transferable (Default)**
-```solidity
-// Transfer functions revert
-function transfer(address to, uint256 value) public override returns (bool) {
-    if (!isTransferable) {
-        revert("RepToken: Reputation is non-transferable");
-    }
-    return super.transfer(to, value);
-}
-```
+### Minters
 
-Benefits:
-- Prevents vote-buying markets
-- Reputation must be earned, not purchased
-- Encourages long-term participation
+`minters[account]` lets a contract mint without being admin. It exists for satellites such as `CoinOffering` (mints to buyers up to its cap) and `AutonetRepClaim` (mints REP against Autonet earnings). Granting it is a governance action. See [autonet.md](autonet.md).
 
-**Transferable**
+### Default delegate
 
-Set `isTransferable = true` at deployment. Use when:
-- Token liquidity is desired
-- Staking/farming mechanisms planned
-- Open governance market preferred
+If `defaultDelegate != address(0)`, any account that receives tokens (mint or transfer) while it has no delegate is auto-delegated to `defaultDelegate` and `AutoDelegated` is emitted. It never fires for the default delegate itself, for accounts in `autoDelegateExempt` (inventory-holding contracts, so unsold float does not vote), or for accounts that already chose a delegate. A holder can always re-delegate; their choice is never overwritten. Disabled by default.
 
-### Reputation from Economic Activity
+### Reputation from the Economy
 
-In Economy DAOs, RepToken links to the Economy contract for reputation accrual:
+In Economy DAOs, `claimReputationFromEconomy()` reads the caller's cumulative earnings and spendings per token from `Economy.getUser`, takes the increase since the last claim, and mints:
 
 ```
-┌────────────────┐     complete work      ┌────────────────┐
-│   Contractor   │───────────────────────►│    Project     │
-└────────────────┘                        └───────┬────────┘
-                                                  │
-                                    updateEarnings(user, amount, token)
-                                                  │
-                                                  ▼
-                                          ┌───────────────┐
-                                          │    Economy    │
-                                          │               │
-                                          │ earnings[user]│
-                                          │   += amount   │
-                                          └───────┬───────┘
-                                                  │
-                                    claimReputationFromEconomy()
-                                                  │
-                                                  ▼
-                                          ┌───────────────┐
-                                          │   RepToken    │
-                                          │               │
-                                          │ _mint(user,   │
-                                          │  reputation)  │
-                                          └───────────────┘
+reputation = unclaimedAmount * parity / 1e18
+parity     = Registry["jurisdiction.parity.<lowercase token hex address>"]
 ```
 
-**Reputation Calculation:**
+Parity is an 18-decimal fixed-point multiplier (`1e18` = 1:1, and a 6-decimal token at 1:1 uses `1e30`). A missing or zero parity mints nothing for that token, but the claimed watermark still advances. See [registry-settings.md](registry-settings.md) and [economy.md](economy.md).
+
+### Reward epochs
+
+There is one reward pool per epoch. Each REP earns its share of the budget exactly once; delegation only moves a small cut from the holder to their delegate. The old split into passive-income and delegate-reward epochs no longer exists.
 
 ```solidity
-function _calculateReputation(address token, uint amount) internal view returns (uint256) {
-    // Lookup parity for this token in Registry
-    string memory parityKey = string.concat(
-        "jurisdiction.parity.",
-        Strings.toHexString(uint160(token))
-    );
-    string memory parityStr = Registry(registryAddress).getRegistryValue(parityKey);
+uint16 public constant MAX_DELEGATE_SHARE_BPS = 2500;  // 25%
+uint16 public delegateShareBps = 100;                   // 1% default
 
-    if (bytes(parityStr).length > 0) {
-        uint256 parity = Strings.parseUint(parityStr);
-        if (parity > 0) {
-            return amount * parity;  // Simple multiplier
-        }
-    }
-    return 0;  // No parity set = no reputation
-}
+function setDelegateShareBps(uint16 newShareBps) external;              // timelock only, <= 2500
+function startNewRewardEpoch(uint256 budget, address paymentToken) external;  // timelock only
+function rewardOf(uint256 epochId, address account) public view returns (uint256);
+function claimReward(uint256 epochId) external;
+function pastDelegatee(address account, uint256 timepoint) public view returns (address);
+function rewardPurpose(uint256 epochId, address paymentToken) public pure returns (bytes32);
+    // keccak256(abi.encodePacked("REWARD", epochId, paymentToken))
 ```
 
-**Example:**
-- User earns 100 USDC from a project
-- Registry has `jurisdiction.parity.0x123...` = "1" (1 rep per USDC)
-- User claims and receives 100 RepTokens
+**Starting.** `startNewRewardEpoch` increments `currentRewardEpoch`, records `{budget, paymentToken, startTimestamp, delegateShareBps}` (the share is frozen per epoch), and calls `Registry.earmarkFunds(rewardPurpose(...), budget, paymentToken)` in the same transaction. There is no separate earmark step; the call reverts if the Registry's unreserved balance of that token is below `budget`. `paymentToken` may be `Registry.NATIVE_TOKEN` (`0xEeee...EEeE`) for the native currency.
 
-### Admin Functions
-
-The admin (typically Timelock after deployment) can:
-
-```solidity
-// Mint tokens to a member
-function mint(address to, uint256 amount) public {
-    require(msg.sender == admin, "RepToken: Only admin can mint");
-    _mint(to, amount);
-}
-
-// Burn tokens from a member (e.g., for misconduct)
-function burn(address from, uint256 amount) public {
-    require(msg.sender == admin, "RepToken: Only admin can burn");
-    _burn(from, amount);
-}
-
-// Transfer admin role (one-time during setup)
-function setAdmin(address newAdmin) public override {
-    require(msg.sender == admin, "RepToken: Caller is not the admin");
-    admin = newAdmin;
-}
-```
-
-### Incentive Epochs
-
-RepToken supports two incentive mechanisms:
-
-#### Passive Income Epochs
-
-Reward all token holders proportionally:
-
-```solidity
-// DAO proposal to start epoch (must earmark funds in Registry first)
-repToken.startNewPassiveIncomeEpoch(budget, paymentToken);
-
-// Members claim their share
-repToken.claimPassiveIncome(epochId);
-```
-
-Share calculation: `(userBalance / totalSupply) * epochBudget`
-
-#### Delegate Reward Epochs
-
-Reward members who represent others:
-
-```solidity
-// Start epoch for delegates
-repToken.startNewDelegateRewardEpoch(budget, paymentToken);
-
-// Delegates claim their reward
-repToken.claimRepresentationReward(epochId);
-```
-
-Share calculation: `(delegatedVotes / totalSupply) * epochBudget`
-
-Where `delegatedVotes = totalVotingPower - ownBalance` (votes delegated TO them by others).
-
-## Registry: Treasury & Configuration
-
-The Registry contract serves two purposes:
-
-### 1. Treasury Management
-
-Holds and manages DAO assets:
-
-```solidity
-// Receive ETH
-receive() external payable;
-
-// Receive NFTs
-function onERC721Received(...) external returns (bytes4);
-
-// Transfer operations (Timelock only)
-function transferETH(address payable to, uint256 amount) external;
-function transferERC20(address token, address to, uint256 amount) external;
-function transferERC721(address token, address to, uint256 tokenId) external;
-```
-
-All transfer functions are protected by `_treasuryOps` modifier (Timelock only).
-
-### 2. Configuration Store
-
-Key-value store for DAO settings:
-
-```solidity
-// Set a single value
-function editRegistry(string memory key, string memory value) public;
-
-// Set multiple values
-function batchEditRegistry(string[] memory keys, string[] memory values) public;
-
-// Read a value
-function getRegistryValue(string memory key) public view returns (string memory);
-
-// Enumerate all
-function getAllKeys() public view returns (string[] memory);
-function getAllValues() public view returns (string[] memory);
-```
-
-Registry edits can be made by Timelock or the designated wrapper address.
-
-### 3. Earmarking System
-
-Reserve funds for specific purposes:
-
-```solidity
-// Reserve funds for a purpose
-function earmarkFunds(bytes32 purpose, uint256 amount, address tokenAddress) external;
-
-// Release reservation (funds still in treasury)
-function withdrawEarmarkedFunds(bytes32 purpose, uint256 amount) external;
-
-// Disburse to recipient (called by RepToken for epoch claims)
-function disburseEarmarked(
-    address recipient,
-    uint256 amount,
-    bytes32 purpose,
-    address tokenAddress
-) external;
-
-// Reclaim unclaimed epoch funds after grace period
-function reclaimEarmarkedFunds(
-    uint256 epochId,
-    address paymentToken,
-    bool isDelegateReward
-) external;
-```
-
-### Common Registry Keys
-
-| Key | Purpose | Example Value |
-|-----|---------|---------------|
-| `jurisdiction.parity.<tokenAddr>` | Reputation per token earned | "1" |
-| `benefits.claim.gracePeriod` | Seconds before unclaimed epochs can be reclaimed | "2592000" (30 days) |
-| `dao.name` | Human-readable DAO name | "Acme DAO" |
-| `dao.website` | DAO website URL | "https://acme.dao" |
-| `dao.description` | DAO description | "Building the future" |
-
-## TimelockController
-
-OpenZeppelin's standard timelock that enforces execution delays.
-
-### Role Configuration
-
-After deployment, roles are configured as:
-
-| Role | Granted To | Purpose |
-|------|------------|---------|
-| `PROPOSER_ROLE` | HomebaseDAO | Only DAO can propose to Timelock |
-| `EXECUTOR_ROLE` | address(0) | Anyone can execute after delay |
-| `ADMIN_ROLE` | Revoked | No one can change roles |
-
-### Security Properties
-
-1. **Execution delay**: Actions wait before executing
-2. **Immutable roles**: Admin role is revoked after setup
-3. **Transparent queue**: All pending actions visible on-chain
-
-## Voting Power Mechanics
-
-### Snapshot System
-
-Voting power is determined by token balance at proposal creation:
+**Computing.** All inputs are read at `snapshot = startTimestamp - 1`:
 
 ```
-Block 100: User has 100 tokens
-Block 101: Proposal created (snapshot at block 100)
-Block 102: User sells all tokens
-Block 103: Voting opens
-
-→ User can still vote with 100 tokens (snapshot power)
-→ New owner cannot vote (didn't hold at snapshot)
+s          = epoch.delegateShareBps
+balance    = past balance of account
+delegatee  = pastDelegatee(account, snapshot)
+weight     = balance                       if delegatee is 0 or account
+           = balance * (10000 - s) / 10000 otherwise
+delegatedIn = getPastVotes(account, snapshot) - (delegatee == account ? balance : 0)
+weight    += delegatedIn * s / 10000
+reward     = weight * budget / getPastTotalSupply(snapshot)
 ```
 
-This prevents:
-- Flash loan attacks
-- Last-minute vote manipulation
-- Token movement during voting
+Summed over all holders the weights equal total supply, so payouts never exceed the budget. Delegating to your own second wallet returns exactly what you would have had. `pastDelegatee` is backed by a per-account delegatee checkpoint trace written on every `_delegate` (including auto-delegation); balances use a separate `_balanceHistory` trace written in `_update`.
 
-### Delegation Mechanics
+**Claiming.** `claimReward(epochId)` marks `hasClaimedReward[epochId][caller]`, then calls `Registry.disburseEarmarked`, which pays ERC20 or native currency. Zero rewards revert.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      DELEGATION SCENARIOS                            │
-│                                                                      │
-│  Scenario 1: Self-Delegation                                         │
-│  ┌──────────┐                                                        │
-│  │  Alice   │ delegate(alice)                                        │
-│  │ 100 REP  │────────────────────► Alice has 100 voting power        │
-│  └──────────┘                                                        │
-│                                                                      │
-│  Scenario 2: Delegate to Representative                              │
-│  ┌──────────┐                      ┌──────────┐                      │
-│  │  Alice   │ delegate(bob)        │   Bob    │                      │
-│  │ 100 REP  │─────────────────────►│  50 REP  │                      │
-│  └──────────┘                      └──────────┘                      │
-│                                          │                           │
-│                          Bob has 150 voting power (50 own + 100 del) │
-│                          Alice has 0 voting power                    │
-│                                                                      │
-│  Scenario 3: Chain Delegation (NOT allowed)                          │
-│  Alice → Bob → Carol                                                 │
-│  ❌ Bob cannot re-delegate Alice's power to Carol                    │
-│  Only direct delegation is supported                                 │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+**Unclaimed funds.** After the next epoch has started and `benefits.claim.gracePeriod` seconds have passed since that start, the Timelock can call `Registry.reclaimEarmarkedFunds(epochId, paymentToken)` to release the remaining reservation back to the free treasury balance. The money never leaves the Registry; only the earmark is lifted.
 
-## Common Governance Operations
+`getRewardEpochStart(epochId)` is the only `IJurisdictionData` function and is what the Registry uses for that grace-period check.
 
-### Treasury Transfer
+## WrappedRepToken
 
-```solidity
-// Proposal to send ETH
-address[] memory targets = new address[](1);
-targets[0] = registryAddress;
+`ERC20 + ERC20Permit + ERC20Votes + ERC20Wrapper`, timestamp clock, decimals inherited from the underlying token. Holders call `depositFor` / `withdrawTo` to wrap and unwrap 1:1; wrapped balances are the voting power. `isTransferable` (immutable) blocks `transfer`/`transferFrom` only. It has an `admin` (set to the Timelock) but no mint, burn, epoch, Economy or Registry features, and `StandardFactoryWrapped` does not set the Registry's `jurisdictionAddress`. Reward epochs and the Economy reputation pull are therefore RepToken-only.
 
-uint256[] memory values = new uint256[](1);
-values[0] = 0;
+## Registry
 
-bytes[] memory calldatas = new bytes[](1);
-calldatas[0] = abi.encodeWithSignature(
-    "transferETH(address,uint256)",
-    recipientAddress,
-    1 ether
-);
+One contract per jurisdiction. `owner` is the Timelock after deployment.
 
-dao.propose(targets, values, calldatas, "Pay contractor for website redesign");
-```
+### Access
 
-### Token Minting
+| Modifier / check | Allowed callers | Functions |
+|---|---|---|
+| `_treasuryOps` | `owner` | `transferETH`, `transferERC20`, `transferERC721`, `setSpendCap`, `setWindowDuration`, `withdrawEarmarkedFunds`, `reclaimEarmarkedFunds` |
+| `_regedit` | `owner` or `wrapper` | `editRegistry`, `batchEditRegistry`, `setJurisdictionAddress` |
+| owner or `jurisdictionAddress` | | `earmarkFunds` |
+| `jurisdictionAddress` only | | `disburseEarmarked` |
+| `owner` | | `transferOwnership` |
 
-```solidity
-bytes memory calldata = abi.encodeWithSignature(
-    "mint(address,uint256)",
-    contributorAddress,
-    1000 * 10**18  // 1000 tokens
-);
+`wrapper` is fixed at construction: the factory address for the Standard factories, `address(0)` for `TrustlessFactory`. `jurisdictionAddress` is the RepToken.
 
-dao.propose(
-    [repTokenAddress],
-    [0],
-    [calldata],
-    "Mint 1000 REP to contributor for exceptional Q4 contributions"
-);
-```
+### Configuration store
 
-### Parameter Update
+`editRegistry(key, value)` (emits `RegistryUpdated`), `batchEditRegistry(keys, values)` (emits nothing), `getRegistryValue`, `getAllKeys`, `getAllValues`. Values are strings; consumers parse them. Keys in use are listed in [registry-settings.md](registry-settings.md).
 
-```solidity
-bytes memory calldata = abi.encodeWithSignature(
-    "editRegistry(string,string)",
-    "jurisdiction.parity.0x123...",
-    "2"  // Double the reputation per token
-);
+### Earmarks
 
-dao.propose(
-    [registryAddress],
-    [0],
-    [calldata],
-    "Increase USDC parity to 2x"
-);
-```
+Earmarks reserve real balance, per token:
 
-### Appeal Arbitration (Economy DAOs)
+- `earmarkedFunds[purpose]`, `earmarkToken[purpose]` (a purpose is bound to one token forever), `totalEarmarked[token]`.
+- `earmarkFunds` requires `balance(token) >= totalEarmarked[token] + amount`, so the same funds cannot be promised twice.
+- `transferETH` and `transferERC20` require `balance >= totalEarmarked[token] + amount`, so ordinary spending cannot touch reserved funds.
+- `withdrawEarmarkedFunds(purpose, amount)` (owner) releases a reservation without moving funds. It is not subject to the reward grace period, so governance can always release an epoch's earmark early.
+- `disburseEarmarked` pays from a reservation (ERC20 `transfer` or native `call`) and is `nonReentrant`.
 
-```solidity
-// Step 1: Create proposal to override arbitration
-bytes memory calldata = abi.encodeWithSignature(
-    "daoOverrule(uint256,string)",
-    75,  // 75% to contractor (overriding arbiter's 50%)
-    "QmHash..."  // IPFS hash of DAO's reasoning
-);
+### Spend cap
 
-uint256 proposalId = dao.propose(
-    [projectAddress],
-    [0],
-    [calldata],
-    "Override arbitration in Project X - contractor delivered more than arbiter credited"
-);
+A per-token fixed-window rate limit on outflows: `maxPerWindow[token]` (0 = unmetered, the default), `windowDuration` (default 7 days), `windowStart`, `spentInWindow`, `remainingInWindow(token)`. It meters `transferETH`, `transferERC20` and `disburseEarmarked` against the same per-token window; ERC721 transfers are not metered. Being fixed-window, up to 2x the cap can leave across a window boundary, so size the cap at half the tolerable burst.
 
-// Step 2: In the project, link the appeal
-project.appeal(proposalId, [projectAddress]);
-```
+## Debates
 
-## Security Best Practices
+`contracts/debates/` is independent of the Governor: a signalling tool that any `IVotes` + `IERC6372` token can use.
 
-### For DAO Operators
+- `DebatesFactory.createDebate(token, title, rootArgument, rootWeight)` deploys a `Debate` and indexes it globally and per token (`getDebates`, `getDebatesByToken`, `getDebateList*`).
+- A `Debate` snapshots at `token.clock() - 1`. Each address gets a budget equal to its past votes; staking weight on new arguments (`addArgument(parentId, PRO|CON, weight, content)`) or existing ones (`addWeight`) spends from it, and nothing is refunded.
+- `netScore = directWeight + sum(PRO children netScore) - sum(CON children netScore)`, recomputed up the tree on each change. `getDebateSentiment()` is the root's score.
+- Only the creator can `closeDebate()`. Nothing on-chain acts on the result.
 
-1. **Set appropriate thresholds**: Too low invites spam; too high excludes participation
-2. **Use meaningful delays**: Short delays for testing, longer (days) for production
-3. **Review proposals carefully**: All actions are irreversible once executed
-4. **Maintain quorum balance**: Too high causes gridlock; too low enables attacks
+## Common proposals
 
-### For Token Holders
+All are `dao.propose([target], [0], [calldata], description)`.
 
-1. **Always delegate**: Undelegated tokens have no voting power
-2. **Review before voting**: Read the proposal description and calldata
-3. **Use timelock window**: Exit before malicious proposals execute
-4. **Participate regularly**: Inactive accounts lose influence to active ones
+| Action | Target | Calldata |
+|---|---|---|
+| Pay from treasury | Registry | `transferERC20(token, to, amount)` or `transferETH(to, amount)` |
+| Mint / burn REP | RepToken | `mint(to, amount)` / `burn(from, amount)` |
+| Set a parity | Registry | `editRegistry("jurisdiction.parity.0x...", "1000000000000000000")` |
+| Start a reward epoch | RepToken | `startNewRewardEpoch(budget, token)` |
+| Change delegate share | RepToken | `setDelegateShareBps(bps)` |
+| Arm the spend cap | Registry | `setSpendCap(token, cap)` |
+| Grant a minter | RepToken | `setMinter(contract, true)` |
+| Economy parameter | Economy | `setPlatformFee(bps)` etc. (see [economy.md](economy.md)) |
+| Overrule arbitration | Project | `daoOverrule(percent, rulingHash)` (project must be in `Appeal`) |
+| Veto a project | Project | `daoVeto()` |
 
-### For Developers
+To overrule an arbiter, a member with at least `projectThreshold` votes first files the proposal, then calls `project.appeal(proposalId, targets)` while it is live; see [economy.md](economy.md).
 
-1. **Verify calldata**: Double-check encoded function calls
-2. **Test on devnet**: Run full proposal cycle before mainnet
-3. **Monitor events**: Track ProposalCreated, VoteCast, etc.
-4. **Handle failures**: Proposals can be defeated or expired
+## Known caveats
 
-## Further Reading
+- **Standard DAOs cannot run reward epochs.** All three `StandardFactory*` contracts pass `address(this)` (the factory) as the RepToken's `timelockAddress`. Because it is immutable, `startNewRewardEpoch` and `setDelegateShareBps` are permanently uncallable on those DAOs. Admin-gated functions still work because `admin` is moved to the real Timelock. `TrustlessFactory` passes the real Timelock and is unaffected.
+- **Reward-epoch events are not indexed.** The indexer does not listen to `NewRewardEpoch` or `RewardClaimed`; apps must read them from chain.
 
-- [Architecture](architecture.md) - System overview and contract relationships
-- [Trustless Economy](economy.md) - Marketplace and dispute resolution
-- [Technical Reference](technical-reference.md) - Complete API documentation
-- [OpenZeppelin Governor Guide](https://docs.openzeppelin.com/contracts/5.x/governance)
-- [ERC20Votes Standard](https://eips.ethereum.org/EIPS/eip-5805)
+## Further reading
+
+- [architecture.md](architecture.md): contract graph, deployment flow, indexer and apps
+- [economy.md](economy.md): projects, arbitration, appeals
+- [registry-settings.md](registry-settings.md): registry keys and Economy parameters
+- [technical-reference.md](technical-reference.md): full API
+- [autonet.md](autonet.md): Autonet satellites (minters, Coin Offering)
+- [deployments.md](deployments.md): live addresses
+- [OpenZeppelin Governor 5.x](https://docs.openzeppelin.com/contracts/5.x/governance)
