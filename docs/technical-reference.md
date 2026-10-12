@@ -103,7 +103,7 @@ constructor(address _owner, address _wrapper)
 | Function | Caller | Notes |
 |----------|--------|-------|
 | `editRegistry(string key, string value)` | `owner` or `wrapper` | Emits `RegistryUpdated` |
-| `batchEditRegistry(string[] keys, string[] values)` | `owner` or `wrapper` | No event |
+| `batchEditRegistry(string[] keys, string[] values)` | `owner` or `wrapper` | `RegistryUpdated` per key |
 | `getRegistryValue(string)`, `getAllKeys()`, `getAllValues()` | anyone | |
 | `setJurisdictionAddress(address)` | `owner` or `wrapper` | |
 | `transferOwnership(address)` | `owner` | |
@@ -111,7 +111,7 @@ constructor(address _owner, address _wrapper)
 | `transferERC20(address token, address to, uint256 amount)` | `owner` | `nonReentrant`, unreserved, metered |
 | `transferERC721(address token, address to, uint256 tokenId)` | `owner` | Unmetered |
 | `earmarkFunds(bytes32 purpose, uint256 amount, address token)` | `owner` or `jurisdictionAddress` | Cannot exceed unreserved balance; purpose bound to one token |
-| `withdrawEarmarkedFunds(bytes32 purpose, uint256 amount)` | `owner` | Releases the reservation (funds stay) |
+| `withdrawEarmarkedFunds(bytes32 purpose, uint256 amount)` | `owner` | Releases the reservation (funds stay); not for reward earmarks |
 | `disburseEarmarked(address recipient, uint256 amount, bytes32 purpose, address token)` | `jurisdictionAddress` | `nonReentrant`, metered |
 | `reclaimEarmarkedFunds(uint256 epochId, address paymentToken)` | `owner` | Requires `benefits.claim.gracePeriod` |
 | `setSpendCap(address token, uint256 cap)` | `owner` | `0` = unmetered (default) |
@@ -202,7 +202,7 @@ Stages: `Open, Pending, Ongoing, Dispute, Appealable, Appeal, Closed`. `Appeal` 
 | `withdrawAsContractor()` | contractor | Closed | Pays with fees |
 | `withdrawAsContributor()` | backer | Open, Pending, Closed | Full refund pre-signing; settlement once after close |
 | `reclaimArbitrationStake()` | contractor | Closed, fee not paid out | Emits `ArbitrationStakeReclaimed` |
-| `sweepOrphanedTokens(address)` | timelock | any | ERC20Project only; sends untracked balance to the Registry |
+| `sweepOrphanedTokens(address)` | timelock | any | ERC20Project only; sends the balance above `escrowed` to the Registry |
 | `spentBy(address) view`, `getProjectDetails() view` | anyone | | |
 
 Fees on every reputation-accruing payout (`_payWithFees`): platform fee to the Registry first, then author fee (contractor payouts only), then the net to the payee; author and payee earnings are recorded in the Economy. Arbiter payouts pay the platform fee but no author fee. If the arbiter never ruled, the fee goes to the Registry.
@@ -225,7 +225,7 @@ function deployDAOwithWrappedToken(DaoParamsWrapped memory params) public payabl
 
 - `initialAmounts` = member amounts followed by `[votingDelayMins, votingPeriodMins, proposalThreshold, quorumPercent]`.
 - `executionDelay` is the timelock min delay in **seconds**.
-- Finalization: `Registry.setJurisdictionAddress(token)`, token admin to timelock, Registry ownership to timelock, governor gets `PROPOSER_ROLE`, `EXECUTOR_ROLE` to `address(0)`, factory admin role revoked, then `batchEditRegistry` (allowed because the factory stays the Registry `wrapper`).
+- Finalization: `Registry.setJurisdictionAddress(token)`, token admin to timelock, Registry ownership to timelock, governor gets `PROPOSER_ROLE` and `CANCELLER_ROLE`, `EXECUTOR_ROLE` to `address(0)`, factory admin role revoked, then `batchEditRegistry` (allowed because the factory stays the Registry `wrapper`).
 - Event: `NewDaoCreated` (`DaoWrappedDeploymentInfo` for the wrapped factory).
 
 ### TrustlessFactory (three transactions)

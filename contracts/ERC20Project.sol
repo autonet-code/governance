@@ -46,6 +46,7 @@ contract ERC20Project is Initializable {
     bool public arbitrationFeePaidOut = false;
     bool public contractorReclaimedStake = false;
     mapping(address => bool) public contributorSettled; // withdrew after close
+    uint public escrowed; // `token` this project still owes someone; anything above it is orphaned
     
     address public daoTimelock;
     address public daoGovernor;
@@ -209,6 +210,7 @@ contract ERC20Project is Initializable {
         totalLocked += amount - immediateAmount;
         projectValue += amount;
 
+        escrowed += amount;
         token.safeTransferFrom(msg.sender, address(this), amount);
         emit SendFunds(msg.sender, amount, immediateBps);
     }
@@ -220,6 +222,7 @@ contract ERC20Project is Initializable {
         require(projectValue > 0, "Can't sign a contract with no funds in it.");
 
         arbitrationFee = (totalLocked * IGovernedEconomy(address(economy)).arbitrationFeeBps()) / 10000;
+        escrowed += arbitrationFee / 2;
         token.safeTransferFrom(msg.sender, address(this), arbitrationFee / 2);
 
         stage = Stage.Ongoing;
@@ -244,18 +247,23 @@ contract ERC20Project is Initializable {
         uint net = remainder - authorFee;
 
         if (platformFee > 0) {
-            token.safeTransfer(governedEconomy.registryAddress(), platformFee);
+            _send(governedEconomy.registryAddress(), platformFee);
         }
         if (authorFee > 0) {
             economy.updateEarnings(author, authorFee, address(token));
-            token.safeTransfer(author, authorFee);
+            _send(author, authorFee);
             emit AuthorPaid(author, authorFee);
         }
         if (net > 0) {
             economy.updateEarnings(payee, net, address(token));
-            token.safeTransfer(payee, net);
+            _send(payee, net);
         }
         return net;
+    }
+
+    function _send(address to, uint amount) private {
+        escrowed -= amount;
+        token.safeTransfer(to, amount);
     }
 
     function _payContractor(uint amount) private returns (uint) {
@@ -410,7 +418,7 @@ contract ERC20Project is Initializable {
         } else {
             // Arbiter didn't rule - forfeit fee to DAO treasury
             address registry = IGovernedEconomy(address(economy)).registryAddress();
-            token.safeTransfer(registry, arbitrationFee);
+            _send(registry, arbitrationFee);
         }
         emit ProjectClosed(msg.sender);
     }
@@ -473,7 +481,7 @@ contract ERC20Project is Initializable {
             exitAmount = _closedExit(msg.sender);
         }
 
-        if (exitAmount > 0) token.safeTransfer(msg.sender, exitAmount);
+        if (exitAmount > 0) _send(msg.sender, exitAmount);
         emit ContributorWithdrawn(msg.sender, exitAmount);
     }
     
@@ -485,7 +493,7 @@ contract ERC20Project is Initializable {
 
         contractorReclaimedStake = true;
         uint stakeAmount = arbitrationFee / 2;
-        token.safeTransfer(contractor, stakeAmount);
+        _send(contractor, stakeAmount);
         emit ArbitrationStakeReclaimed(contractor, stakeAmount);
     }
     
@@ -501,16 +509,7 @@ contract ERC20Project is Initializable {
         require(msg.sender == daoTimelock, "Only the DAO Timelock can sweep tokens.");
         IERC20 sweepToken = IERC20(tokenAddress);
         uint256 totalBalance = sweepToken.balanceOf(address(this));
-        uint256 trackedBalance = (tokenAddress == address(token)) ? projectValue : 0;
-
-        if (tokenAddress == address(token)) {
-            // Only contractor stakes half the arbitration fee (after signing)
-            if (stage == Stage.Ongoing || stage == Stage.Dispute || stage == Stage.Appealable || stage == Stage.Appeal) {
-                 if (!arbitrationFeePaidOut) {
-                    trackedBalance += arbitrationFee / 2; // Only contractor's stake
-                 }
-            }
-        }
+        uint256 trackedBalance = (tokenAddress == address(token)) ? escrowed : 0;
 
         if (totalBalance > trackedBalance) {
             uint256 orphanedAmount = totalBalance - trackedBalance;

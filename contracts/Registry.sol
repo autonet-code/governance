@@ -22,6 +22,8 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
     // by ordinary transfers. NATIVE_TOKEN stands for the chain's native currency.
     mapping(bytes32 => address) public earmarkToken;
     mapping(address => uint256) public totalEarmarked;
+    // Purposes earmarked by the jurisdiction (reward epochs); see withdrawEarmarkedFunds.
+    mapping(bytes32 => bool) public rewardEarmark;
 
     // ---------------------------------------------------------------------
     // TREASURY-SPEND GUARD (rolling-window rate limit)
@@ -236,6 +238,7 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
     }
 
     function batchEditRegistry(string[] memory newKeys, string[] memory values) public _regedit {
+        require(newKeys.length == values.length, "Registry: Length mismatch");
         for (uint256 i = 0; i < newKeys.length; i++) {
             string memory key = newKeys[i];
             string memory value = values[i];
@@ -243,6 +246,7 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
                 keys.push(key);
             }
             reg[key] = value;
+            emit RegistryUpdated(key, value);
         }
     }
 
@@ -288,12 +292,15 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
         require(existing == address(0) || existing == tokenAddress, "Registry: Purpose bound to another token");
         require(_balanceOf(tokenAddress) >= totalEarmarked[tokenAddress] + amount, "Cannot earmark more than available balance");
         earmarkToken[purpose] = tokenAddress;
+        if (msg.sender == jurisdictionAddress) rewardEarmark[purpose] = true;
         earmarkedFunds[purpose] += amount;
         totalEarmarked[tokenAddress] += amount;
         emit FundsEarmarked(purpose, amount);
     }
 
+    // Reward epoch budgets can only come back through reclaimEarmarkedFunds, after the claim grace period.
     function withdrawEarmarkedFunds(bytes32 purpose, uint256 amount) external _treasuryOps {
+        require(!rewardEarmark[purpose], "Registry: Reward earmarks are reclaimed after the grace period");
         require(earmarkedFunds[purpose] >= amount, "Registry: Cannot withdraw more than earmarked");
         _release(purpose, amount);
         emit EarmarkedFundsWithdrawn(purpose, amount);

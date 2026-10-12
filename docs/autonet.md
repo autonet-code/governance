@@ -17,7 +17,7 @@ Related: [architecture.md](architecture.md), [governance.md](governance.md), [re
 | `CapabilityScorecard` | Per-module capability scores and training reward multipliers | **Experimental.** Unit tests only, no deploy script |
 | `EvolutionProposal` | Stake-to-propose network improvements, evaluated by RPB nodes | **Experimental.** Unit tests only (against a permissive mock registry), no deploy script |
 
-> `scripts/deploy-autonet-jurisdiction.js` still deploys `ReputationMirror` in its genesis step. Deploy `AutonetRepClaim` with `scripts/deploy-autonet-rep-claim.js` and swap the minter grant by proposal (see [Minter swap](#minter-swap-mirror-to-claim)).
+> `scripts/deploy-autonet-jurisdiction.js` deploys `AutonetRepClaim` (empty genesis seed) in its genesis step and prints the `setMinter` calldata for the grant proposal. Jurisdictions that already granted a mirror swap the grant by proposal (see [Minter swap](#minter-swap-mirror-to-claim)).
 
 ## Parity: one registry key, one formula
 

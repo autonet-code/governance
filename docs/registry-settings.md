@@ -88,4 +88,4 @@ Calldata: batchEditRegistry(
 | Contract | Event |
 |----------|-------|
 | Economy | `PlatformFeeSet`, `AuthorFeeSet`, `ArbitrationFeeSet`, `CoolingOffPeriodSet`, `BackersVoteQuorumSet`, `ProjectThresholdSet`, `AppealPeriodSet`, `MaxImmediateBpsSet`, `DaoAddressesSet`, `AdminTransferred` |
-| Registry | `RegistryUpdated(key, value)` from `editRegistry` only. `batchEditRegistry` emits nothing, so indexers must read batched keys from the transaction or the factory's `NewDaoCreated` event |
+| Registry | `RegistryUpdated(key, value)` from `editRegistry` and once per key from `batchEditRegistry` |

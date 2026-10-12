@@ -83,7 +83,7 @@ The factories deploy the Timelock with empty proposer and executor lists and the
 |---|---|
 | `PROPOSER_ROLE` | The Governor only |
 | `EXECUTOR_ROLE` | `address(0)`, i.e. anyone |
-| `CANCELLER_ROLE` | Nobody (it is only auto-granted to constructor proposers, and there are none) |
+| `CANCELLER_ROLE` | The governor (standard OZ wiring). The public `cancel` only works while a proposal is Pending, so no one can stop a queued operation; the timelock administers itself, so the DAO can grant this role to a guardian by proposal |
 | `DEFAULT_ADMIN_ROLE` | The Timelock itself (OZ default); the factory's grant is revoked |
 
 Consequences: role changes are possible, but only through a proposal executed by the Timelock. A queued operation cannot be cancelled by anyone, and the Governor's own `cancel` only works while a proposal is `Pending`.
@@ -203,7 +203,7 @@ One contract per jurisdiction. `owner` is the Timelock after deployment.
 
 ### Configuration store
 
-`editRegistry(key, value)` (emits `RegistryUpdated`), `batchEditRegistry(keys, values)` (emits nothing), `getRegistryValue`, `getAllKeys`, `getAllValues`. Values are strings; consumers parse them. Keys in use are listed in [registry-settings.md](registry-settings.md).
+`editRegistry(key, value)` (emits `RegistryUpdated`), `batchEditRegistry(keys, values)` (emits `RegistryUpdated` per key; arrays must match in length), `getRegistryValue`, `getAllKeys`, `getAllValues`. Values are strings; consumers parse them. Keys in use are listed in [registry-settings.md](registry-settings.md).
 
 ### Earmarks
 
@@ -212,7 +212,7 @@ Earmarks reserve real balance, per token:
 - `earmarkedFunds[purpose]`, `earmarkToken[purpose]` (a purpose is bound to one token forever), `totalEarmarked[token]`.
 - `earmarkFunds` requires `balance(token) >= totalEarmarked[token] + amount`, so the same funds cannot be promised twice.
 - `transferETH` and `transferERC20` require `balance >= totalEarmarked[token] + amount`, so ordinary spending cannot touch reserved funds.
-- `withdrawEarmarkedFunds(purpose, amount)` (owner) releases a reservation without moving funds. It is not subject to the reward grace period, so governance can always release an epoch's earmark early.
+- `withdrawEarmarkedFunds(purpose, amount)` (owner) releases a reservation without moving funds. It refuses purposes the jurisdiction earmarked (reward epochs, tracked in `rewardEarmark`); those only come back through `reclaimEarmarkedFunds` after the grace period, so members always get their full claim window.
 - `disburseEarmarked` pays from a reservation (ERC20 `transfer` or native `call`) and is `nonReentrant`.
 
 ### Spend cap

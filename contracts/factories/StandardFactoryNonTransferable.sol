@@ -214,6 +214,7 @@ contract StandardFactoryNonTransferable {
 
         // Grant roles to DAO
         timelockController.grantRole(timelockController.PROPOSER_ROLE(), dao);
+        timelockController.grantRole(timelockController.CANCELLER_ROLE(), dao);
         timelockController.grantRole(timelockController.EXECUTOR_ROLE(), address(0)); // Anyone can execute
 
         // Revoke factory's admin role

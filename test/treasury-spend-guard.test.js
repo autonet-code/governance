@@ -207,4 +207,29 @@ describe("Registry treasury-spend guard (rolling-window cap)", function () {
             expect(await registry.spentInWindow(tokenAddr)).to.equal(CAP);
         });
     });
+
+    describe("earmarks and registry edits", function () {
+        it("keeps jurisdiction reward earmarks out of withdrawEarmarkedFunds", async function () {
+            const tokenAddr = await token.getAddress();
+            await registry.connect(owner).setJurisdictionAddress(jurisdiction.address);
+            const reward = ethers.id("REWARD-1");
+            await registry.connect(jurisdiction).earmarkFunds(reward, CAP, tokenAddr);
+            await expect(registry.connect(owner).withdrawEarmarkedFunds(reward, CAP))
+                .to.be.revertedWith("Registry: Reward earmarks are reclaimed after the grace period");
+
+            // The DAO's own earmarks can still be released
+            const own = ethers.id("OWN");
+            await registry.connect(owner).earmarkFunds(own, CAP, tokenAddr);
+            await registry.connect(owner).withdrawEarmarkedFunds(own, CAP);
+            expect(await registry.earmarkedFunds(own)).to.equal(0);
+        });
+
+        it("emits RegistryUpdated for every key in a batch edit", async function () {
+            await expect(registry.connect(owner).batchEditRegistry(["a", "b"], ["1", "2"]))
+                .to.emit(registry, "RegistryUpdated").withArgs("a", "1")
+                .and.to.emit(registry, "RegistryUpdated").withArgs("b", "2");
+            await expect(registry.connect(owner).batchEditRegistry(["a"], []))
+                .to.be.revertedWith("Registry: Length mismatch");
+        });
+    });
 });

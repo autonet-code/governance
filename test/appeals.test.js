@@ -226,6 +226,59 @@ describe("Appeals and Advanced Fund Handling", function () {
             expect(await testToken.balanceOf(projectAddress)).to.equal(projectValue + contractorStake);
             expect(await project.projectValue()).to.equal(projectValue); // Unchanged
         });
+
+        it("still sweeps orphaned tokens after payouts have left the project", async function() {
+            const tx = await economy.connect(author).createERC20Project(
+                "Sweep after payout", contractor.address, arbiter.address, "t", "r", "d",
+                await testToken.getAddress()
+            );
+            const receipt = await tx.wait();
+            const projectAddress = receipt.logs.find(log => log.eventName === 'NewProject').args.contractAddress;
+            const project = await ethers.getContractAt("ERC20Project", projectAddress);
+
+            // 20% immediate, released to the contractor at signing
+            const fundingAmount = ethers.parseEther("1000");
+            await testToken.connect(user1).approve(projectAddress, fundingAmount);
+            await project.connect(user1).sendFundsWithImmediate(fundingAmount, 2000);
+            await testToken.connect(contractor).approve(projectAddress, fundingAmount);
+            await passCoolingOff(project);
+            await project.connect(contractor).signContract();
+
+            const owed = await project.escrowed();
+            expect(await testToken.balanceOf(projectAddress)).to.equal(owed);
+
+            const orphanedAmount = ethers.parseEther("7");
+            await testToken.connect(user1).transfer(projectAddress, orphanedAmount);
+            const registryBefore = await testToken.balanceOf(registry.address);
+            await project.connect(timelock).sweepOrphanedTokens(await testToken.getAddress());
+            expect(await testToken.balanceOf(registry.address)).to.equal(registryBefore + orphanedAmount);
+            expect(await testToken.balanceOf(projectAddress)).to.equal(owed);
+
+            // Everything owed can still be paid out
+            await project.connect(user1).voteToReleasePayment();
+            await project.connect(contractor).withdrawAsContractor();
+            await project.connect(contractor).reclaimArbitrationStake();
+            expect(await project.escrowed()).to.equal(0);
+            expect(await testToken.balanceOf(projectAddress)).to.equal(0);
+        });
+
+        it("refunds a contractor who sends more than the stake when signing", async function() {
+            const tx = await economy.connect(author).createProject(
+                "Overpay", contractor.address, arbiter.address, "t", "r", "d"
+            );
+            const receipt = await tx.wait();
+            const projectAddress = receipt.logs.find(log => log.eventName === 'NewProject').args.contractAddress;
+            const project = await ethers.getContractAt("NativeProject", projectAddress);
+
+            const fundingAmount = ethers.parseEther("2");
+            await project.connect(user1).sendFunds({ value: fundingAmount });
+            await passCoolingOff(project);
+
+            const stake = (fundingAmount * BigInt(ARBITRATION_FEE_BPS)) / 10000n / 2n;
+            const overpay = ethers.parseEther("1");
+            await expect(project.connect(contractor).signContract({ value: stake + overpay }))
+                .to.changeEtherBalances([contractor, project], [-stake, stake]);
+        });
     });
 });
 // appeals.test.js

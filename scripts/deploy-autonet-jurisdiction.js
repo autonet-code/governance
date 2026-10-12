@@ -5,13 +5,13 @@
  * from this suite — ATN lives on the external autonet Substrate contract, and
  * this script never deploys a local ATN token. The jurisdiction's Autonet
  * integration surface is the genesis satellites: AutonetVault (sells Substrate
- * ATN for whitelisted ERC20s) and ReputationMirror (substrate reputation ->
- * owner RepToken).
+ * ATN for whitelisted ERC20s) and AutonetRepClaim (REP for ATN earned on
+ * the Substrate).
  *
  * This script performs the full deployment flow:
  *   1. Deploy TrustlessFactory + sub-factories (if not already deployed)
  *   2. 3-step DAO deployment (Infrastructure → DAOToken → Configure & Finalize)
- *   3. Genesis satellites (AutonetVault + ReputationMirror) — see the GENESIS
+ *   3. Genesis satellites (AutonetVault + AutonetRepClaim) — see the GENESIS
  *      block below for the PREDICT_VAULT / RESUME cross-repo choreography
  *
  * Usage:
@@ -131,7 +131,7 @@ function findEvent(receipt, contract, eventName) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GENESIS — AutonetVault + ReputationMirror + cross-repo choreography
+// GENESIS — AutonetVault + AutonetRepClaim + cross-repo choreography
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // The full genesis is a TWO-RUN flow because of a circular address dependency:
@@ -146,7 +146,7 @@ function findEvent(receipt, contract, eventName) {
 //   autonet repo:                       deploy Substrate with
 //                                       VAULT_MINTER=<predicted>
 //   run 3 (RESUME=1 SUBSTRATE_ADDRESS=0x.. [EXPECTED_VAULT=..]):
-//                                       vault (asserted) + mirror [phase 2]
+//                                       vault (asserted) + claim  [phase 2]
 //
 // NONCE CAVEAT: between PREDICT_VAULT and RESUME, the deployer account must
 // send NO transactions — the vault MUST be the next CREATE from that account.
@@ -154,8 +154,6 @@ function findEvent(receipt, contract, eventName) {
 // For local/test networks where the Substrate stand-in does not gate the
 // minter, a single fresh run with SUBSTRATE_ADDRESS (+DEPLOY_VAULT=1) does
 // everything in one go (the prediction step is unnecessary there).
-
-const MIRROR_PERIOD = process.env.MIRROR_PERIOD || "604800"; // 1 week default
 
 function jurisdictionJsonPath(network) {
   return path.join(__dirname, "..", "deployments",
@@ -192,11 +190,11 @@ async function predictVault(deployer, network) {
 }
 
 // Deploy the genesis satellites: AutonetVault first (so the PREDICT_VAULT
-// prediction holds on a RESUME run), then ReputationMirror (needs the external
+// prediction holds on a RESUME run), then AutonetRepClaim (needs the external
 // Substrate address). Returns addresses + the timelock grant calldata.
 async function deployGenesisSatellites(deployer, params) {
   const { substrateAddr, atnAddr, registryAddr, timelockAddr, repTokenAddr } = params;
-  const out = { vault: null, mirror: null };
+  const out = { vault: null, repClaim: null };
 
   // ── AutonetVault ──────────────────────────────────────────────────────────
   const nonce = await ethers.provider.getTransactionCount(deployer.address);
@@ -221,27 +219,26 @@ async function deployGenesisSatellites(deployer, params) {
   console.log(`    admin (timelock):  ${timelockAddr}`);
   out.vault = { address: vaultAddr, atn: atnAddr };
 
-  // ── ReputationMirror ──────────────────────────────────────────────────────
+  // ── AutonetRepClaim ───────────────────────────────────────────────────────
+  // Mints REP to agents 1:1 for ATN they earned on the Substrate. Replaces the
+  // retired ReputationMirror. Deployed with an empty genesis seed, so the minter
+  // grant can follow (see scripts/deploy-autonet-rep-claim.js).
   if (substrateAddr) {
-    const Mirror = await ethers.getContractFactory("ReputationMirror");
-    const mirror = await Mirror.deploy(substrateAddr, repTokenAddr, MIRROR_PERIOD);
-    await mirror.waitForDeployment();
-    const mirrorAddr = await mirror.getAddress();
-    console.log(`  ReputationMirror:  ${mirrorAddr}`);
-    console.log(`    substrate: ${substrateAddr}, period: ${MIRROR_PERIOD}s`);
+    const Claim = await ethers.getContractFactory("AutonetRepClaim");
+    const claim = await Claim.deploy(substrateAddr, repTokenAddr, [], []);
+    await claim.waitForDeployment();
+    const claimAddr = await claim.getAddress();
+    console.log(`  AutonetRepClaim:   ${claimAddr}`);
+    console.log(`    substrate: ${substrateAddr}`);
 
-    // The RepToken.setMinter(mirror, true) grant CANNOT be executed by this
-    // deployer at ANY point in the factory flow: RepToken.admin is set to
-    // RepTokenFactory at construction, handed to TrustlessFactory in
-    // deployDAOToken, and to the Timelock in configureAndFinalize — the EOA
-    // never holds it, and there is no pre-finalize window. Print the calldata
-    // for a governance proposal (same pattern as deploy-reputation-mirror.js).
+    // RepToken.admin goes RepTokenFactory -> TrustlessFactory -> Timelock and
+    // never the deployer, so the minter grant is a governance proposal.
     const rep = await ethers.getContractAt("RepToken", repTokenAddr);
     const grantCalldata = rep.interface.encodeFunctionData(
-      "setMinter", [mirrorAddr, true]);
-    out.mirror = { address: mirrorAddr, grantCalldata };
+      "setMinter", [claimAddr, true]);
+    out.repClaim = { address: claimAddr, grantCalldata };
   } else {
-    console.log("  ReputationMirror:  SKIPPED (set SUBSTRATE_ADDRESS to deploy it)");
+    console.log("  AutonetRepClaim:   SKIPPED (set SUBSTRATE_ADDRESS to deploy it)");
   }
   return out;
 }
@@ -270,7 +267,7 @@ async function printParityCalldata(registryAddr) {
 // The ordered cross-repo genesis choreography. Printed at the end of every run
 // so the operator always sees where they are and what remains.
 function printGenesisChecklist(ctx) {
-  const { registryAddr, timelockAddr, repTokenAddr, vault, mirror, substrateAddr } = ctx;
+  const { registryAddr, timelockAddr, repTokenAddr, vault, repClaim, substrateAddr } = ctx;
   const done = (cond) => (cond ? "[DONE]" : "[TODO]");
   console.log("╔══════════════════════════════════════════════════════════╗");
   console.log("║   AUTONET GENESIS — CROSS-REPO CHOREOGRAPHY (in order)   ║");
@@ -297,7 +294,7 @@ function printGenesisChecklist(ctx) {
        RESUME=1 SUBSTRATE_ADDRESS=<substrate> EXPECTED_VAULT=<predicted> \\
        npx hardhat run scripts/deploy-autonet-jurisdiction.js --network <net>
        ${vault ? `AutonetVault:     ${vault.address}` : ""}
-       ${mirror ? `ReputationMirror: ${mirror.address}` : ""}
+       ${repClaim ? `AutonetRepClaim:  ${repClaim.address}` : ""}
 
  5. [AUTONET REPO] Deploy CharterAnchor governed by THIS jurisdiction.
        CharterAnchor.governor is an IMMUTABLE constructor arg with NO transfer
@@ -308,11 +305,11 @@ function printGenesisChecklist(ctx) {
        Then anchor charter v1 via a DAO proposal:
          target=CharterAnchor, calldata=anchorCharter(<sha256 hash>, <uri>).
 
- 6. ${mirror ? "[TODO]" : "[TODO after step 4]"} [DAO GOVERNANCE] Grant the mirror mint rights (proposal -> queue -> execute):
+ 6. ${repClaim ? "[TODO]" : "[TODO after step 4]"} [DAO GOVERNANCE] Grant the rep claim mint rights (proposal -> queue -> execute):
        Target : ${repTokenAddr}
        Value  : 0
-       Calldata (RepToken.setMinter(mirror, true)):
-       ${mirror ? mirror.grantCalldata : "<printed by the RESUME run>"}
+       Calldata (RepToken.setMinter(repClaim, true)):
+       ${repClaim ? repClaim.grantCalldata : "<printed by the RESUME run>"}
        (Not executable by the deployer at any point: RepToken.admin goes
         RepTokenFactory -> TrustlessFactory -> Timelock, never the EOA.)
 
@@ -323,11 +320,11 @@ function printGenesisChecklist(ctx) {
        adjustment into the value (1 USDC(6d)->1 ATN(6d): 1e18; 1 DAI(18d)->1 ATN(6d): 1e6).
 
  After 1-7 the jurisdiction is fully wired: vault sells ATN for whitelisted
- tokens (payment -> Registry treasury, ATN minted on Substrate), mirror turns
- agent reputation into owner RepToken, charter is anchored under DAO control.`);
+ tokens (payment -> Registry treasury, ATN minted on Substrate), rep claim turns
+ earned ATN into agent RepToken, charter is anchored under DAO control.`);
 }
 
-// RESUME=1 — phase 2: load the phase-1 deployment and deploy vault + mirror.
+// RESUME=1 — phase 2: load the phase-1 deployment and deploy vault + rep claim.
 async function resumeGenesis(deployer, network) {
   const substrateAddr = process.env.SUBSTRATE_ADDRESS;
   if (!substrateAddr) {
@@ -336,7 +333,7 @@ async function resumeGenesis(deployer, network) {
   const info = loadJurisdiction(network);
   const { registry, timelock, repToken } = info.dao;
 
-  console.log("=== GENESIS RESUME (phase 2): AutonetVault + ReputationMirror ===");
+  console.log("=== GENESIS RESUME (phase 2): AutonetVault + AutonetRepClaim ===");
   console.log(`  jurisdiction: ${info.jurisdiction} (${network.name})`);
   const sat = await deployGenesisSatellites(deployer, {
     substrateAddr,
@@ -348,12 +345,8 @@ async function resumeGenesis(deployer, network) {
 
   info.substrate = substrateAddr;
   info.vault = { autonetVault: sat.vault.address, atn: substrateAddr };
-  if (sat.mirror) {
-    info.mirror = {
-      reputationMirror: sat.mirror.address,
-      period: MIRROR_PERIOD,
-      substrate: substrateAddr,
-    };
+  if (sat.repClaim) {
+    info.repClaim = { autonetRepClaim: sat.repClaim.address, substrate: substrateAddr };
   }
   fs.writeFileSync(jurisdictionJsonPath(network), JSON.stringify(info, null, 2));
   console.log(`  Deployment JSON updated: ${jurisdictionJsonPath(network)}`);
@@ -364,7 +357,7 @@ async function resumeGenesis(deployer, network) {
     timelockAddr: timelock,
     repTokenAddr: repToken,
     vault: sat.vault,
-    mirror: sat.mirror,
+    repClaim: sat.repClaim,
     substrateAddr,
   });
 }
@@ -641,7 +634,7 @@ async function main() {
   console.log();
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 4 (optional): Genesis satellites — AutonetVault + ReputationMirror
+  // STEP 4 (optional): Genesis satellites — AutonetVault + AutonetRepClaim
   // ═══════════════════════════════════════════════════════════════════════════
   //
   // The jurisdiction has NO local ATN token (Autonet.sol was deleted from the
@@ -650,7 +643,7 @@ async function main() {
   //
   // SUBSTRATE_ADDRESS=0x..— the external autonet Substrate. The vault mints on
   //                         it (IAutonetATN.mintFromVault) and the
-  //                         ReputationMirror reads reputation from it.
+  //                         AutonetRepClaim reads agent earnings from it.
   // DEPLOY_VAULT=1        — attach an AutonetVault (CoinOffering-shaped router:
   //                         sells Substrate ATN for registry-whitelisted ERC20s,
   //                         payment -> Registry treasury). Admin = timelock.
@@ -662,9 +655,9 @@ async function main() {
 
   const SUBSTRATE_ADDRESS = process.env.SUBSTRATE_ADDRESS || null;
   // (DEPLOY_VAULT=1 without SUBSTRATE_ADDRESS already failed fast at the top of main.)
-  let satellites = { vault: null, mirror: null };
+  let satellites = { vault: null, repClaim: null };
   if (SUBSTRATE_ADDRESS) {
-    console.log("Step 4: Deploying genesis satellites (vault + mirror)...");
+    console.log("Step 4: Deploying genesis satellites (vault + rep claim)...");
     satellites = await deployGenesisSatellites(deployer, {
       substrateAddr: SUBSTRATE_ADDRESS,
       atnAddr: SUBSTRATE_ADDRESS, // the vault mints on the external Substrate
@@ -699,12 +692,8 @@ async function main() {
     vault: satellites.vault
       ? { autonetVault: satellites.vault.address, atn: satellites.vault.atn }
       : null,
-    mirror: satellites.mirror
-      ? {
-          reputationMirror: satellites.mirror.address,
-          period: MIRROR_PERIOD,
-          substrate: SUBSTRATE_ADDRESS,
-        }
+    repClaim: satellites.repClaim
+      ? { autonetRepClaim: satellites.repClaim.address, substrate: SUBSTRATE_ADDRESS }
       : null,
   };
 
@@ -741,7 +730,7 @@ async function main() {
     timelockAddr,
     repTokenAddr,
     vault: satellites.vault,
-    mirror: satellites.mirror,
+    repClaim: satellites.repClaim,
     substrateAddr: SUBSTRATE_ADDRESS,
   });
 }

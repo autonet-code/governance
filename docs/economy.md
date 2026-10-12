@@ -50,7 +50,7 @@ If the contractor and arbiter are both passed to `createProject`, the project st
 | `setParties(contractor, arbiter, termsHash)` | Author | Open | Sets parties, starts cooling-off, moves to Pending |
 | `sendFunds` / `sendFundsWithImmediate(bps)` | Anyone | Open, Pending | Adds funds; `bps <= maxImmediateBps` is paid out at signing (see [immediate-release.md](immediate-release.md)). Native: `msg.value`, also plain transfers via `receive()`. ERC20: `(amount)` / `(amount, bps)`, pulled with `safeTransferFrom` |
 | `withdrawAsContributor()` | Backer | Open, Pending | Full refund of everything contributed |
-| `signContract()` | Contractor | Pending, after cooling-off, `projectValue > 0` | Fixes the arbitration fee, takes the contractor's half as stake, pays out the immediate portion, moves to Ongoing |
+| `signContract()` | Contractor | Pending, after cooling-off, `projectValue > 0` | Fixes the arbitration fee, takes the contractor's half as stake (NativeProject refunds anything sent above it), pays out the immediate portion, moves to Ongoing |
 | `voteToReleasePayment()` / `voteToDispute()` | Backer with locked funds | Ongoing | Weight = backer's locked amount; switching sides moves the weight. Closes or disputes when quorum is reached |
 | `disputeAsContractor()` | Contractor | Ongoing | Moves to Dispute |
 | `reimburse()` | Contractor | Ongoing | Closes with 0% to contractor (backers get locked funds back) |
@@ -63,7 +63,7 @@ If the contractor and arbiter are both passed to `createProject`, the project st
 | `withdrawAsContractor()` | Contractor | Closed | Pays `availableToContractor` through the fee path |
 | `withdrawAsContributor()` | Backer | Closed | Pays the backer's exit amount once (`contributorSettled`) |
 | `reclaimArbitrationStake()` | Contractor | Closed, arbitration fee not paid out | Returns the stake, emits `ArbitrationStakeReclaimed` |
-| `sweepOrphanedTokens(token)` | Timelock | Any (ERC20Project only) | Sends tokens above the tracked balance to the Registry |
+| `sweepOrphanedTokens(token)` | Timelock | Any (ERC20Project only) | Sends tokens above `escrowed` (what the project still owes) to the Registry |
 
 ### Cooling-off
 
@@ -216,6 +216,6 @@ Projects: `SetParties`, `SendFunds(who, amount, immediateBps)`, `ContractSigned`
 |------|--------|
 | `test/project-lifecycle.test.js` | Happy path (ERC20), dispute path (native), vote switching, `projectThreshold` |
 | `test/arbitration-accounting.test.js` | Every outcome's payouts, immediate release with disputes, multiple backers, zero leftover balance |
-| `test/appeals.test.js` | Direct DAO overrule, finalize after window, late and early overrule rejected, silent-arbiter ruling, `receive()`, ERC20 sweep |
+| `test/appeals.test.js` | Direct DAO overrule, finalize after window, late and early overrule rejected, silent-arbiter ruling, `receive()`, ERC20 sweep before and after payouts, refund of excess native stake |
 | `test/backer-spending.test.js` | `spentBy`, no double counting, reimburse, pre-signing veto refund, one listing per backed project |
 | `test/security.test.js` | Factory binding, cooling-off lifecycle floor, platform fee floor, wash-trading cost |

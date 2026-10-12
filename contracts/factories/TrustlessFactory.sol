@@ -187,6 +187,7 @@ contract TrustlessFactory {
         bytes32 executorRole = timelock.EXECUTOR_ROLE();
         bytes32 adminRole = timelock.DEFAULT_ADMIN_ROLE();
         timelock.grantRole(proposerRole, daoAddr);
+        timelock.grantRole(timelock.CANCELLER_ROLE(), daoAddr);
         timelock.grantRole(executorRole, address(0));
         timelock.revokeRole(adminRole, address(this));
 

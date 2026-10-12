@@ -245,6 +245,17 @@ contract NativeProject is Initializable {
             uint paid = _payContractor(totalImmediate);
             emit ImmediateFundsReleased(contractor, paid);
         }
+
+        _refundExcessStake();
+    }
+
+    // Anything sent above the stake goes back to the contractor
+    function _refundExcessStake() private {
+        uint excess = msg.value - arbitrationFee / 2;
+        if (excess > 0) {
+            (bool refunded, ) = payable(msg.sender).call{value: excess}("");
+            require(refunded, "Failed to refund excess stake");
+        }
     }
 
     // Every payout that accrues reputation pays the platform fee to the treasury first.

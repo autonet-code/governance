@@ -92,6 +92,7 @@ describe("TrustlessFactory Deployment", function () {
         
         const proposerRole = await timelockContract.PROPOSER_ROLE();
         expect(await timelockContract.hasRole(proposerRole, dao)).to.be.true;
+        expect(await timelockContract.hasRole(await timelockContract.CANCELLER_ROLE(), dao)).to.be.true;
     });
 });
 // factory-deployment.test.js

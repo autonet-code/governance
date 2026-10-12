@@ -79,6 +79,10 @@ describe("Standard DAO Governance", function () {
             expect(await token.timelockAddress()).to.equal(await timelock.getAddress());
         });
 
+        it("lets the governor cancel operations on its timelock", async function () {
+            expect(await timelock.hasRole(await timelock.CANCELLER_ROLE(), await dao.getAddress())).to.be.true;
+        });
+
         it("should have correct initial token balances", async function () {
             expect(await token.balanceOf(member1.address)).to.equal(ethers.parseEther("100"));
             expect(await token.balanceOf(member2.address)).to.equal(ethers.parseEther("50"));
