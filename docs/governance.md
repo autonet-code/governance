@@ -114,7 +114,8 @@ Two addresses matter, and they are set differently:
 | `mint(to, amount)` | `admin` or an address in `minters` |
 | `mintDelegated(to, amount)` | Same, and `to` votes for itself unless it already chose a delegate (used by `AutonetRepClaim`) |
 | `burn(from, amount)` | `admin` only |
-| `setMinter`, `setDefaultDelegate`, `setAutoDelegateExempt` | `admin` or `timelockAddress` |
+| `slash(from, amount)` / `reassign(to, amount)` | An address in `slashers`; `reassign` mints only out of what that slasher burned |
+| `setMinter`, `setSlasher`, `setDefaultDelegate`, `setAutoDelegateExempt` | `admin` or `timelockAddress` |
 | `setEconomyAddress` | `admin` or `timelockAddress`, once only |
 | `startNewRewardEpoch`, `setDelegateShareBps` | `timelockAddress` only |
 | `setAdmin` | `admin` only |
@@ -126,6 +127,10 @@ Two addresses matter, and they are set differently:
 ### Minters
 
 `minters[account]` lets a contract mint without being admin. It exists for satellites such as `CoinOffering` (mints to buyers up to its cap) and `AutonetRepClaim` (mints REP against Autonet earnings). Granting it is a governance action. See [autonet.md](autonet.md).
+
+### Slashers
+
+`slashers[account]` lets a contract penalize REP without being admin (used by `ToolBond`). `slash(from, amount)` burns up to the holder's balance and adds what it burned to `slashedCredit[slasher]`; `reassign(to, amount)` mints out of that credit only, and `to` votes for itself unless it already chose a delegate. So a slasher moves existing REP and can never create it. `getPastBalance(account, timepoint)` exposes the balance snapshots verdicts weigh flags by. Granting it is a governance action, and a powerful one: a slasher can cut any holder's voting power.
 
 ### Default delegate
 
@@ -242,6 +247,7 @@ All are `dao.propose([target], [0], [calldata], description)`.
 | Change delegate share | RepToken | `setDelegateShareBps(bps)` |
 | Arm the spend cap | Registry | `setSpendCap(token, cap)` |
 | Grant a minter | RepToken | `setMinter(contract, true)` |
+| Grant a slasher | RepToken | `setSlasher(contract, true)` |
 | Economy parameter | Economy | `setPlatformFee(bps)` etc. (see [economy.md](economy.md)) |
 | Overrule arbitration | Project | `daoOverrule(percent, rulingHash)` (inside the appeal window, or on a silent arbiter) |
 | Veto a project | Project | `daoVeto()` |

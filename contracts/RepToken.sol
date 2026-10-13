@@ -56,9 +56,18 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     // up to its own cap, so no pre-minted inventory is needed. Governance-settable.
     mapping(address => bool) public minters;
 
+    // Addresses authorized to slash REP (e.g. a verdict contract that penalizes a malicious tool
+    // author) and to reassign what they slashed. A slasher can only move existing REP, never
+    // create it. Governance-settable.
+    mapping(address => bool) public slashers;
+    mapping(address => uint256) public slashedCredit; // REP a slasher burned and may reassign
+
     event DefaultDelegateUpdated(address indexed previous, address indexed current);
     event AutoDelegateExemptSet(address indexed account, bool exempt);
     event MinterSet(address indexed account, bool allowed);
+    event SlasherSet(address indexed account, bool allowed);
+    event Slashed(address indexed slasher, address indexed from, uint256 amount);
+    event Reassigned(address indexed slasher, address indexed to, uint256 amount);
     event AutoDelegated(address indexed account, address indexed delegatee);
 
     address payable public immutable registryAddress;
@@ -257,6 +266,10 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         _delegateeHistory[account].push(clock(), uint208(uint160(delegatee)));
     }
 
+    function getPastBalance(address account, uint256 timepoint) external view returns (uint256) {
+        return _getPastBalance(account, timepoint);
+    }
+
     function _getPastBalance(address account, uint256 timepoint) internal view returns (uint256) {
         require(timepoint < block.timestamp, "ERC20: snapshot query for future block");
         require(timepoint <= type(uint48).max, "RepToken: timepoint exceeds uint48 range");
@@ -323,6 +336,38 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     function burn(address from, uint256 amount) public {
         require(msg.sender == admin, "RepToken: Only admin can burn");
         _burn(from, amount);
+    }
+
+    // Grant/revoke slasher rights (e.g. a tool-verdict contract). Governance-gated.
+    function setSlasher(address account, bool allowed) external {
+        require(msg.sender == admin || msg.sender == timelockAddress, "RepToken: Caller is not the admin or Timelock");
+        slashers[account] = allowed;
+        emit SlasherSet(account, allowed);
+    }
+
+    // Burn REP as a penalty. Capped at the holder's balance, so a slash never reverts on an
+    // account that already lost part of it. What is burned becomes the slasher's credit.
+    function slash(address from, uint256 amount) external returns (uint256 burned) {
+        require(slashers[msg.sender], "RepToken: Not a slasher");
+        uint256 balance = balanceOf(from);
+        burned = amount < balance ? amount : balance;
+        if (burned > 0) {
+            _burn(from, burned);
+            slashedCredit[msg.sender] += burned;
+        }
+        emit Slashed(msg.sender, from, burned);
+    }
+
+    // Hand slashed REP to someone else (e.g. the auditors who caught a malicious tool). Mints only
+    // out of the slasher's own credit, so a slasher can never create REP, only move it. The
+    // recipient votes for itself unless it already chose a delegate.
+    function reassign(address to, uint256 amount) external {
+        require(slashers[msg.sender], "RepToken: Not a slasher");
+        require(amount <= slashedCredit[msg.sender], "RepToken: Exceeds slashed credit");
+        slashedCredit[msg.sender] -= amount;
+        if (delegates(to) == address(0)) _delegate(to, to);
+        _mint(to, amount);
+        emit Reassigned(msg.sender, to, amount);
     }
 
     function _update(address from, address to, uint256 value) internal override(ERC20, ERC20Votes) {

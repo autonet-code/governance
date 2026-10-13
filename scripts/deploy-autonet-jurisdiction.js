@@ -239,21 +239,33 @@ async function deployGenesisSatellites(deployer, params) {
     out.repClaim = { address: claimAddr, grantCalldata };
 
     // ── ToolBond ────────────────────────────────────────────────────────────
-    // ATN stakes behind tools that replace a core harness part. The arbiter
-    // defaults to the timelock (the DAO rules itself until it appoints one).
-    // Amounts are ATN base units (1 ATN = 1e6).
+    // ATN stakes behind every tool, with REP-settled malware verdicts. Amounts
+    // are ATN base units (1 ATN = 1e6). The bond slashes and reassigns REP, so
+    // the DAO must grant it RepToken.setSlasher (printed below).
     const economy = await ethers.getContractAt("Economy", economyAddr);
-    const arbiterWindow = BigInt(process.env.TOOLBOND_ARBITER_WINDOW_SECS || 7 * 86400);
-    const unbondDelay = arbiterWindow + (await economy.effectiveAppealPeriod()) + 86400n;
+    const env = (k, d) => BigInt(process.env[k] || d);
+    const reviewWindow = env("TOOLBOND_REVIEW_WINDOW_SECS", 14 * 86400);
+    const revealWindow = env("TOOLBOND_REVEAL_WINDOW_SECS", 2 * 86400);
+    const bondParams = {
+      minStake: env("TOOLBOND_MIN_STAKE", 100_000_000n),
+      thresholdBps: env("TOOLBOND_THRESHOLD_BPS", 500),
+      reviewWindow,
+      revealWindow,
+      finderBps: env("TOOLBOND_FINDER_BPS", 5000),
+      degradeBps: env("TOOLBOND_DEGRADE_BPS", 1000),
+      authorSlashBps: env("TOOLBOND_AUTHOR_SLASH_BPS", 10000),
+      auditorShareBps: env("TOOLBOND_AUDITOR_SHARE_BPS", 4000),
+      unbondDelay: reviewWindow + revealWindow + (await economy.effectiveAppealPeriod()) + 86400n,
+    };
     const Bond = await ethers.getContractFactory("ToolBond");
-    const toolBond = await Bond.deploy(
-      substrateAddr, economyAddr, timelockAddr,
-      process.env.TOOLBOND_ARBITER || timelockAddr,
-      process.env.TOOLBOND_MIN_STAKE || 100_000_000n,
-      process.env.TOOLBOND_COUNTER_BOND || 10_000_000n,
-      arbiterWindow, unbondDelay);
+    const toolBond = await Bond.deploy(substrateAddr, repTokenAddr, economyAddr, timelockAddr, bondParams);
     await toolBond.waitForDeployment();
-    out.toolBond = { address: await toolBond.getAddress() };
+    const bondAddr = await toolBond.getAddress();
+    out.toolBond = {
+      address: bondAddr,
+      grantCalldata: rep.interface.encodeFunctionData(
+        "setSlasher", [bondAddr, true]),
+    };
     console.log(`  ToolBond:          ${out.toolBond.address}`);
   } else {
     console.log("  AutonetRepClaim, ToolBond: SKIPPED (set SUBSTRATE_ADDRESS to deploy them)");
@@ -334,6 +346,8 @@ function printGenesisChecklist(ctx) {
        Value  : 0
        Calldata (RepToken.setMinter(repClaim, true)):
        ${repClaim ? repClaim.grantCalldata : "<printed by the RESUME run>"}
+       And in the same proposal, RepToken.setSlasher(toolBond, true):
+       ${ctx.toolBond ? ctx.toolBond.grantCalldata : "<printed by the RESUME run>"}
        (Not executable by the deployer at any point: RepToken.admin goes
         RepTokenFactory -> TrustlessFactory -> Timelock, never the EOA.)
 
