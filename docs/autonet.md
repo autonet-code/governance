@@ -12,10 +12,10 @@ Related: [architecture.md](architecture.md), [governance.md](governance.md), [re
 |----------|------|-------------------------------|
 | `AutonetVault` | Sells Substrate ATN for whitelisted ERC20s; payment goes to the Registry | **Live.** Deployed on Shadownet and registered under `jurisdiction.autonet.vault` (`scripts/submit-autonet-registry-keys.js`) |
 | `AutonetRepClaim` | Mints REP 1:1 against ATN an agent provably earned on the Substrate | **Live.** Granted minter rights by proposal (the 2026-07-10 flag-day proposal on Shadownet); registered under `jurisdiction.autonet.rep_claim` |
-| `ToolBond` | ATN stakes behind every tool, and malware verdicts settled by REP-weighted auditor flags with DAO appeal | **Reworked (2026-10-13).** Deployed by the genesis script; nodes run tools only while `isBonded`, by default only `isVetted` |
+| `ToolBond` | ATN stakes behind every tool, and malware verdicts settled by REP-weighted auditor flags with DAO appeal | **Reworked (2026-10-13).** Deployed by `AutonetGenesis` with its slasher grant; nodes run tools only while `isBonded`, by default only `isVetted` |
 | `CoinOffering` | Sells the jurisdiction's own transferable governance token (ATNB) under a DAO-set cap | **Tested in isolation** (`deployCOLocal.js`, `deployTestCOShadownet.js`, `deployTestCOBaseSepolia.js`). Not part of the Autonet genesis flow |
 
-> `scripts/deploy-autonet-jurisdiction.js` deploys `AutonetRepClaim` (empty genesis seed) in its genesis step and prints the `setMinter` calldata for the grant proposal. Jurisdictions that still have the retired ReputationMirror as a minter revoke it by proposal (see [Minter swap](#minter-swap-from-the-retired-mirror)).
+> New jurisdictions get `AutonetRepClaim` (empty genesis seed) and its minter grant at genesis (see [Genesis](#genesis-autonetgenesis)). Jurisdictions that still have the retired ReputationMirror as a minter revoke it by proposal (see [Minter swap](#minter-swap-from-the-retired-mirror)).
 
 ## Parity: one registry key, one formula
 
@@ -106,23 +106,18 @@ Stakes are flat for now; scaling them with a tool's usage is a later step. Bonds
 
 The contract header still describes a "DAO mints inventory to the CO" model. The code mints on demand to the buyer; there is no inventory.
 
-## Genesis choreography
+## Genesis (AutonetGenesis)
 
-`scripts/deploy-autonet-jurisdiction.js` deploys an Economy DAO through the 3-step TrustlessFactory flow, then the satellites. The Substrate and the vault each need the other's address at construction, and Substrate has no admin keys. Neither calls the other in its constructor, so the cycle is broken by predicting the vault address from the deployer nonce.
+`contracts/AutonetGenesis.sol` launches a jurisdiction's whole Autonet layer in one transaction, between TrustlessFactory's `deployDAOToken` and finalize. It is what the werule wizard's "Autonet jurisdiction" type calls, and what `scripts/deploy-autonet-jurisdiction.js` calls:
 
-| Step | Where | Command / action |
-|------|-------|------------------|
-| 1 | this repo | `npx hardhat run scripts/deploy-autonet-jurisdiction.js --network ets`. Deploys and finalizes the suite (timelock owns Registry, RepToken, Economy). Optional `PARITY_TOKENS` / `PARITY_VALUES` fold parity keys into `configureAndFinalize` so no proposal is needed. Writes `deployments/autonet-jurisdiction-<net>.json` |
-| 2 | this repo | `PREDICT_VAULT=1 ...` prints the next CREATE address of the deployer. No transactions |
-| 3 | autonet repo | Deploy Substrate (`scripts/deploy_substrate.js`) with treasury = Registry, `VAULT_MINTER=<predicted>`, governor = Timelock, `REP_TOKEN` = this RepToken, `ANCHOR_QUORUM_BPS` and the genesis signer set. **The deployer must send no transactions until step 4** or the prediction breaks |
-| 4 | this repo | `RESUME=1 SUBSTRATE_ADDRESS=0x.. EXPECTED_VAULT=0x.. ...` deploys the vault first (asserts it landed on the predicted address) and then the satellites |
-| 5 | autonet repo | Deploy `CharterAnchor(<timelock>)` (immutable governor) and anchor charter v1 by DAO proposal |
-| 6 | governance | Grant REP minter rights (`RepToken.setMinter(...)`). The deployer can never do this directly: RepToken admin goes RepTokenFactory to TrustlessFactory to Timelock |
-| 7 | governance | Whitelist payment tokens with `Registry.editRegistry("jurisdiction.parity.<token>", "<value>")` if not folded in at step 1 |
+1. `TrustlessFactory.deployInfrastructure` (Economy, Timelock, Registry)
+2. `TrustlessFactory.deployDAOToken` (RepToken, governor)
+3. `AutonetGenesis.launch(jurisdiction, autonetParams, toolBondParams)` deploys the Substrate (treasury = Registry, governor = Timelock, this RepToken), AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry, PaymentChannel, VentureVaultFactory and CharterAnchor (genesis charter anchored in its constructor when a hash is given).
+4. `TrustlessFactory.configureAndFinalizeWithGrants(..., keys, values, minters, slashers)` with `AutonetGenesis.registryEntries(repToken)` (the `jurisdiction.autonet.*` keys: every Autonet contract plus `rep_token`, `dao`, `timelock`, `economy`, `registry`), parities, `minters = [repClaim]` and `slashers = [toolBond]`. The grants happen while the factory is still RepToken admin, so nothing needs a proposal afterwards. The daemon joins a jurisdiction from those Registry keys alone.
 
-Timing env vars are seconds (`VOTING_DELAY_SECS`, `VOTING_PERIOD_SECS`, `TIMELOCK_DELAY_SECS`); the script converts to the factories' minute unit, rounding up. Test networks use `0 / 120 / 0`. On local networks a single run with `SUBSTRATE_ADDRESS` set does everything (the Substrate stand-in there does not gate the minter).
+The Substrate takes the vault as its minter and the vault takes the Substrate. The vault is the launch's first CREATE (its address follows from the genesis contract's nonce, which each launch advances by exactly eight), so the Substrate is created with CREATE2 at an address computed beforehand. The autonet contracts' creation code lives on-chain in code blobs fixed when AutonetGenesis is deployed (`scripts/lib/autonet-genesis.js`, from `test/fixtures/autonet`), so a launcher picks parameters but never code. `scripts/deployFullFactorySuiteShadownet.js` deploys AutonetGenesis with the suite (Firestore field `autonetGenesis`). A launch costs about 11M gas.
 
-Helper scripts for the governance steps: `vote-genesis.js`, `execute-genesis-proposals.js`, `submit-autonet-registry-keys.js` (self-describing keys `jurisdiction.autonet.substrate|vault|rep_claim`).
+Timing env vars are seconds in whole minutes (`VOTING_DELAY_SECS`, `VOTING_PERIOD_SECS`, `TIMELOCK_DELAY_SECS`). Test networks use `0 / 120 / 0`. The genesis REP goes to the deployer, who delegates it (for example to the anchor agent) so anchors reach quorum.
 
 ### Minter swap (from the retired mirror)
 

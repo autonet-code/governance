@@ -177,14 +177,16 @@ describe("Autonet integration (real Substrate, ServiceMarket, CharterAnchor)", f
         expect(await substrate.balanceOf(buyer.address)).to.equal(buyerBefore + ATN(20));
     });
 
-    it("anchors the charter only through a DAO proposal", async function () {
-        charter = await autonet("CharterAnchor", deployer).deploy(timelockAddr);
-        const hash = ethers.id("charter v1");
-        await expect(charter.connect(member).anchorCharter(hash, "ipfs://charter")).to.be.revertedWithCustomError(charter, "NotGovernor");
-        await govern([await charter.getAddress()], [charter.interface.encodeFunctionData("anchorCharter", [hash, "ipfs://charter"])], "Anchor charter v1");
+    it("anchors the genesis charter at deploy and later versions only through a DAO proposal", async function () {
+        const v1 = ethers.id("charter v1");
+        charter = await autonet("CharterAnchor", deployer).deploy(timelockAddr, v1, "ipfs://charter-v1");
+        expect((await charter.currentCharter()).hash).to.equal(v1);
+        const v2 = ethers.id("charter v2");
+        await expect(charter.connect(member).anchorCharter(v2, "ipfs://charter-v2")).to.be.revertedWithCustomError(charter, "NotGovernor");
+        await govern([await charter.getAddress()], [charter.interface.encodeFunctionData("anchorCharter", [v2, "ipfs://charter-v2"])], "Anchor charter v2");
         const current = await charter.currentCharter();
-        expect(current.version).to.equal(1n);
-        expect(current.hash).to.equal(hash);
+        expect(current.version).to.equal(2n);
+        expect(current.hash).to.equal(v2);
     });
 
     it("lets the DAO pause the vault", async function () {

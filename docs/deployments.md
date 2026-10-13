@@ -69,7 +69,7 @@ Run with `npx hardhat run <script> --network <name>`.
 | `scripts/deployStandardFactoryTransferable.js`, `deployStandardFactoryWrapped.js`, `deployStandardNonTransferable.js` | The other standard wrappers |
 | `scripts/deployTrustlessFactory.js` | Project implementations, sub-factories and `TrustlessFactory`. Writes `deployments/etherlink-shadownet-trustless.json` |
 | `scripts/deployTestEconomyDAO.js` | Creates a test economy DAO through the 3-step flow |
-| `scripts/deploy-autonet-jurisdiction.js` | Autonet jurisdiction: DAO suite plus genesis satellites, with `PREDICT_VAULT` / `RESUME` modes. See [autonet.md](autonet.md#genesis-choreography) |
+| `scripts/deploy-autonet-jurisdiction.js` | Autonet jurisdiction: DAO suite plus the whole Autonet layer through `AutonetGenesis`, no follow-up proposals. See [autonet.md](autonet.md#genesis-autonetgenesis) |
 | `scripts/deploy-autonet-vault.js`, `deploy-autonet-rep-claim.js` | Individual Autonet satellites; print the governance calldata they need |
 | `scripts/deployCOLocal.js`, `deployTestCOShadownet.js`, `deployTestCOBaseSepolia.js` | Isolated CoinOffering stacks (Registry, transferable RepToken, test USDC) |
 | `scripts/updateFirestoreShadownet.js`, `backupFirestoreAddresses.js` | Write / back up Firestore address docs |

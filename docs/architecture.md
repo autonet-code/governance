@@ -145,6 +145,7 @@ tx 3  configureAndFinalize(AddressParams, EconomyParams, keys, values)
         require all five addresses == sender's pending record
         economy: setImplementations, fees, cooling-off, backers quorum, threshold, appeal period
         repToken.setEconomyAddress(economy); registry.setJurisdictionAddress(repToken)
+        (WithGrants variant) repToken.setMinter / setSlasher for genesis satellites
         registry.batchEditRegistry(keys, values)
         economy.setDaoAddresses(timelock, registry, dao, repToken)   (Economy now Timelock-governed)
         repToken.setAdmin(timelock); registry.transferOwnership(timelock)

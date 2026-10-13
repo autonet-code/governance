@@ -11,11 +11,17 @@
 //   wrapper_trustless  -> TrustlessFactory
 //   nativeProject      -> NativeProject implementation
 //   erc20Project       -> ERC20Project implementation
+//   autonetGenesis     -> AutonetGenesis (the werule "Autonet jurisdiction" launcher), with the
+//                         autonet contracts' code blobs from test/fixtures/autonet
+//
+// Also writes deployments/<shadownet|localhost>-trustless.json for deploy-autonet-jurisdiction.js.
+// Runs on localhost (31337) too, for rehearsals against `npx hardhat node`.
 //
 // Sequential nonces from one key -- do not parallelize.
 const { ethers } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
+const { deployAutonetGenesis } = require("./lib/autonet-genesis");
 
 async function deploy(name, ...args) {
   const F = await ethers.getContractFactory(name);
@@ -36,8 +42,9 @@ async function main() {
   const balance = await ethers.provider.getBalance(deployer.address);
   console.log("Balance :", ethers.formatEther(balance), "native\n");
 
-  if (net.chainId !== 127823n) {
-    throw new Error(`Wrong network: expected chainId 127823 (shadownet), got ${net.chainId}`);
+  const local = net.chainId === 31337n;
+  if (net.chainId !== 127823n && !local) {
+    throw new Error(`Wrong network: expected chainId 127823 (shadownet) or 31337, got ${net.chainId}`);
   }
 
   // ---- Base factories (all fresh) ----
@@ -71,6 +78,11 @@ async function main() {
     "TrustlessFactory",
     infraAddr, daoFactoryAddr, economyFactoryAddr, repTokenFactoryAddr
   );
+
+  // ---- Autonet launcher ----
+  console.log("\nAutonetGenesis (code blobs + launcher):");
+  const autonetGenesisAddr = await (await deployAutonetGenesis(ethers, deployer, console.log)).getAddress();
+  console.log(`   AutonetGenesis deployed at: ${autonetGenesisAddr}`);
 
   // ---- Sanity: read back on-chain that wrappers point at the NEW factories ----
   console.log("\nSanity verification (on-chain getters):");
@@ -119,14 +131,27 @@ async function main() {
       wrapper_w: standardFactoryWrappedAddr,
       wrapper_trustless: trustlessFactoryAddr,
       nativeProject: nativeAddr,
-      erc20Project: erc20Addr
+      erc20Project: erc20Addr,
+      autonetGenesis: autonetGenesisAddr
     }
   };
 
-  const outputPath = path.join(__dirname, "..", "deployments", "etherlink-shadownet-full-suite.json");
+  const prefix = local ? "localhost" : "etherlink-shadownet";
+  const outputPath = path.join(__dirname, "..", "deployments", `${prefix}-full-suite.json`);
   const outputDir = path.dirname(outputPath);
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(outputPath, JSON.stringify(deploymentInfo, null, 2));
+  fs.writeFileSync(path.join(outputDir, `${prefix}-trustless.json`), JSON.stringify({
+    network: local ? "localhost" : "ets",
+    chainId: Number(net.chainId),
+    timestamp: deploymentInfo.timestamp,
+    projectImplementations: deploymentInfo.projectImplementations,
+    contracts: {
+      trustlessFactory: trustlessFactoryAddr,
+      autonetGenesis: autonetGenesisAddr,
+      ...deploymentInfo.baseFactories
+    }
+  }, null, 2));
 
   const finalBalance = await ethers.provider.getBalance(deployer.address);
 
@@ -140,6 +165,7 @@ async function main() {
   console.log("  wrapper_trustless (TrustlessFactory)           :", trustlessFactoryAddr);
   console.log("  nativeProject     (NativeProject impl)         :", nativeAddr);
   console.log("  erc20Project      (ERC20Project impl)          :", erc20Addr);
+  console.log("  autonetGenesis    (AutonetGenesis)             :", autonetGenesisAddr);
   console.log("----------------------------------------");
   console.log("Base factories (for the record):");
   console.log("  InfrastructureFactory :", infraAddr);

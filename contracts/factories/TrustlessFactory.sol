@@ -140,13 +140,36 @@ contract TrustlessFactory {
         emit DAOTokenDeployed(repTokenAddr, daoAddr);
     }
 
-    // REFACTORED FUNCTION SIGNATURE
     function configureAndFinalize(
         AddressParams calldata _addressParams,
         EconomyParams calldata _economyParams,
         string[] calldata _registryKeys,
         string[] calldata _registryValues
     ) external {
+        _configureAndFinalize(_addressParams, _economyParams, _registryKeys, _registryValues, new address[](0), new address[](0));
+    }
+
+    // Same, and grants RepToken minter and slasher rights while the factory is still its admin, so
+    // genesis satellites (an AutonetGenesis launch's REP claim and ToolBond) are live without a proposal.
+    function configureAndFinalizeWithGrants(
+        AddressParams calldata _addressParams,
+        EconomyParams calldata _economyParams,
+        string[] calldata _registryKeys,
+        string[] calldata _registryValues,
+        address[] calldata _minters,
+        address[] calldata _slashers
+    ) external {
+        _configureAndFinalize(_addressParams, _economyParams, _registryKeys, _registryValues, _minters, _slashers);
+    }
+
+    function _configureAndFinalize(
+        AddressParams calldata _addressParams,
+        EconomyParams calldata _economyParams,
+        string[] calldata _registryKeys,
+        string[] calldata _registryValues,
+        address[] memory _minters,
+        address[] memory _slashers
+    ) private {
         require(_registryKeys.length == _registryValues.length, "Registry keys/values length mismatch");
 
         address economyAddr = _addressParams.contractAddresses[0];
@@ -173,6 +196,8 @@ contract TrustlessFactory {
 
         repToken.setEconomyAddress(economyAddr);
         registry.setJurisdictionAddress(repTokenAddr);
+        for (uint i = 0; i < _minters.length; i++) repToken.setMinter(_minters[i], true);
+        for (uint i = 0; i < _slashers.length; i++) repToken.setSlasher(_slashers[i], true);
 
         // Initialize registry with provided key-value pairs
         if (_registryKeys.length > 0) {
