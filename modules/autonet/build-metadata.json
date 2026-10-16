@@ -14,7 +14,7 @@
           "type": "tuple",
           "description": "Payment channels and charter",
           "components": [
-            { "internalType": "uint256", "name": "challengeWindow", "type": "uint256", "description": "How long a counterparty has to challenge a payment channel close.", "x-ui": { "immutable": true, "label": "Payment channel challenge window (hours)", "unit": "seconds-hours", "default": "1", "min": 1, "max": 720, "section": "Substrate" } },
+            { "internalType": "uint256", "name": "challengeWindow", "type": "uint256", "description": "How long a counterparty has to challenge a payment channel close.", "x-ui": { "label": "Payment channel challenge window (hours)", "unit": "seconds-hours", "default": "1", "min": 1, "max": 720, "section": "Substrate" } },
             { "internalType": "bytes32", "name": "charterHash", "type": "bytes32", "description": "sha256 of the canonical charter the daemons follow, recorded as jurisdiction.autonet.charter. The DAO changes it by proposal.", "x-ui": { "fixed": "0x5756ed3aa1831533c6ae7a1728cd6af73241c787049080ac3469d5b40f841cd5" } },
             { "internalType": "string", "name": "charterUri", "type": "string", "description": "Where the charter text lives, recorded as jurisdiction.autonet.charter_uri.", "x-ui": { "fixed": "https://github.com/autonet-code/node/blob/8badfda36fe81731b75aae0fe1222b00eef5dc3c/nodes/common/world_model_substrate/adapter.py" } }
           ]
