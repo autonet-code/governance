@@ -63,7 +63,7 @@ Run with `npx hardhat run <script> --network <name>`.
 
 | Script | What it does |
 |--------|--------------|
-| `scripts/deployFullFactorySuiteShadownet.js` | **Current.** Fresh full suite on `ets`: base factories, all four wrappers, project implementations. Writes `deployments/etherlink-shadownet-full-suite.json` with the Firestore field mapping |
+| `scripts/deployFullFactorySuiteShadownet.js` | **Current.** Fresh full suite on `ets`: base factories, all four wrappers, project implementations, the [module](modules.md) factories (AutonetGenesis, ContentCourtFactory) and ModuleAttacher. Writes `deployments/etherlink-shadownet-full-suite.json` with the Firestore field mapping |
 | `scripts/deployProjectImplsShadownet.js` | Redeploys only `NativeProject` and `ERC20Project` (refuses any chain but 127823). Update `nativeProjectImpl` / `erc20ProjectImpl` in Firestore afterwards |
 | `scripts/deployStandardFactory.js` | Fresh sub-factories plus `StandardFactory`. Writes `deployments/etherlink-testnet-standard.json` (Ghostnet-era name) |
 | `scripts/deployStandardFactoryTransferable.js`, `deployStandardFactoryWrapped.js`, `deployStandardNonTransferable.js` | The other standard wrappers |

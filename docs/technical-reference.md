@@ -244,7 +244,7 @@ function configureAndFinalizeWithGrants(AddressParams calldata, EconomyParams ca
                               address[] calldata _minters, address[] calldata _slashers) external
 ```
 
-`configureAndFinalizeWithGrants` also grants RepToken minter and slasher rights before the admin handover (used for an `AutonetGenesis` launch's REP claim and ToolBond; see [autonet.md](autonet.md#genesis-autonetgenesis)).
+`configureAndFinalizeWithGrants` also grants RepToken minter and slasher rights before the admin handover (used for the grants in [module](modules.md) manifests, such as an `AutonetGenesis` launch's REP claim and ToolBond; see [autonet.md](autonet.md#genesis-autonetgenesis)).
 
 | Struct | Fields |
 |--------|--------|

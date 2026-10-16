@@ -7,7 +7,8 @@
  *   2. TrustlessFactory.deployDAOToken         (RepToken, governor)
  *   3. AutonetGenesis.launch                   (the Autonet layer, one tx)
  *   4. TrustlessFactory.configureAndFinalizeWithGrants
- *        registry keys: jurisdiction.name, parities, jurisdiction.autonet.* (from the launch)
+ *        registry keys: jurisdiction.name, parities, and the autonet module's manifest
+ *        (jurisdiction.autonet.*, modules.autonet)
  *        grants:        REP claim -> RepToken minter, ToolBond -> RepToken slasher
  *
  * Nothing needs a proposal afterwards. The factory suite (and AutonetGenesis, deployed here if the
@@ -138,16 +139,17 @@ async function main() {
   };
   const j = { registry: infra.registry, timelock: infra.timelock, repToken: tok.repToken, economy: infra.economy, dao: tok.dao };
   await (await genesis.launch(j, autonetParams, bondParams)).wait();
-  const d = await genesis.deploymentOf(tok.repToken);
+  const installId = await genesis.lastInstallBy(deployer.address);
+  const d = await genesis.deploymentOf(installId);
+  const m = await genesis.manifest(installId);
   console.log("3. Autonet layer:");
   for (const k of ["substrate", "vault", "repClaim", "toolBond", "serviceRegistry", "paymentChannel", "ventureVaultFactory", "charterAnchor"]) {
     console.log(`     ${k.padEnd(20)} ${d[k]}`);
   }
 
   // 4. Finalize with registry entries and grants
-  const [autonetKeys, autonetValues] = await genesis.registryEntries(tok.repToken);
-  const keys = ["jurisdiction.name", ...autonetKeys];
-  const values = [JURISDICTION_NAME, ...autonetValues];
+  const keys = ["jurisdiction.name", ...m.registryKeys];
+  const values = [JURISDICTION_NAME, ...m.registryValues];
   const pTokens = env("PARITY_TOKENS", "").split(",").filter(Boolean);
   const pValues = env("PARITY_VALUES", "").split(",").filter(Boolean);
   if (pTokens.length !== pValues.length) throw new Error("PARITY_TOKENS and PARITY_VALUES length mismatch");
@@ -155,7 +157,7 @@ async function main() {
   await (await factory.configureAndFinalizeWithGrants(
     { implAddresses: [suite.projectImplementations.nativeProject, suite.projectImplementations.erc20Project],
       contractAddresses: [infra.economy, infra.registry, infra.timelock, tok.repToken, tok.dao] },
-    ECONOMY, keys, values, [d.repClaim], [d.toolBond])).wait();
+    ECONOMY, keys, values, [...m.minters], [...m.slashers])).wait();
   console.log("4. Finalized: timelock owns everything; REP claim is a minter, ToolBond a slasher.");
 
   const out = {
@@ -165,6 +167,7 @@ async function main() {
     deployer: deployer.address,
     timestamp: new Date().toISOString(),
     autonetGenesis: await genesis.getAddress(),
+    autonetInstallId: Number(installId),
     dao: { governor: tok.dao, repToken: tok.repToken, economy: infra.economy, registry: infra.registry, timelock: infra.timelock },
     autonet: {
       substrate: d.substrate, vault: d.vault, repClaim: d.repClaim, toolBond: d.toolBond,

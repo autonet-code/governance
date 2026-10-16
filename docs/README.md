@@ -14,6 +14,8 @@ The specification of the On-Chain Jurisdiction contracts. For the overview, star
 | [`immediate-release.md`](immediate-release.md) | Releasing part of a contribution to the contractor at signing. |
 | [`registry-settings.md`](registry-settings.md) | Registry keys the economy and RepToken read, including the parity convention. |
 | [`autonet.md`](autonet.md) | Jurisdiction-side Autonet satellites: AutonetVault, AutonetRepClaim and CoinOffering, the genesis flow, and the integration tests against the real autonet contracts. |
+| [`modules.md`](modules.md) | Jurisdiction modules: install by anyone, attach at origination or by proposal (`ModuleAttacher`), the module factories. |
+| [`content-court.md`](content-court.md) | ContentCourt: REP-weighted labels on third-party content, signed off-chain by extension keys, contested cases with commit-reveal votes and DAO appeal. |
 | [`security.md`](security.md) | Threat model and the on-chain mitigations for each threat. |
 | [`technical-reference.md`](technical-reference.md) | Functions, parameters, constants, events and access control per contract. |
 | [`deployments.md`](deployments.md) | Deployed addresses, deploy scripts, networks, and the local end-to-end harness. |

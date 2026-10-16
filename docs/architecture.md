@@ -8,7 +8,7 @@ A **jurisdiction** is a set of contracts sharing one Timelock as its on-chain id
 
 - **Governance**: Governor, Timelock, Registry (treasury + config), RepToken (voting power).
 - **Economy** (economy DAOs only): an `Economy` contract that clones escrow projects and feeds earned and spent amounts back into reputation.
-- **Satellites** (optional): contracts that plug into the RepToken, Registry and Timelock, mainly for Autonet. See [autonet.md](autonet.md).
+- **Satellites** (optional): contracts that plug into the RepToken, Registry and Timelock, mainly for Autonet. See [autonet.md](autonet.md). Satellites that come as a set are [modules](modules.md), attached at origination or later by proposal.
 
 ## Contract graph
 

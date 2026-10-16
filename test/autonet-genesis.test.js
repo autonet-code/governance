@@ -5,8 +5,8 @@ const { autonet } = require("./helpers/autonet");
 const { deployAutonetGenesis } = require("../scripts/lib/autonet-genesis");
 
 // An Autonet jurisdiction launched the way the werule wizard does it: TrustlessFactory steps 1 and 2,
-// AutonetGenesis.launch, then configureAndFinalizeWithGrants with the launch's registry entries and
-// grants. Everything is live at genesis, with no proposal.
+// AutonetGenesis.launch (installing the autonet module), then configureAndFinalizeWithGrants with the
+// installation's manifest. Everything is live at genesis, with no proposal.
 describe("AutonetGenesis", function () {
     let deployer, launcher, member, buyer;
     let trustlessFactory, genesis, nativeImpl, erc20Impl;
@@ -34,18 +34,21 @@ describe("AutonetGenesis", function () {
         const params = { anchorQuorumBps: 5000, genesisSigners: [from.address], genesisQuorum: 1,
             challengeWindow: 3600, charterHash: CHARTER, charterUri: "ipfs://charter" };
         await genesis.connect(from).launch(j, params, BOND);
-        const d = await genesis.deploymentOf(tok.repToken);
+        const id = await genesis.lastInstallBy(from.address);
+        const d = await genesis.deploymentOf(id);
 
-        const [keys, values] = await genesis.registryEntries(tok.repToken);
+        const m = await genesis.manifest(id);
+        expect([...m.minters]).to.deep.equal([d.repClaim]);
+        expect([...m.slashers]).to.deep.equal([d.toolBond]);
         const parityKey = `jurisdiction.parity.${(await usdc.getAddress()).toLowerCase()}`;
         await f.configureAndFinalizeWithGrants(
             { implAddresses: [await nativeImpl.getAddress(), await erc20Impl.getAddress()],
               contractAddresses: [infra.economy, infra.registry, infra.timelock, tok.repToken, tok.dao] },
             { arbitrationFeeBps: 250, initialPlatformFeeBps: 250, initialAuthorFeeBps: 500, initialCoolingOffPeriod: 60,
               initialBackersQuorumBps: 5100, initialProjectThreshold: 0, initialAppealPeriod: 120 },
-            [...keys, parityKey], [...values, (10n ** 30n).toString()],
-            [d.repClaim], [d.toolBond]);
-        return { j, d };
+            [...m.registryKeys, parityKey], [...m.registryValues, (10n ** 30n).toString()],
+            [...m.minters], [...m.slashers]);
+        return { j, d, id };
     }
 
     before(async function () {
@@ -86,6 +89,7 @@ describe("AutonetGenesis", function () {
         expect(await bond.timelock()).to.equal(j.timelock);
 
         const registry = await ethers.getContractAt("Registry", j.registry);
+        expect(await registry.getRegistryValue("modules.autonet")).to.equal(`${(await genesis.getAddress()).toLowerCase()}:1`);
         expect(await registry.getRegistryValue("jurisdiction.autonet.substrate")).to.equal(d.substrate.toLowerCase());
         expect(await registry.getRegistryValue("jurisdiction.autonet.rep_token")).to.equal(j.repToken.toLowerCase());
         expect(await registry.getRegistryValue("jurisdiction.autonet.venture_vault_factory")).to.equal(d.ventureVaultFactory.toLowerCase());
@@ -100,9 +104,10 @@ describe("AutonetGenesis", function () {
 
     it("a second launch from the same genesis contract still wires its own vault", async function () {
         const usdc = await deploy("TestERC20", "USD Coin", "USDC", 6, 0);
-        const { d } = await launchJurisdiction(deployer, usdc);
+        const { d, id } = await launchJurisdiction(deployer, usdc);
         expect(await autonet("Substrate", deployer).attach(d.substrate).vaultMinter()).to.equal(d.vault);
-        expect(await genesis.launches()).to.equal(2n);
+        expect(id).to.equal(2n);
+        expect(await genesis.installs()).to.equal(2n);
     });
 
     it("rejects missing jurisdiction addresses and unknown launches", async function () {
@@ -110,6 +115,6 @@ describe("AutonetGenesis", function () {
         await expect(genesis.launch({ registry: z, timelock: z, repToken: z, economy: z, dao: z },
             { anchorQuorumBps: 5000, genesisSigners: [], genesisQuorum: 0, challengeWindow: 0, charterHash: ethers.ZeroHash, charterUri: "" },
             BOND)).to.be.revertedWithCustomError(genesis, "ZeroAddress");
-        await expect(genesis.registryEntries(z)).to.be.revertedWithCustomError(genesis, "UnknownLaunch");
+        await expect(genesis.manifest(99)).to.be.revertedWithCustomError(genesis, "UnknownInstall");
     });
 });

@@ -14,6 +14,7 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
 
     mapping (string => string) private reg;
     string[] private keys;
+    mapping (string => bool) private listed; // a key cleared to "" stays listed, so it's never pushed twice
     address public owner;
     address public wrapper;
     address public jurisdictionAddress;
@@ -230,7 +231,8 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
     }
 
     function editRegistry(string memory key, string memory value) public _regedit {
-        if (bytes(reg[key]).length == 0) {
+        if (!listed[key]) {
+            listed[key] = true;
             keys.push(key);
         }
         reg[key] = value;
@@ -242,7 +244,8 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
         for (uint256 i = 0; i < newKeys.length; i++) {
             string memory key = newKeys[i];
             string memory value = values[i];
-            if (bytes(reg[key]).length == 0) {
+            if (!listed[key]) {
+                listed[key] = true;
                 keys.push(key);
             }
             reg[key] = value;

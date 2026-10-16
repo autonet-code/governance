@@ -4,31 +4,22 @@ pragma solidity ^0.8.26;
 import "./AutonetVault.sol";
 import "./AutonetRepClaim.sol";
 import "./ToolBond.sol";
-import "@openzeppelin/contracts/utils/Strings.sol";
+import "./modules/ModuleFactory.sol";
 
 /// @title AutonetGenesis
-/// @notice Launches the Autonet layer of a jurisdiction in one transaction, between TrustlessFactory's
-///         deployDAOToken and configureAndFinalize: the Substrate, AutonetVault, AutonetRepClaim,
+/// @notice The Autonet module. Launches the Autonet layer of a jurisdiction in one transaction: the Substrate, AutonetVault, AutonetRepClaim,
 ///         ToolBond, ServiceRegistry, PaymentChannel, VentureVaultFactory and CharterAnchor (with its
 ///         genesis charter anchored), wired to the jurisdiction's
-///         timelock (governor), Registry (treasury) and RepToken. configureAndFinalize then grants the
-///         REP claim minter rights and the bond slasher rights, and records the jurisdiction.autonet.*
-///         registry keys, so the layer is live at genesis without a proposal.
+///         timelock (governor), Registry (treasury) and RepToken. Attaching it (at origination through
+///         configureAndFinalizeWithGrants, later by a ModuleAttacher proposal) grants the REP claim
+///         minter rights and the bond slasher rights, and records the jurisdiction.autonet.* keys.
 ///
 ///         The autonet contracts' creation code is stored on-chain as code blobs fixed when this
 ///         contract is deployed, so a launcher chooses parameters but never the code.
 ///
 ///         The Substrate takes the vault as its minter and the vault takes the Substrate, so the
 ///         Substrate is created with CREATE2 at an address computed first.
-contract AutonetGenesis {
-    struct Jurisdiction {
-        address payable registry;
-        address timelock;
-        address repToken;
-        address economy;
-        address dao;
-    }
-
+contract AutonetGenesis is ModuleFactory {
     struct AutonetParams {
         uint16 anchorQuorumBps;    // Substrate: REP share whose signatures accept an anchor
         address[] genesisSigners;  // Substrate: anchor signers until REP exists
@@ -56,20 +47,11 @@ contract AutonetGenesis {
     address public immutable ventureVaultFactoryCode;
     address public immutable charterAnchorCode;
 
-    event AutonetLaunched(
-        address indexed launcher,
-        address indexed repToken,
-        address timelock,
-        Deployment deployment
-    );
+    event AutonetLaunched(uint256 indexed id, address indexed repToken, Deployment deployment);
 
-    /// @notice Each launch by jurisdiction RepToken, with the jurisdiction it was wired to.
-    mapping(address => Deployment) private _deployments;
-    mapping(address => Jurisdiction) private _jurisdictions;
+    mapping(uint256 => Deployment) private _deployments;
 
     error CreateFailed();
-    error UnknownLaunch();
-    error ZeroAddress();
 
     constructor(
         address _substrateCode,
@@ -85,19 +67,21 @@ contract AutonetGenesis {
         charterAnchorCode = _charterAnchorCode;
     }
 
+    function moduleName() public pure override returns (string memory) {
+        return "autonet";
+    }
+
     function launch(Jurisdiction calldata j, AutonetParams calldata s, ToolBond.Params calldata b)
         external
-        returns (Deployment memory d)
+        returns (uint256 id)
     {
-        if (j.registry == address(0) || j.timelock == address(0) || j.repToken == address(0)
-            || j.economy == address(0) || j.dao == address(0)) {
-            revert ZeroAddress();
-        }
-        bytes32 salt = keccak256(abi.encode(msg.sender, j.repToken));
+        id = _register(j);
+        bytes32 salt = bytes32(id);
+        Deployment memory d;
 
         // Substrate(treasury, vaultMinter, governor, repToken, anchorQuorumBps, genesisSigners, genesisQuorum)
         // needs the vault, and the vault needs the Substrate: compute the Substrate's address first.
-        address vaultAddr = _nextVaultAddress();
+        address vaultAddr = _createAddress(1 + (id - 1) * CREATES_PER_LAUNCH);
         bytes memory substrateInit = abi.encodePacked(_read(substrateCode), abi.encode(
             j.registry, vaultAddr, j.timelock, j.repToken, s.anchorQuorumBps, s.genesisSigners, s.genesisQuorum));
         address substrateAddr = address(uint160(uint256(keccak256(
@@ -116,32 +100,31 @@ contract AutonetGenesis {
         d.ventureVaultFactory = _create(abi.encodePacked(_read(ventureVaultFactoryCode), abi.encode(d.substrate)));
         d.charterAnchor = _create(abi.encodePacked(_read(charterAnchorCode), abi.encode(j.timelock, s.charterHash, s.charterUri)));
 
-        _deployments[j.repToken] = d;
-        _jurisdictions[j.repToken] = j;
-        emit AutonetLaunched(msg.sender, j.repToken, j.timelock, d);
+        _deployments[id] = d;
+        emit AutonetLaunched(id, j.repToken, d);
     }
 
-    function deploymentOf(address repToken) external view returns (Deployment memory) {
-        return _deployments[repToken];
+    function deploymentOf(uint256 id) external view returns (Deployment memory) {
+        return _deployments[id];
     }
 
-    /// @notice The jurisdiction.autonet.* Registry entries for a launch, ready for configureAndFinalize.
-    ///         The daemon joins a jurisdiction from these keys alone.
-    function registryEntries(address repToken) external view returns (string[] memory keys, string[] memory values) {
-        Deployment memory d = _deployments[repToken];
-        if (d.substrate == address(0)) revert UnknownLaunch();
-        Jurisdiction memory j = _jurisdictions[repToken];
+    /// @notice The REP claim (minter), the ToolBond (slasher) and the jurisdiction.autonet.* Registry
+    ///         entries the daemon joins a jurisdiction from.
+    function manifest(uint256 id) external view returns (Manifest memory m) {
+        m = _manifest(id, 13, 1, 1);
+        Deployment memory d = _deployments[id];
+        Jurisdiction memory j = m.jurisdiction;
+        m.minters[0] = d.repClaim;
+        m.slashers[0] = d.toolBond;
         string[13] memory names = ["substrate", "vault", "rep_claim", "tool_bond", "service_registry",
             "payment_channel", "venture_vault_factory", "charter_anchor", "rep_token", "dao", "timelock",
             "economy", "registry"];
         address[13] memory addrs = [d.substrate, d.vault, d.repClaim, d.toolBond, d.serviceRegistry,
             d.paymentChannel, d.ventureVaultFactory, d.charterAnchor, j.repToken, j.dao, j.timelock,
             j.economy, address(j.registry)];
-        keys = new string[](13);
-        values = new string[](13);
         for (uint256 i = 0; i < 13; i++) {
-            keys[i] = string.concat("jurisdiction.autonet.", names[i]);
-            values[i] = Strings.toHexString(addrs[i]);
+            m.registryKeys[i] = string.concat("jurisdiction.autonet.", names[i]);
+            m.registryValues[i] = Strings.toHexString(addrs[i]);
         }
     }
 
@@ -149,13 +132,6 @@ contract AutonetGenesis {
     // creates exactly CREATES_PER_LAUNCH contracts (a failed one reverts the launch), so the count of
     // past launches gives the nonce, and from it the address, of this launch's first create: the vault.
     uint256 private constant CREATES_PER_LAUNCH = 8;
-    uint256 public launches;
-
-    function _nextVaultAddress() private returns (address) {
-        uint256 nonce = 1 + launches * CREATES_PER_LAUNCH;
-        launches++;
-        return _createAddress(nonce);
-    }
 
     function _createAddress(uint256 nonce) private view returns (address) {
         bytes memory rlpNonce;

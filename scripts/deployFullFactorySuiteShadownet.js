@@ -11,8 +11,10 @@
 //   wrapper_trustless  -> TrustlessFactory
 //   nativeProject      -> NativeProject implementation
 //   erc20Project       -> ERC20Project implementation
-//   autonetGenesis     -> AutonetGenesis (the werule "Autonet jurisdiction" launcher), with the
-//                         autonet contracts' code blobs from test/fixtures/autonet
+//   modules            -> { autonet: AutonetGenesis, content_court: ContentCourtFactory }, the
+//                         module factories werule offers (AutonetGenesis with the autonet
+//                         contracts' code blobs from test/fixtures/autonet)
+//   moduleAttacher     -> ModuleAttacher (builds attach/detach proposals for live DAOs)
 //
 // Also writes deployments/<shadownet|localhost>-trustless.json for deploy-autonet-jurisdiction.js.
 // Runs on localhost (31337) too, for rehearsals against `npx hardhat node`.
@@ -84,6 +86,10 @@ async function main() {
   const autonetGenesisAddr = await (await deployAutonetGenesis(ethers, deployer, console.log)).getAddress();
   console.log(`   AutonetGenesis deployed at: ${autonetGenesisAddr}`);
 
+  console.log("\nOther modules:");
+  const contentCourtFactoryAddr = await deploy("ContentCourtFactory");
+  const moduleAttacherAddr = await deploy("ModuleAttacher");
+
   // ---- Sanity: read back on-chain that wrappers point at the NEW factories ----
   console.log("\nSanity verification (on-chain getters):");
   const sf = await ethers.getContractAt("StandardFactory", standardFactoryAddr);
@@ -132,7 +138,8 @@ async function main() {
       wrapper_trustless: trustlessFactoryAddr,
       nativeProject: nativeAddr,
       erc20Project: erc20Addr,
-      autonetGenesis: autonetGenesisAddr
+      modules: { autonet: autonetGenesisAddr, content_court: contentCourtFactoryAddr },
+      moduleAttacher: moduleAttacherAddr
     }
   };
 
@@ -149,6 +156,8 @@ async function main() {
     contracts: {
       trustlessFactory: trustlessFactoryAddr,
       autonetGenesis: autonetGenesisAddr,
+      contentCourtFactory: contentCourtFactoryAddr,
+      moduleAttacher: moduleAttacherAddr,
       ...deploymentInfo.baseFactories
     }
   }, null, 2));
@@ -165,7 +174,9 @@ async function main() {
   console.log("  wrapper_trustless (TrustlessFactory)           :", trustlessFactoryAddr);
   console.log("  nativeProject     (NativeProject impl)         :", nativeAddr);
   console.log("  erc20Project      (ERC20Project impl)          :", erc20Addr);
-  console.log("  autonetGenesis    (AutonetGenesis)             :", autonetGenesisAddr);
+  console.log("  modules.autonet       (AutonetGenesis)         :", autonetGenesisAddr);
+  console.log("  modules.content_court (ContentCourtFactory)    :", contentCourtFactoryAddr);
+  console.log("  moduleAttacher        (ModuleAttacher)         :", moduleAttacherAddr);
   console.log("----------------------------------------");
   console.log("Base factories (for the record):");
   console.log("  InfrastructureFactory :", infraAddr);
