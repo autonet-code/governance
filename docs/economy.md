@@ -52,15 +52,15 @@ If the contractor and arbiter are both passed to `createProject`, the project st
 | `setParties(contractor, arbiter, termsHash)` | Author | Open | Sets parties, starts cooling-off, moves to Pending |
 | `sendFunds` / `sendFundsWithImmediate(bps)` | Anyone | Open, Pending | Adds funds; `bps <= maxImmediateBps` is paid out at signing (see [immediate-release.md](immediate-release.md)). Native: `msg.value`, also plain transfers via `receive()`. ERC20: `(amount)` / `(amount, bps)`, pulled with `safeTransferFrom` |
 | `withdrawAsContributor()` | Backer | Open, Pending | Full refund of everything contributed |
-| `signContract()` | Contractor | Pending, after cooling-off, `projectValue > 0` | Fixes the arbitration fee, takes the contractor's half as stake (NativeProject refunds anything sent above it), pays out the immediate portion, moves to Ongoing |
+| `signContract()` | Contractor | Pending, after cooling-off, `projectValue > 0`, not held by a DAO proposal | Fixes the arbitration fee, takes the contractor's half as stake (NativeProject refunds anything sent above it), pays out the immediate portion, moves to Ongoing |
 | `voteToReleasePayment()` / `voteToDispute()` | Backer with locked funds | Ongoing | Weight = backer's locked amount; switching sides moves the weight. Closes or disputes when quorum is reached |
 | `disputeAsContractor()` | Contractor | Ongoing | Moves to Dispute |
 | `reimburse()` | Contractor | Ongoing | Closes with 0% to contractor (backers get locked funds back) |
-| `arbitrate(percent, rulingHash)` | Arbiter | Dispute | Records ruling, opens the appeal window (`effectiveAppealPeriod`), moves to Appealable |
-| `appeal(proposalId, targets)` | Holder of `getVotes >= projectThreshold` | Appealable (inside window), or Dispute once `appealPeriod` has passed with no ruling | Requires a live Governor proposal (Pending, Active, Succeeded, Queued) and `targets[0] == project`. Moves to Appeal, restarts the window |
-| `daoOverrule(percent, rulingHash)` | Timelock (an executed proposal) | Appealable inside the window, or Dispute once `appealPeriod` has passed with no ruling | Finalizes with the DAO's percentage |
-| `finalizeArbitration()` | Anyone | Appealable, after window | Finalizes with the arbiter's ruling (0% if the arbiter never ruled) |
-| `arbitrationPeriodExpired()` | Anyone | Dispute, 150 days after dispute | Closes with full refund of locked funds, no arbitration fee |
+| `arbitrate(percent, rulingHash)` | Arbiter | Dispute | Records ruling, opens the appeal window (`appealPeriod`), moves to Appealable |
+| `registerDaoProposal(targets, values, calldatas, descriptionHash)` | Anyone (the indexer does it on `ProposalCreated`) | Any but Closed; in Appealable only before `appealEnds` | Registers a live proposal that calls `daoVeto` or `daoOverrule` on this project, so it holds (see [DAO proposal holds](#dao-proposal-holds)) |
+| `daoOverrule(percent, rulingHash)` | Timelock (an executed proposal) | Appealable inside the window (or after it, once an overrule was registered in time), or Dispute once `appealPeriod` has passed with no ruling | Finalizes with the DAO's percentage |
+| `finalizeArbitration()` | Anyone | Appealable, after window, not held | Finalizes with the arbiter's ruling (0% if the arbiter never ruled) |
+| `arbitrationPeriodExpired()` | Anyone | Dispute, 150 days after dispute, not held | Closes with full refund of locked funds, no arbitration fee |
 | `daoVeto()` | Timelock | Any but Closed | Closes with 0% to contractor |
 | `withdrawAsContractor()` | Contractor | Closed | Pays `availableToContractor` through the fee path |
 | `withdrawAsContributor()` | Backer | Closed | Pays the backer's exit amount once (`contributorSettled`) |
@@ -69,14 +69,24 @@ If the contractor and arbiter are both passed to `createProject`, the project st
 
 ### Cooling-off
 
-`coolingOffPeriodEnds = now + economy.effectiveCoolingOffPeriod()`, set by `setParties` or at creation when parties are named. 
+`coolingOffPeriodEnds = now + economy.coolingOffPeriod()`, set by `setParties` or at creation when parties are named.
 
-```
-effectiveCoolingOffPeriod = max(coolingOffPeriod, proposalLifecycle() + COOLING_OFF_BUFFER)   // buffer = 1 day
-proposalLifecycle         = governor.votingDelay() + governor.votingPeriod() + timelock.getMinDelay()
-```
+Cooling-off does not have to fit a proposal lifecycle: a veto proposal registered on the project holds signing until it is decided (see [DAO proposal holds](#dao-proposal-holds)). It is the backers' time to withdraw, never shorter than `minCoolingOffPeriod`, which the deployer fixes before the DAO takes over (`EconomySetup` applies its own: 1 day, or 60 seconds on a local chain). `setCoolingOffPeriod` reverts below it. The value is fixed per project when cooling-off starts; later parameter changes do not affect it. Funding during Pending does not extend cooling-off, and backers can still withdraw in full until the contract is signed.
 
-The floor means a veto proposal made when the parties are set can run its full course, and someone has a day to execute it, before the contractor can sign. The value is fixed per project when cooling-off starts; later parameter changes do not affect it. A DAO that wants more reaction time sets `coolingOffPeriod` above the floor. Funding during Pending does not extend cooling-off, and backers can still withdraw in full until the contract is signed.
+### DAO proposal holds
+
+A project waits for its DAO (`contracts/DaoProposalHold.sol`). `registerDaoProposal(targets, values, calldatas, descriptionHash)` is permissionless: the project checks with the Governor's `hashProposal` that the proposal is live and calls `daoVeto` or `daoOverrule` on this project, then emits `DaoProposalRegistered(proposalId, overrule)`. While any registered proposal is live, `signContract`, `finalizeArbitration` and `arbitrationPeriodExpired` revert with "A DAO proposal about this project is pending".
+
+| Proposal state | Holds |
+|----------------|-------|
+| Pending, Active | yes |
+| Succeeded | until `proposalDeadline + 1 day` (`GRACE`), for someone to queue it |
+| Queued | until `eta + 1 day`, for someone to execute it |
+| Defeated, Canceled, Expired, Executed | no |
+
+A DAO that never queues or executes can't hold a project forever. At most 8 proposals are held at once; dead ones are pruned on each registration. In Appealable, registration must happen before `appealEnds`; a registered overrule then lands even if it executes after the window (`overruleFiled`). `heldByDao()` and `heldProposals()` expose the state.
+
+The indexer registers these proposals when it sees `ProposalCreated`, paying gas from `INDEXER_RELAYER_KEY` (on localhost, hardhat's public account #9). If the indexer is down, anyone can register.
 
 ### Backer votes
 
@@ -91,7 +101,7 @@ The floor means a veto proposal made when the parties are set can run its full c
 | Arbitration fee | `totalLocked * arbitrationFeeBps / 10000`, fixed at signing. Set at deployment (`EconomyParams.arbitrationFeeBps`), changeable by `setArbitrationFee`, at most 25% |
 | Contractor stake | `arbitrationFee / 2`, paid at signing (Native: `msg.value >= stake`; ERC20: exactly `stake` pulled) |
 | Backers' share | `arbitrationFee - arbitrationFee / 2`, taken from the locked pool only if arbitration is finalized |
-| Appeal window | `effectiveAppealPeriod = max(appealPeriod, proposalLifecycle() + 2 days)`, default 7 days, fixed at the ruling |
+| Appeal window | `appealPeriod`, default 7 days, fixed at the ruling. An overrule registered inside it holds finalization until decided |
 | Arbiter exclusive window | The DAO can only rule on a silent arbiter's dispute after `disputeStarted + appealPeriod` |
 | Arbitration timeout | `ARBITRATION_TIMEOUT = 150 days` |
 
@@ -105,7 +115,7 @@ backer exit           = pool * (100 - percent) / 100 * backerLocked / totalLocke
 
 The full arbitration fee (stake plus backers' share) goes to the arbiter through the fee path (platform fee, no author fee) if the arbiter ruled. If the arbiter never ruled (the DAO ruled from Dispute), the whole fee goes to the Registry and the stake is lost. A veto or the 150-day timeout skips arbitration accounting: nobody pays the fee and the contractor reclaims the stake.
 
-The appeal flow lives entirely in the DAO: a member creates a Governor proposal calling `project.daoOverrule(percent, reasoning)`; if it passes and executes before the window closes, it replaces the ruling, otherwise anyone can finalize with the arbiter's ruling. The project is never notified of the proposal. Because the window always fits a full proposal plus two days, a proposal made early in the window can always finish. The indexer spots proposals that call `daoOverrule` on a project and sets `appealProposalId` on it, so trustless.business can show the appeal as underway (display only). See [governance.md](governance.md) for proposal timing.
+The appeal flow lives entirely in the DAO: a member creates a Governor proposal calling `project.daoOverrule(percent, reasoning)`; once it is registered on the project before the window closes (the indexer does this, or anyone with `registerDaoProposal`), the ruling can't finalize while the proposal is live, and if it passes and executes it replaces the ruling, even after the window. Otherwise anyone can finalize with the arbiter's ruling once the window closes. The indexer also sets `appealProposalId` on the project, so trustless.business can show the appeal as underway. See [governance.md](governance.md) for proposal timing.
 
 ## Money flows
 
@@ -186,14 +196,15 @@ createERC20Project(name, contractor, arbiter, termsHash, repo, description, toke
 
 ### Admin and governance
 
-`onlyGovernance`: before `setDaoAddresses` the `admin` may call setters; after, only the Timelock. `admin` is the deployer (`EconomySetup`); `transferAdmin` only works before DAO addresses are set. `setDaoAddresses(timelock, registry, governor, repToken)` is admin-only and one-time. `EconomySetup.prepareInstallation(core, data)` decodes `EconomySetup.Params { arbitrationFeeBps, platformFeeBps, authorFeeBps, coolingOffPeriod, backersQuorumBps, projectThreshold, appealPeriod }`, sets the implementations it holds and those parameters, then sets the DAO addresses in the same transaction, so from then on only DAO proposals can change anything.
+`onlyGovernance`: before `setDaoAddresses` the `admin` may call setters; after, only the Timelock. `admin` is the deployer (`EconomySetup`); `transferAdmin` only works before DAO addresses are set. `setDaoAddresses(timelock, registry, governor, repToken)` is admin-only and one-time. `EconomySetup(nativeImpl, erc20Impl, minCoolingOffPeriod)` holds the implementations and the cooling-off minimum. `prepareInstallation(core, data)` applies the minimum (`setMinCoolingOffPeriod`, admin-only and only before the DAO addresses are set), decodes `EconomySetup.Params { arbitrationFeeBps, platformFeeBps, authorFeeBps, coolingOffPeriod, backersQuorumBps, projectThreshold, appealPeriod }`, sets the implementations it holds and those parameters, then sets the DAO addresses in the same transaction, so from then on only DAO proposals can change anything.
 
 | Setter | Bounds | Default |
 |--------|--------|---------|
 | `setPlatformFee(bps)` | 100 to 5000 | 100 |
 | `setAuthorFee(bps)` | at most 2500 | 100 |
 | `setArbitrationFee(bps)` | none | constructor argument |
-| `setCoolingOffPeriod(s)` | none (floored at lifecycle + 1 day at use) | 120 |
+| `setMinCoolingOffPeriod(s)` | admin only, before `setDaoAddresses`; raises `coolingOffPeriod` if below | 1 day |
+| `setCoolingOffPeriod(s)` | at least `minCoolingOffPeriod` | 1 day |
 | `setBackersVoteQuorum(bps)` | 5000 to 9900 | 7000 |
 | `setProjectThreshold(n)` | none | 0 |
 | `setAppealPeriod(s)` | none | 604800 (7 days) |
@@ -208,9 +219,9 @@ Projects read parameters live, except cooling-off end and arbitration fee, which
 
 ## Events
 
-Economy: `NewProject`, `DaoAddressesSet`, `AdminTransferred`, `PlatformFeeSet`, `AuthorFeeSet`, `ArbitrationFeeSet`, `CoolingOffPeriodSet`, `BackersVoteQuorumSet`, `ProjectThresholdSet`, `AppealPeriodSet`, `MaxImmediateBpsSet`, `InboundValue`.
+Economy: `NewProject`, `DaoAddressesSet`, `AdminTransferred`, `MinCoolingOffPeriodSet`, `PlatformFeeSet`, `AuthorFeeSet`, `ArbitrationFeeSet`, `CoolingOffPeriodSet`, `BackersVoteQuorumSet`, `ProjectThresholdSet`, `AppealPeriodSet`, `MaxImmediateBpsSet`, `InboundValue`.
 
-Projects: `SetParties`, `SendFunds(who, amount, immediateBps)`, `ContractSigned`, `ImmediateFundsReleased(contractor, net)`, `BackerVoteCast(voter, power, forDispute)`, `ProjectDisputed`, `ArbitrationDecision`, `ArbitrationAppealed`, `DaoOverruled`, `ArbitrationFinalized`, `VetoedByDao`, `ProjectClosed`, `ContractorPaid(contractor, net)`, `AuthorPaid`, `ContributorWithdrawn`, `ArbitrationStakeReclaimed(contractor, amount)`, and on ERC20Project `OrphanedTokensSwept`.
+Projects: `SetParties`, `SendFunds(who, amount, immediateBps)`, `ContractSigned`, `ImmediateFundsReleased(contractor, net)`, `BackerVoteCast(voter, power, forDispute)`, `ProjectDisputed`, `ArbitrationDecision`, `DaoProposalRegistered(proposalId, overrule)`, `DaoOverruled`, `ArbitrationFinalized`, `VetoedByDao`, `ProjectClosed`, `ContractorPaid(contractor, net)`, `AuthorPaid`, `ContributorWithdrawn`, `ArbitrationStakeReclaimed(contractor, amount)`, and on ERC20Project `OrphanedTokensSwept`.
 
 ## Tests
 
@@ -221,4 +232,5 @@ Projects: `SetParties`, `SendFunds(who, amount, immediateBps)`, `ContractSigned`
 | `test/appeals.test.js` | Direct DAO overrule, finalize after window, late and early overrule rejected, silent-arbiter ruling, `receive()`, ERC20 sweep before and after payouts, refund of excess native stake |
 | `test/backer-spending.test.js` | `spentBy`, no double counting, reimburse, pre-signing veto refund, one listing per backed project |
 | `test/economy-rep-claim.test.js` | EconomyRepClaim: first claim, no double claim, incremental claims, earnings plus spendings, parity changes |
-| `test/security.test.js` | Factory binding, cooling-off lifecycle floor, platform fee floor, wash-trading cost |
+| `test/dao-proposal-hold.test.js` | Registered veto holds signing, grace for unqueued proposals, overrule holds finalization and lands after the window, rejected registrations, cooling-off minimum |
+| `test/security.test.js` | Factory binding, court and tool appeal-window floor, platform fee floor, wash-trading cost |

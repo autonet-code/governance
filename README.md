@@ -33,11 +33,11 @@ A jurisdiction is a DAO built on [OpenZeppelin's Governor](https://docs.openzepp
 
 The economy module adds a marketplace. Anyone can open a project; backers fund it into an escrow contract; a contractor and an arbiter are named; the contractor signs by staking half the arbitration fee. From then on the money moves only by rule:
 
-1. **Cooling-off.** Before the contractor can sign, the jurisdiction always has time to veto: the cooling-off period is never shorter than one full proposal lifecycle (voting delay + voting period + timelock delay) plus a day to execute the result, whatever the DAO configures. A veto refunds backers in full.
+1. **Cooling-off.** Before the contractor can sign, backers can withdraw in full for a cooling-off period that is never shorter than a minimum fixed at deployment (1 day by default), whatever the DAO configures. A DAO proposal to veto the project, registered on it by the indexer or by anyone, holds signing until the vote is decided, so the jurisdiction always gets to finish its vote. A veto refunds backers in full.
 2. **Immediate release.** Backers may release part of their contribution (up to a DAO-set cap, 20% by default) to the contractor at signing, as operating capital. The rest stays in escrow. ([spec →](docs/immediate-release.md))
 3. **Backer consensus.** When backers holding 70% of the stake agree, funds release to the contractor or the project moves to dispute.
 4. **Arbitration.** In a dispute the arbiter rules on a split. If the arbiter never acts, the project can be closed after 150 days.
-5. **Appeal.** Appeals happen in the DAO: a member proposes a different ruling, and if the proposal passes it overrules the arbiter. The appeal window (7 days by default) is never shorter than a full proposal lifecycle plus two days, so the project never needs to be told an appeal exists. A dispute the arbiter leaves unruled past that period can be settled the same way.
+5. **Appeal.** Appeals happen in the DAO: a member proposes a different ruling, and if the proposal passes it overrules the arbiter. Once the proposal is registered on the project inside the appeal window (7 days by default), the ruling can't finalize until the vote is decided, and a passed overrule lands even after the window. A dispute the arbiter leaves unruled past that period can be settled the same way.
 
 Every payout (immediate release, escrow release, the arbiter's fee) pays a platform fee to the jurisdiction's treasury. The DAO tunes it, but only between 1% and 50%: a jurisdiction can neither run its economy for free nor confiscate it. ([full spec →](docs/economy.md))
 
@@ -57,9 +57,9 @@ Guarantees that depend on an operator's good behaviour are not guarantees. The s
 |------|-------------|
 | Vote buying | Non-transferable reputation by default |
 | Flash-loan voting | Snapshot-based voting power |
-| Contractor signs before the DAO can react | Cooling-off floored at a full proposal lifecycle plus one day |
+| Contractor signs before the DAO can react | A registered veto proposal holds signing until decided; cooling-off never below a deploy-time minimum |
 | Fee capture or a free-riding economy | Platform fee bounded to 1% to 50%; author and arbitration fees capped at 25% |
-| Bad arbitration | DAO overrule by proposal, inside an appeal window that always fits a proposal |
+| Bad arbitration | DAO overrule by proposal; a registered overrule holds finalization until decided |
 | Abandoned projects | 150-day arbitration timeout |
 | Hijacked DAO deployment | A pending DAO can be finalized only by the account that started it |
 | Malicious module | Only setups published in the module catalog attach, and only against the DAO's own token and Registry |

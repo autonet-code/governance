@@ -80,7 +80,7 @@ If arbitration ends at 50%: pool = 8,800 - 440 = 8,360. Contractor gross 4,180. 
 
 | Risk | Mitigation |
 |------|-----------|
-| Contractor takes the advance and disappears | Backer chose the exposure; cap bounds it; the DAO can veto during cooling-off, which is at least a full proposal lifecycle (see [economy.md](economy.md#cooling-off)) |
+| Contractor takes the advance and disappears | Backer chose the exposure; cap bounds it; a veto proposal registered during cooling-off holds signing until decided (see [economy.md](economy.md#dao-proposal-holds)) |
 | Contractor's sock puppet funds at high immediate % to control the vote | Immediate funds carry no vote |
 | REP farming via immediate release plus `reimburse()` | Every REP-earning payout pays the platform fee (floor 1%), so each REP minted costs the farmer at least that fee in the treasury (`test/security.test.js`) |
 | Arbitration leaves the contractor over-advanced | Accepted: the ruling splits only the locked pool; the advance is the backer's sunk risk |

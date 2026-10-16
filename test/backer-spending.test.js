@@ -34,7 +34,8 @@ describe("Backer spending", function () {
         claim = await (await ethers.getContractFactory("EconomyRepClaim")).deploy(
             await economy.getAddress(), await repToken.getAddress(), await registry.getAddress());
         await repToken.connect(timelock).setMinter(await claim.getAddress(), true);
-        await economy.setCoolingOffPeriod(0); // no governance lifecycle to wait for in this fixture
+        await economy.setMinCoolingOffPeriod(0); // instant signing in this fixture
+        await economy.setCoolingOffPeriod(0);
         await economy.setDaoAddresses(timelock.address, await registry.getAddress(), deployer.address, await repToken.getAddress());
         await registry.connect(timelock).editRegistry(`jurisdiction.parity.${NATIVE.toLowerCase()}`, ethers.parseEther("1").toString());
     });

@@ -111,7 +111,7 @@ describe("Modules", function () {
             expect((await repo.latestVersion()).build).to.equal(1n);
             expect((await repo.getVersion(1, 2)).buildMetadata).to.equal("b2");
             await expect(repo.createVersion(1, await (await (await ethers.getContractFactory("EconomySetup")).deploy(
-                ethers.ZeroAddress, ethers.ZeroAddress)).getAddress(), "b", "")).to.be.revertedWithCustomError(repo, "WrongModule");
+                ethers.ZeroAddress, ethers.ZeroAddress, 60)).getAddress(), "b", "")).to.be.revertedWithCustomError(repo, "WrongModule");
             await expect(repo.connect(outsider).createVersion(1, await setup(), "b", ""))
                 .to.be.revertedWithCustomError(repo, "OwnableUnauthorizedAccount");
         });

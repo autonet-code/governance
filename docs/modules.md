@@ -55,7 +55,7 @@ Each module's metadata lives in `modules/<name>/` and is published with each ver
 Two extensions, both ignored by anything that only reads Aragon's fields:
 
 - `ui.requires` lists the modules this one depends on, and `ui.tokenKinds` the core token kinds it supports.
-- Each input may carry `x-ui` hints for form rendering: `label`, `section`, `default`, `min`, `max`, and `unit`. Units are `bps-percent` (entered as a percent, encoded times 100), `seconds-days`, `seconds-hours`, `decimals:<n>` (a decimal amount in base units), and `bytes32-optional` (empty encodes as zero). `fixed` encodes a constant without showing a field, and `source: "module:<name>"` fills an address with that attached module's main contract.
+- Each input may carry `x-ui` hints for form rendering: `label`, `section`, `default`, `min`, `max`, and `unit`. Units are `bps-percent` (entered as a percent, encoded times 100), `seconds-days`, `seconds-hours`, `seconds-duration` (days, hours and minutes fields; `default`, `min` and `max` in seconds), `decimals:<n>` (a decimal amount in base units), and `bytes32-optional` (empty encodes as zero). `fixed` encodes a constant without showing a field, and `source: "module:<name>"` fills an address with that attached module's main contract. `minFrom: "<view>"` reads `min` from a no-argument uint view on the setup, for minimums fixed per deployment such as the Economy's `minCoolingOffPeriod`.
 
 `scripts/lib/modules.js` `encodeInstallData(name, values)` encodes `data` from the metadata. The tests prepare every module through it, so the metadata and the setups can't drift apart.
 
@@ -63,7 +63,7 @@ Two extensions, both ignored by anything that only reads Aragon's fields:
 
 1. Write a setup that extends `ModuleSetup`, with `moduleName()`, `_prepare` (decode `data`, deploy, return the main contract) and `_describe` (actions, entries, dependencies). The helpers `_repGrants`, `_entries` and `_dependsOn` cover the usual cases.
 2. Write `modules/<name>/release-metadata.json` and `build-metadata.json`.
-3. Deploy the setup. Deploy a `ModuleRepo(name, maintainer)` and call `createVersion(1, setup, buildMetadata, releaseMetadata)`, then have the curator `register` the repo in the catalog. For a new version of an existing module, only `createVersion` is needed: a new build for compatible changes, a new release for breaking ones.
+3. Deploy the setup. Deploy a `ModuleRepo(name, maintainer)` and call `createVersion(1, setup, buildMetadata, releaseMetadata)`, then have the curator `register` the repo in the catalog. For a new version of an existing module, only `createVersion` is needed: a new build for compatible changes, a new release for breaking ones. `MODULE=<name> CATALOG=<addr> npx hardhat run scripts/publish-module-build.js --network <net>` publishes a new build of a module in its latest release: it deploys a fresh setup (for `economy`, with the previous build's implementations and `minCoolingOffPeriod`) and publishes it with the current `modules/<name>/` metadata. The signer must own the repo.
 
 Apps list modules from the catalog, so neither step needs an app release.
 

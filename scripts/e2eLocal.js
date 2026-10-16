@@ -30,7 +30,7 @@ async function deploy(name, ...args) {
 
 // Cooling-off is at least the jurisdiction's proposal lifecycle; fast-forward the node past it
 async function passCoolingOff(economy) {
-    await network.provider.send("evm_increaseTime", [Number(await economy.effectiveCoolingOffPeriod()) + 1]);
+    await network.provider.send("evm_increaseTime", [Number(await economy.coolingOffPeriod()) + 1]);
     await network.provider.send("evm_mine");
 }
 
@@ -71,7 +71,7 @@ async function main() {
     const repToken = await ethers.getContractAt("RepToken", core.token);
     const repClaim = await ethers.getContractAt("EconomyRepClaim", prepared.helpers[0]);
     check("economy admin can no longer configure", await economy.timelockAddress(), infra.timelock);
-    check("cooling-off covers the proposal lifecycle plus the buffer", await economy.effectiveCoolingOffPeriod(), (await economy.proposalLifecycle()) + (await economy.COOLING_OFF_BUFFER()));
+    check("cooling-off is at least the fixed minimum", (await economy.coolingOffPeriod()) >= (await economy.minCoolingOffPeriod()), true);
 
     const fees = (amount) => {
         const platform = amount * PLATFORM_FEE_BPS / 10000n;

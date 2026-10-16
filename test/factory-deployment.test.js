@@ -94,7 +94,7 @@ describe("JurisdictionFactory", function () {
             .to.be.revertedWithCustomError(s.processor, "WrongCore");
 
         const rogue = await (await ethers.getContractFactory("EconomySetup")).deploy(
-            await s.nativeProject.getAddress(), await s.erc20Project.getAddress());
+            await s.nativeProject.getAddress(), await s.erc20Project.getAddress(), 60);
         await rogue.connect(m1).prepareInstallation(ca, require("../scripts/lib/modules").encodeInstallData(
             ethers, "economy", require("./helpers/jurisdiction").DEFAULTS.economy));
         await expect(f.finalize(ca, [{ setup: await rogue.getAddress(), id: 1 }], [], []))

@@ -49,41 +49,17 @@ describe("Security", function () {
             )).to.be.revertedWith("DAO addresses can only be set once.");
         });
 
-        it("keeps project cooling-off at least a full proposal lifecycle plus a day, even with parties set at creation", async function () {
+        it("keeps court and tool appeal windows at least a full proposal lifecycle plus two days", async function () {
             const j = await createJurisdiction(victim, {
                 members: [member.address], amounts: [ethers.parseEther("100")],
                 votingDelay: 1, votingPeriod: 5, proposalThreshold: ethers.parseEther("1"), executionDelay: 60,
                 modules: [["economy", { params: { arbitrationFeeBps: 500, platformFeeBps: 100, authorFeeBps: 100,
                     coolingOffPeriod: 60, backersQuorumBps: 7000, projectThreshold: 0, appealPeriod: 120 } }]],
             });
-            const econ = j.economy;
-            const gov = j.dao;
-            const tl = j.timelock;
-
-            const lifecycle = (await gov.votingDelay()) + (await gov.votingPeriod()) + (await tl.getMinDelay());
-            expect(await econ.coolingOffPeriod()).to.equal(60n);
-            expect(lifecycle).to.be.gt(60n);
-            const floor = lifecycle + (await econ.COOLING_OFF_BUFFER());
-            expect(await econ.effectiveCoolingOffPeriod()).to.equal(floor);
-            // The DAO overrules by proposal, so the appeal window fits a lifecycle plus two days
-            const appealFloor = lifecycle + (await econ.APPEAL_BUFFER());
-            const appealPeriod = await econ.appealPeriod();
-            expect(await econ.effectiveAppealPeriod()).to.equal(appealPeriod > appealFloor ? appealPeriod : appealFloor);
-
-            // Parties named at creation: the contractor still has to wait out the full lifecycle
-            const receipt = await (await econ.connect(member).createProject(
-                "p", attacker.address, victim.address, "t", "r", "d")).wait();
-            const addr = receipt.logs.find(l => l.eventName === "NewProject").args.contractAddress;
-            const project = await ethers.getContractAt("NativeProject", addr);
-            await project.connect(member).sendFunds({ value: ethers.parseEther("1") });
-            await expect(project.connect(attacker).signContract({ value: ethers.parseEther("0.025") }))
-                .to.be.revertedWith("Contract signing is blocked during the cooling-off period.");
-            await time.increase(lifecycle);
-            await expect(project.connect(attacker).signContract({ value: ethers.parseEther("0.025") }))
-                .to.be.revertedWith("Contract signing is blocked during the cooling-off period.");
-            await time.increase(floor - lifecycle);
-            await passCoolingOff(project);
-            await project.connect(attacker).signContract({ value: ethers.parseEther("0.025") });
+            const lifecycle = (await j.dao.votingDelay()) + (await j.dao.votingPeriod()) + (await j.timelock.getMinDelay());
+            expect(await j.economy.proposalLifecycle()).to.equal(lifecycle);
+            // Verdicts can't hold for a DAO proposal, so their window fits one; projects hold instead
+            expect(await j.economy.effectiveAppealPeriod()).to.equal(lifecycle + (await j.economy.APPEAL_BUFFER()));
         });
 
         it("bounds the author and arbitration fees", async function () {
@@ -117,7 +93,8 @@ describe("Security", function () {
             claim = await (await ethers.getContractFactory("EconomyRepClaim")).deploy(
                 await economy.getAddress(), await repToken.getAddress(), await registry.getAddress());
             await repToken.connect(timelock).setMinter(await claim.getAddress(), true);
-            await economy.setCoolingOffPeriod(0); // no governance lifecycle to wait for in this fixture
+            await economy.setMinCoolingOffPeriod(0); // instant signing in this fixture
+            await economy.setCoolingOffPeriod(0);
             await economy.setDaoAddresses(timelock.address, await registry.getAddress(), deployer.address, await repToken.getAddress());
             await economy.connect(timelock).setPlatformFee(PLATFORM_FEE_BPS);
             await economy.connect(timelock).setAuthorFee(AUTHOR_FEE_BPS);

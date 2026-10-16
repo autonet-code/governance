@@ -54,7 +54,7 @@ Modules: EconomyRepClaim, AutonetRepClaim, ToolBond, ContentCourt; satellites: C
 | Registry | `owner` = Timelock (treasury ops, earmark release, registry edits). `jurisdictionAddress` = the token (earmark, disburse). No `wrapper` |
 | RepToken | `admin` = Timelock (mint, burn, setters); immutable `timelockAddress` (the real Timelock) gates reward epochs; `minters` mint, `slashers` slash |
 | Economy | `onlyGovernance`: `admin` until DAO addresses are set, then the Timelock forever |
-| Projects | Parties act directly; the Timelock can `daoVeto` and `daoOverrule` (in `Appeal`) |
+| Projects | Parties act directly; the Timelock can `daoVeto` and `daoOverrule` (in `Appealable`, or a silent `Dispute`); anyone can `registerDaoProposal` to hold the project for a live one |
 
 ### Economy and project clones
 
@@ -64,7 +64,7 @@ Modules: EconomyRepClaim, AutonetRepClaim, ToolBond, ContentCourt; satellites: C
 
 **Admin hand-off.** The `Economy` constructor sets `admin = msg.sender`, here `EconomySetup`. While `timelockAddress == 0`, `onlyGovernance` means `admin`; `EconomySetup.prepareInstallation` configures the Economy and calls `setDaoAddresses` (admin only, once) in the same transaction, after which `onlyGovernance` means the Timelock and `transferAdmin` is disabled. A prepared but unattached Economy is already Timelock-governed; attaching only grants its `EconomyRepClaim` minter rights and records the Registry keys.
 
-**Cooling-off floor.** `effectiveCoolingOffPeriod()` is `max(coolingOffPeriod, votingDelay + votingPeriod + timelock minDelay)`, read live from the Governor and Timelock, so the jurisdiction always has time to pass a veto before a contractor can sign.
+**DAO proposal holds.** Projects don't floor cooling-off or the appeal window at a proposal lifecycle. Instead a live proposal that calls `daoVeto` or `daoOverrule` on a project, registered there with `registerDaoProposal` (by the indexer on `ProposalCreated`, or by anyone), blocks signing and finalization until it is decided ([economy.md](economy.md#dao-proposal-holds)). Cooling-off is never below the Economy's `minCoolingOffPeriod`, fixed by `EconomySetup` before the hand-over.
 
 ### Modules and satellites
 

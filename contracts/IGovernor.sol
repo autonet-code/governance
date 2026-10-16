@@ -27,5 +27,10 @@ interface IGovernor {
      * @return The state of the proposal as a ProposalState enum member.
      */
     function state(uint256 proposalId) external view returns (ProposalState);
+
+    function hashProposal(address[] memory targets, uint256[] memory values, bytes[] memory calldatas, bytes32 descriptionHash)
+        external pure returns (uint256);
+    function proposalDeadline(uint256 proposalId) external view returns (uint256);
+    function proposalEta(uint256 proposalId) external view returns (uint256);
 }
 // IGovernor.sol

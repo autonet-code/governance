@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./IEconomy.sol";
 import "./IGovernedEconomy.sol";
+import "./DaoProposalHold.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
 contract ERC20Project is Initializable {
@@ -59,6 +60,9 @@ contract ERC20Project is Initializable {
     uint public originalDisputeResolution;
     string public originalRulingHash;
     bool public arbiterHasRuled = false;
+
+    // DAO proposals that veto or overrule this project; while one is live, signing and finalizing wait
+    DaoProposalHold.Holds private _holds;
 
     struct ProjectDetails {
         string name;
@@ -127,7 +131,7 @@ contract ERC20Project is Initializable {
 
         if (contractor != address(0) && arbiter != address(0)) {
             // Parties named at creation get the same cooling-off as setParties
-            coolingOffPeriodEnds = block.timestamp + IGovernedEconomy(address(economy)).effectiveCoolingOffPeriod();
+            coolingOffPeriodEnds = block.timestamp + IGovernedEconomy(address(economy)).coolingOffPeriod();
             stage = Stage.Pending;
         } else {
             stage = Stage.Open;
@@ -158,6 +162,7 @@ contract ERC20Project is Initializable {
             block.timestamp >= disputeStarted + ARBITRATION_TIMEOUT,
             "Arbitration period has not expired yet"
         );
+        require(!heldByDao(), "A DAO proposal about this project is pending");
         stage = Stage.Closed;
         emit ProjectClosed(msg.sender);
     }
@@ -167,7 +172,7 @@ contract ERC20Project is Initializable {
         require(msg.sender == author, "Only the Project's Author can set the other parties.");
         require(_contractor != address(0) && _arbiter != address(0), "Contractor and arbiter addresses must be valid.");
         
-        coolingOffPeriodEnds = block.timestamp + IGovernedEconomy(address(economy)).effectiveCoolingOffPeriod();
+        coolingOffPeriodEnds = block.timestamp + IGovernedEconomy(address(economy)).coolingOffPeriod();
         contractor = _contractor;
         arbiter = _arbiter;
         termsHash = _termsHash;
@@ -219,6 +224,7 @@ contract ERC20Project is Initializable {
         require(msg.sender == contractor, "Only the designated contractor can sign the contract");
         require(stage == Stage.Pending, "The project can only be signed while in `pending` stage.");
         require(block.timestamp > coolingOffPeriodEnds, "Contract signing is blocked during the cooling-off period.");
+        require(!heldByDao(), "A DAO proposal about this project is pending");
         require(projectValue > 0, "Can't sign a contract with no funds in it.");
 
         arbitrationFee = (totalLocked * IGovernedEconomy(address(economy)).arbitrationFeeBps()) / 10000;
@@ -367,20 +373,42 @@ contract ERC20Project is Initializable {
         originalRulingHash = rulingHash;
         arbiterHasRuled = true;
         stage = Stage.Appealable;
-        appealEnds = block.timestamp + IGovernedEconomy(address(economy)).effectiveAppealPeriod();
+        appealEnds = block.timestamp + IGovernedEconomy(address(economy)).appealPeriod();
 
         emit ArbitrationDecision(msg.sender, percent, rulingHash);
     }
 
-    // Appeals happen on the DAO side: an overrule proposal calls this when it executes. The appeal
-    // window always fits a full proposal lifecycle (Economy.effectiveAppealPeriod), so no on-chain
-    // registration is needed to hold off finalization. A silent arbiter can be overruled once the
-    // dispute has gone unruled for the appeal period.
+    // Registers a live DAO proposal that vetoes or overrules this project (the indexer does this
+    // when the proposal is created; anyone can). While it is live the contractor can't sign and a
+    // ruling can't finalize. An overrule must be registered within the appeal window, and then
+    // lands even if its vote ends after the window.
+    function registerDaoProposal(
+        address[] calldata targets,
+        uint256[] calldata values,
+        bytes[] calldata calldatas,
+        bytes32 descriptionHash
+    ) external {
+        require(stage != Stage.Closed, "Project is closed");
+        require(stage != Stage.Appealable || block.timestamp <= appealEnds, "Appeal window has closed");
+        DaoProposalHold.register(_holds, daoGovernor, address(this), targets, values, calldatas, descriptionHash);
+    }
+
+    function heldByDao() public view returns (bool) {
+        return DaoProposalHold.holding(_holds, daoGovernor);
+    }
+
+    function heldProposals() external view returns (uint256[] memory) {
+        return _holds.ids;
+    }
+
+    // Appeals happen on the DAO side: an overrule proposal calls this when it executes, within the
+    // appeal window or, once registered in time, whenever it passes. A silent arbiter can be
+    // overruled once the dispute has gone unruled for the appeal period.
     function daoOverrule(uint256 percent, string memory rulingHash) public {
         require(msg.sender == daoTimelock, "Only the DAO Timelock can overrule");
         IGovernedEconomy governedEconomy = IGovernedEconomy(address(economy));
         require(
-            (stage == Stage.Appealable && block.timestamp <= appealEnds) ||
+            (stage == Stage.Appealable && (block.timestamp <= appealEnds || _holds.overruleFiled)) ||
             (stage == Stage.Dispute && block.timestamp > disputeStarted + governedEconomy.appealPeriod()),
             "DAO can only overrule an open ruling or a silent arbiter"
         );
@@ -396,6 +424,7 @@ contract ERC20Project is Initializable {
             "Project not in a finalizable stage"
         );
         require(block.timestamp > appealEnds, "Appeal/Finalization period has not ended yet");
+        require(!heldByDao(), "A DAO proposal about this project is pending");
         
         _finalizeDispute(originalDisputeResolution, originalRulingHash);
         emit ArbitrationFinalized(msg.sender);

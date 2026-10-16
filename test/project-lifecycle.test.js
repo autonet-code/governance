@@ -49,7 +49,8 @@ describe("Project Lifecycle under DAO Governance", function () {
         mockRepToken = await MockRepToken.deploy();
 
         await economy.connect(deployer).setImplementations(await nativeProjectImpl.getAddress(), await erc20ProjectImpl.getAddress());
-        await economy.setCoolingOffPeriod(0); // no governance lifecycle to wait for in this fixture
+        await economy.setMinCoolingOffPeriod(0); // instant signing in this fixture
+        await economy.setCoolingOffPeriod(0);
         await economy.connect(deployer).setDaoAddresses(timelock.address, registry.address, governor.address, await mockRepToken.getAddress());
 
         await testToken.connect(deployer).transfer(author.address, ethers.parseEther("10000"));

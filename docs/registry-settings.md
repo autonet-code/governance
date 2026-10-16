@@ -13,18 +13,20 @@ Setters are `onlyGovernance`: the Economy's `admin` until `setDaoAddresses` runs
 | `platformFeeBps` | bps | 100 (1%) | 100 (`MIN_PLATFORM_FEE_BPS`) to 5000 | `setPlatformFee(uint)` | On every fee-path payout |
 | `authorFeeBps` | bps of payout after platform fee | 100 (1%) | at most 2500 (`MAX_AUTHOR_FEE_BPS`) | `setAuthorFee(uint)` | On every contractor payout |
 | `arbitrationFeeBps` | bps of `totalLocked` | `EconomySetup.Params.arbitrationFeeBps` | at most 2500 (`MAX_ARBITRATION_FEE_BPS`) | `setArbitrationFee(uint)` | Once, at signing |
-| `coolingOffPeriod` | seconds | 120 | none; effective value is `max(coolingOffPeriod, proposalLifecycle() + 1 day)` | `setCoolingOffPeriod(uint)` | Once, when parties are set |
+| `coolingOffPeriod` | seconds | 86400 (1 day) | at least `minCoolingOffPeriod` | `setCoolingOffPeriod(uint)` | Once, when parties are set |
 | `backersVoteQuorumBps` | bps of `totalLocked` | 7000 (70%) | 5000 to 9900 | `setBackersVoteQuorum(uint)` | On each backer vote |
 | `projectThreshold` | REP (18 decimals) | 0 | none | `setProjectThreshold(uint)` | REP balance to create a project |
-| `appealPeriod` | seconds | 604800 (7 days) | none | `setAppealPeriod(uint)` | At ruling (floored at `proposalLifecycle() + 2 days`); also the arbiter's exclusive window |
+| `appealPeriod` | seconds | 604800 (7 days) | none | `setAppealPeriod(uint)` | At ruling, as set; also the arbiter's exclusive window. Court and tool verdicts floor it at `proposalLifecycle() + 2 days` (`effectiveAppealPeriod()`) |
 | `maxImmediateBps` | bps per contribution | 2000 (20%) | 0 to 5000 | `setMaxImmediateBps(uint)` | On each contribution |
 | implementations | addresses | unset | none | `setImplementations(native, erc20)` | New projects only |
 
 Fixed constants on projects: `ARBITRATION_TIMEOUT = 150 days`.
 
-`proposalLifecycle()` is `governor.votingDelay() + governor.votingPeriod() + timelock.getMinDelay()`; `effectiveCoolingOffPeriod()` exposes the result. Both use seconds (the Governor clock is timestamp based).
+`minCoolingOffPeriod` is not governed: `EconomySetup` sets it from its immutable before the hand-over (`setMinCoolingOffPeriod`, admin only), 1 day by default and 60 seconds on chain 31337. Projects don't floor cooling-off or the appeal window at a proposal lifecycle; a registered DAO proposal holds them instead ([economy.md](economy.md#dao-proposal-holds)).
 
-`EconomySetup` passes `arbitrationFeeBps` to the Economy constructor. `coolingOffPeriod` and `appealPeriod` in `Params` are seconds. The setup also sets the implementations it holds; `maxImmediateBps` keeps the constructor default until a proposal changes it.
+`proposalLifecycle()` is `governor.votingDelay() + governor.votingPeriod() + timelock.getMinDelay()`, in seconds (the Governor clock is timestamp based).
+
+`EconomySetup` passes `arbitrationFeeBps` to the Economy constructor. `coolingOffPeriod` and `appealPeriod` in `Params` are seconds; `coolingOffPeriod` must be at least the setup's `minCoolingOffPeriod`. The setup also sets the implementations it holds; `maxImmediateBps` keeps the constructor default until a proposal changes it.
 
 ### Example proposal
 
@@ -99,5 +101,5 @@ Calldata: batchEditRegistry(
 
 | Contract | Event |
 |----------|-------|
-| Economy | `PlatformFeeSet`, `AuthorFeeSet`, `ArbitrationFeeSet`, `CoolingOffPeriodSet`, `BackersVoteQuorumSet`, `ProjectThresholdSet`, `AppealPeriodSet`, `MaxImmediateBpsSet`, `DaoAddressesSet`, `AdminTransferred` |
+| Economy | `PlatformFeeSet`, `AuthorFeeSet`, `ArbitrationFeeSet`, `MinCoolingOffPeriodSet`, `CoolingOffPeriodSet`, `BackersVoteQuorumSet`, `ProjectThresholdSet`, `AppealPeriodSet`, `MaxImmediateBpsSet`, `DaoAddressesSet`, `AdminTransferred` |
 | Registry | `RegistryUpdated(key, value)` from `editRegistry` and once per key from `batchEditRegistry` |

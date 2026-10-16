@@ -23,11 +23,14 @@ contract EconomySetup is ModuleSetup {
 
     address public immutable nativeProjectImpl;
     address public immutable erc20ProjectImpl;
+    // The cooling-off no Economy from this setup can go below: 1 day in production, shorter on test networks
+    uint256 public immutable minCoolingOffPeriod;
     mapping(uint256 => address) public claimOf;
 
-    constructor(address _nativeProjectImpl, address _erc20ProjectImpl) {
+    constructor(address _nativeProjectImpl, address _erc20ProjectImpl, uint256 _minCoolingOffPeriod) {
         nativeProjectImpl = _nativeProjectImpl;
         erc20ProjectImpl = _erc20ProjectImpl;
+        minCoolingOffPeriod = _minCoolingOffPeriod;
     }
 
     function moduleName() public pure override returns (string memory) {
@@ -37,6 +40,7 @@ contract EconomySetup is ModuleSetup {
     function _prepare(uint256 id, Core calldata core, bytes calldata data) internal override returns (address) {
         Params memory p = abi.decode(data, (Params));
         Economy economy = new Economy(p.arbitrationFeeBps);
+        economy.setMinCoolingOffPeriod(minCoolingOffPeriod);
         economy.setImplementations(nativeProjectImpl, erc20ProjectImpl);
         economy.setPlatformFee(p.platformFeeBps);
         economy.setAuthorFee(p.authorFeeBps);

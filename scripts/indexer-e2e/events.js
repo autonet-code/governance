@@ -31,7 +31,7 @@ async function govern(governor, voters, targets, calldatas, description) {
     return proposalId;
 }
 
-const ECONOMY = { params: { arbitrationFeeBps: 500, platformFeeBps: 100, authorFeeBps: 100, coolingOffPeriod: 0,
+const ECONOMY = { params: { arbitrationFeeBps: 500, platformFeeBps: 100, authorFeeBps: 100, coolingOffPeriod: 60,
     backersQuorumBps: 7000, projectThreshold: 0, appealPeriod: 86400 } };
 
 async function main() {
@@ -121,7 +121,7 @@ async function main() {
         registryValues: { "jurisdiction.economy.rep_claim": (await repClaim.getAddress()).toLowerCase() } };
 
     // ---------------- Trustless side ----------------
-    const coolingOff = async () => advance(Number(await economy.effectiveCoolingOffPeriod()) + 1);
+    const coolingOff = async () => advance(Number(await economy.coolingOffPeriod()) + 1);
     const newProject = async (name, withParties, token) => {
         const c = withParties ? contractor.address : ethers.ZeroAddress;
         const a = withParties ? arbiter.address : ethers.ZeroAddress;
@@ -181,6 +181,13 @@ async function main() {
     const desc = "E2E: overrule P3";
     const pr = await wait(ecoGov.connect(deployer).propose([await p3.getAddress()], [0], [overrule], desc));
     const appealId = eventArgs(pr, "ProposalCreated").proposalId;
+    // The indexer registers the overrule on the project, holding finalization while it is live
+    for (let i = 0; i < 60 && (await p3.heldProposals()).length === 0; i++) {
+        await network.provider.send("evm_mine");
+        await new Promise((r) => setTimeout(r, 1000));
+    }
+    if ((await p3.heldProposals())[0] !== appealId) throw new Error("indexer never registered the P3 overrule on the project");
+    console.log("indexer registered the P3 overrule on the project");
     await advance(Number(await ecoGov.votingDelay()) + 1);
     await wait(ecoGov.connect(deployer).castVote(appealId, 1));
     await advance(Number(await ecoGov.votingPeriod()) + 1);

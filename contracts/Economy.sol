@@ -44,10 +44,12 @@ contract Economy is IEconomy {
     // Platform + author fees stay well below 100% of any payout
     uint public constant MAX_AUTHOR_FEE_BPS = 2500; // 25%
     uint public constant MAX_ARBITRATION_FEE_BPS = 2500; // 25% of the locked value
-    // Margin after a full proposal lifecycle so a passed veto can be executed before signing
-    uint public constant COOLING_OFF_BUFFER = 1 days;
-    // An appeal window fits a full proposal plus a day to propose and a day to execute
+    // Court and tool verdicts can't hold for a DAO proposal, so their appeal window fits a full
+    // proposal plus a day to propose and a day to execute. Projects hold instead (DaoProposalHold).
     uint public constant APPEAL_BUFFER = 2 days;
+    // Backers always get this long to withdraw after the author names the contractor and arbiter.
+    // Fixed by the deployer before the DAO takes over; the DAO can't lower it.
+    uint public minCoolingOffPeriod;
 
     // Configures the economy until the DAO addresses are set; after that only the timelock can.
     address public admin;
@@ -122,13 +124,15 @@ contract Economy is IEconomy {
     event AppealPeriodSet(uint newPeriod);
     event MaxImmediateBpsSet(uint newMaxBps);
     event AdminTransferred(address newAdmin);
+    event MinCoolingOffPeriodSet(uint newMin);
 
     constructor(uint _arbitrationFeeBps) {
         require(_arbitrationFeeBps <= MAX_ARBITRATION_FEE_BPS, "Arbitration fee too high");
         arbitrationFeeBps = _arbitrationFeeBps;
         platformFeeBps = 100; // 1%
         authorFeeBps = 100;   // 1%
-        coolingOffPeriod = 2 minutes;
+        minCoolingOffPeriod = 1 days;
+        coolingOffPeriod = 1 days;
         backersVoteQuorumBps = 7000; // 70%
         appealPeriod = 7 days;
         maxImmediateBps = 2000; // 20% - max portion of contribution available to contractor immediately
@@ -150,6 +154,13 @@ contract Economy is IEconomy {
         emit AdminTransferred(newAdmin);
     }
 
+    function setMinCoolingOffPeriod(uint newMin) external {
+        require(timelockAddress == address(0) && msg.sender == admin, "Protected");
+        minCoolingOffPeriod = newMin;
+        if (coolingOffPeriod < newMin) coolingOffPeriod = newMin;
+        emit MinCoolingOffPeriodSet(newMin);
+    }
+
     function setImplementations(address _native, address _erc20) external onlyGovernance {
         nativeProjectImplementation = _native;
         erc20ProjectImplementation = _erc20;
@@ -158,21 +169,15 @@ contract Economy is IEconomy {
     fallback() external payable { emit InboundValue(); }
     receive() external payable { emit InboundValue(); }
 
-    // A project's cooling-off must give the jurisdiction time to run a full proposal (e.g. a
-    // veto) before the contractor can sign, so it never drops below the governance lifecycle
-    // plus a day to execute the result.
+    // Voting delay, voting period and timelock delay: the time a DAO proposal takes at least
     function proposalLifecycle() public view returns (uint total) {
         total += _readUint(governorAddress, "votingDelay()");
         total += _readUint(governorAddress, "votingPeriod()");
         total += _readUint(timelockAddress, "getMinDelay()");
     }
 
-    function effectiveCoolingOffPeriod() external view returns (uint) {
-        uint floor = proposalLifecycle() + COOLING_OFF_BUFFER;
-        return coolingOffPeriod > floor ? coolingOffPeriod : floor;
-    }
-
-    // The DAO overrules by proposal, so the window to do it never drops below one proposal lifecycle
+    // The appeal window of court and tool verdicts: the DAO overrules them by proposal, so it never
+    // drops below one proposal lifecycle. Projects use appealPeriod as is and hold for proposals.
     function effectiveAppealPeriod() external view returns (uint) {
         uint floor = proposalLifecycle() + APPEAL_BUFFER;
         return appealPeriod > floor ? appealPeriod : floor;
@@ -365,6 +370,7 @@ contract Economy is IEconomy {
     }
 
     function setCoolingOffPeriod(uint newPeriod) external onlyGovernance {
+        require(newPeriod >= minCoolingOffPeriod, "Cooling-off below the minimum");
         coolingOffPeriod = newPeriod;
         emit CoolingOffPeriodSet(newPeriod);
     }

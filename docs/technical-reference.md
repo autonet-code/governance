@@ -134,6 +134,7 @@ modifier onlyGovernance() {
 - Before `setDaoAddresses`, `admin` (`EconomySetup`) configures. After it, only the timelock can; `admin` is inert.
 - `transferAdmin(address newAdmin)`: only while `timelockAddress == 0` and only by `admin`. Emits `AdminTransferred`.
 - `setDaoAddresses(address _timelock, address _registry, address _governor, address _repToken)`: `admin` only, once, `_timelock != 0`. Emits `DaoAddressesSet`.
+- `setMinCoolingOffPeriod(uint)`: only while `timelockAddress == 0` and only by `admin` (`EconomySetup` applies its immutable `minCoolingOffPeriod`). Default 1 day; raises `coolingOffPeriod` if below. Emits `MinCoolingOffPeriodSet`. The DAO can't lower it.
 
 ### Governed setters (`onlyGovernance`)
 
@@ -143,21 +144,20 @@ modifier onlyGovernance() {
 | `setPlatformFee(uint)` | `MIN_PLATFORM_FEE_BPS (100) <= x <= MAX_PLATFORM_FEE_BPS (5000)` | `PlatformFeeSet` |
 | `setAuthorFee(uint)` | at most `MAX_AUTHOR_FEE_BPS` (2500) | `AuthorFeeSet` |
 | `setArbitrationFee(uint)` | at most `MAX_ARBITRATION_FEE_BPS` (2500) | `ArbitrationFeeSet` |
-| `setCoolingOffPeriod(uint)` | none (floored at read time, below) | `CoolingOffPeriodSet` |
+| `setCoolingOffPeriod(uint)` | at least `minCoolingOffPeriod` ("Cooling-off below the minimum") | `CoolingOffPeriodSet` |
 | `setBackersVoteQuorum(uint)` | `5000..9900` | `BackersVoteQuorumSet` |
 | `setProjectThreshold(uint)` | none | `ProjectThresholdSet` |
 | `setAppealPeriod(uint)` | none | `AppealPeriodSet` |
 | `setMaxImmediateBps(uint)` | `<= 5000` | `MaxImmediateBpsSet` |
 
-### Cooling-off floor
+### Court and tool appeal floor
 
 ```solidity
-function proposalLifecycle() public view returns (uint)          // governor.votingDelay() + votingPeriod() + timelock.getMinDelay()
-function effectiveCoolingOffPeriod() external view returns (uint) // max(coolingOffPeriod, proposalLifecycle() + COOLING_OFF_BUFFER)
-function effectiveAppealPeriod() external view returns (uint)     // max(appealPeriod, proposalLifecycle() + APPEAL_BUFFER)
+function proposalLifecycle() public view returns (uint)      // governor.votingDelay() + votingPeriod() + timelock.getMinDelay()
+function effectiveAppealPeriod() external view returns (uint) // max(appealPeriod, proposalLifecycle() + APPEAL_BUFFER)
 ```
 
-Projects use `effectiveCoolingOffPeriod()`, so the DAO always has time to pass a veto before the contractor can sign. Unreadable targets count as 0.
+Only ContentCourt and ToolBond verdicts use `effectiveAppealPeriod()`, since they can't hold for a proposal. Projects use `coolingOffPeriod` and `appealPeriod` as set and hold instead (below). Unreadable targets count as 0.
 
 ### Projects and ledgers
 
@@ -202,22 +202,26 @@ Stages: `Open, Pending, Ongoing, Dispute, Appealable, Appeal, Closed`. `Appeal` 
 
 | Function | Caller | Stage | Notes |
 |----------|--------|-------|-------|
-| `setParties(address contractor, address arbiter, string termsHash)` | author | Open | Starts cooling-off = `effectiveCoolingOffPeriod()`. Parties named at creation get the same |
+| `setParties(address contractor, address arbiter, string termsHash)` | author | Open | Starts cooling-off = `coolingOffPeriod()`. Parties named at creation get the same |
 | `sendFundsWithImmediate(uint immediateBps)` payable / `(uint256 amount, uint immediateBps)` | anyone | Open, Pending | `immediateBps <= maxImmediateBps` |
 | `sendFunds()` payable / `sendFunds(uint256 amount)` | anyone | Open, Pending | 0% immediate |
-| `signContract()` | contractor | Pending, after cooling-off | Stakes half the arbitration fee (`totalLocked * arbitrationFeeBps / 10000`); releases immediate funds with fees |
+| `signContract()` | contractor | Pending, after cooling-off, not held | Stakes half the arbitration fee (`totalLocked * arbitrationFeeBps / 10000`); releases immediate funds with fees |
 | `voteToReleasePayment()`, `voteToDispute()` | backers with locked funds | Ongoing | Weight = locked amount; quorum `backersVoteQuorumBps` of `totalLocked` |
 | `disputeAsContractor()`, `reimburse()` | contractor | Ongoing | |
-| `arbitrate(uint256 percent, string rulingHash)` | arbiter | Dispute | Opens the appeal window (`effectiveAppealPeriod`) |
-| `daoOverrule(uint256 percent, string rulingHash)` | timelock | Appealable inside the window, or Dispute after `appealPeriod` | |
-| `finalizeArbitration()` | anyone | Appealable after window | |
-| `arbitrationPeriodExpired()` | anyone | Dispute after `ARBITRATION_TIMEOUT` | Closes with full refund |
+| `arbitrate(uint256 percent, string rulingHash)` | arbiter | Dispute | Opens the appeal window (`appealEnds = now + appealPeriod`) |
+| `registerDaoProposal(address[] targets, uint256[] values, bytes[] calldatas, bytes32 descriptionHash)` | anyone | any but Closed; Appealable only until `appealEnds` | Checks via `governor.hashProposal` that the proposal is live and calls `daoVeto` or `daoOverrule` on this project. Emits `DaoProposalRegistered(proposalId, overrule)` |
+| `daoOverrule(uint256 percent, string rulingHash)` | timelock | Appealable inside the window (or later if an overrule was registered: `overruleFiled`), or Dispute after `appealPeriod` | |
+| `finalizeArbitration()` | anyone | Appealable after window, not held | |
+| `arbitrationPeriodExpired()` | anyone | Dispute after `ARBITRATION_TIMEOUT`, not held | Closes with full refund |
 | `daoVeto()` | timelock | any but Closed | Full refund of locked funds (and immediate if unsigned) |
 | `withdrawAsContractor()` | contractor | Closed | Pays with fees |
 | `withdrawAsContributor()` | backer | Open, Pending, Closed | Full refund pre-signing; settlement once after close |
 | `reclaimArbitrationStake()` | contractor | Closed, fee not paid out | Emits `ArbitrationStakeReclaimed` |
 | `sweepOrphanedTokens(address)` | timelock | any | ERC20Project only; sends the balance above `escrowed` to the Registry |
 | `spentBy(address) view`, `getProjectDetails() view` | anyone | | |
+| `heldByDao() view`, `heldProposals() view` | anyone | | Whether a registered proposal is live; the registered ids |
+
+Holds (`contracts/DaoProposalHold.sol`): while any registered proposal is live, `signContract`, `finalizeArbitration` and `arbitrationPeriodExpired` revert with "A DAO proposal about this project is pending". Live means Pending or Active, Succeeded until `proposalDeadline + GRACE`, Queued until `eta + GRACE` (`GRACE = 1 days`). At most `MAX_HELD = 8`; dead ones are pruned on registration. The indexer registers proposals on `ProposalCreated` (`INDEXER_RELAYER_KEY`, gas only); anyone can if it is down.
 
 Fees on every reputation-accruing payout (`_payWithFees`): platform fee to the Registry first, then author fee (contractor payouts only), then the net to the payee; author and payee earnings are recorded in the Economy. Arbiter payouts pay the platform fee but no author fee. If the arbiter never ruled, the fee goes to the Registry.
 
@@ -284,7 +288,7 @@ function uninstallCalls(IModuleSetup setup, uint256 id) external view returns (a
 
 - `ModuleRepo(name, maintainer)`: `createVersion(release, setup, buildMetadata, releaseMetadata)` (owner), `updateReleaseMetadata`, `getVersion(release, build)`, `latestVersion()`, `versionOf(setup)`, `isPublished(setup)`.
 - `ModuleCatalog`: `register(repo)`, `remove(name)` (owner, the curator), `names()`, `isPublished(setup)`.
-- Setups: `EconomySetup(nativeProjectImpl, erc20ProjectImpl)` with `data = abi.encode(EconomySetup.Params)` and `claimOf(id)`; `ContentCourtSetup` with `data = abi.encode(address economy, ContentCourt.Params)`; `AutonetSetup(6 code blobs)` with `data = abi.encode(address economy, AutonetParams, ToolBond.Params)` and `deploymentOf(id)` ([autonet.md](autonet.md#genesis-autonetsetup)).
+- Setups: `EconomySetup(nativeProjectImpl, erc20ProjectImpl, minCoolingOffPeriod)` (deploy scripts pass 60 s on chain 31337, 1 day elsewhere) with `data = abi.encode(EconomySetup.Params)` and `claimOf(id)`; `ContentCourtSetup` with `data = abi.encode(address economy, ContentCourt.Params)`; `AutonetSetup(6 code blobs)` with `data = abi.encode(address economy, AutonetParams, ToolBond.Params)` and `deploymentOf(id)` ([autonet.md](autonet.md#genesis-autonetsetup)).
 - ModuleProcessor errors: `NotPublished`, `WrongCore`, `NotAJurisdiction`, `AlreadyAttached`, `NotAttached`, `MissingDependency(name)`, `HasDependents(name)`.
 
 ### Sub-factories
@@ -329,7 +333,7 @@ event RepoRegistered(string name, address repo); event RepoRemoved(string name, 
 event NewProject(address indexed contractAddress, string projectName, address contractor, address arbiter,
     string termsHash, string repo, string description, address token);   // token = address(0) for native
 event DaoAddressesSet(address timellock, address registry, address governor, address repToken);
-event AdminTransferred(address newAdmin);
+event AdminTransferred(address newAdmin); event MinCoolingOffPeriodSet(uint newMin);
 event PlatformFeeSet(uint); event AuthorFeeSet(uint); event ArbitrationFeeSet(uint);
 event CoolingOffPeriodSet(uint); event BackersVoteQuorumSet(uint); event ProjectThresholdSet(uint);
 event AppealPeriodSet(uint); event MaxImmediateBpsSet(uint); event InboundValue();
@@ -342,6 +346,7 @@ event ImmediateFundsReleased(address contractor, uint256 amount);
 event BackerVoteCast(address indexed voter, uint256 votingPower, bool forDispute);
 event ProjectDisputed(address by);
 event ArbitrationDecision(address arbiter, uint256 percent, string rulingHash);
+event DaoProposalRegistered(uint256 indexed proposalId, bool overrule);
 event ArbitrationFinalized(address indexed finalizer);
 event DaoOverruled(address indexed timelock, uint256 percent, string rulingHash);
 event VetoedByDao(address indexed timelock);
@@ -396,8 +401,8 @@ event SpendWindowReset(address indexed token, uint256 windowStart);
 | `ARBITRATION_TIMEOUT` | `150 days` | projects |
 | `MIN_PLATFORM_FEE_BPS` / `MAX_PLATFORM_FEE_BPS` | `100` (1%) / `5000` (50%) | Economy |
 | `MAX_AUTHOR_FEE_BPS` / `MAX_ARBITRATION_FEE_BPS` | `2500` (25%) each | Economy |
-| `COOLING_OFF_BUFFER` | `1 days`, added to the proposal lifecycle floor | Economy |
-| `APPEAL_BUFFER` | `2 days`, added to the proposal lifecycle for `effectiveAppealPeriod` | Economy |
+| `APPEAL_BUFFER` | `2 days`, added to the proposal lifecycle for `effectiveAppealPeriod` (court and tool verdicts) | Economy |
+| `GRACE` / `MAX_HELD` | `1 days` / `8`, DAO proposal holds | DaoProposalHold |
 | `NATIVE_CURRENCY` / `NATIVE_TOKEN` | `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` | Economy / Registry |
 | `MAX_DELEGATE_SHARE_BPS` | `2500` | RepToken |
 | `PARITY_ONE` | `1e18` | EconomyRepClaim, CoinOffering, AutonetVault |
@@ -409,7 +414,8 @@ Economy constructor defaults (`EconomySetup` sets all but `maxImmediateBps` from
 | `arbitrationFeeBps` | constructor arg |
 | `platformFeeBps` | 100 (1%) |
 | `authorFeeBps` | 100 (1%) |
-| `coolingOffPeriod` | 120 s (floored by `effectiveCoolingOffPeriod`) |
+| `minCoolingOffPeriod` | 1 day (set by `EconomySetup` before hand-over) |
+| `coolingOffPeriod` | 1 day (at least `minCoolingOffPeriod`) |
 | `backersVoteQuorumBps` | 7000 (70%) |
 | `projectThreshold` | 0 |
 | `appealPeriod` | 7 days |

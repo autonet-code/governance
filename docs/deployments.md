@@ -98,7 +98,7 @@ npx hardhat node
 npx hardhat run scripts/e2eLocal.js --network localhost
 ```
 
-Deploys the factory suite, creates an economy DAO, sets parities with werule's encoding (`parity * 10^(36 - decimals)`), runs a native and a 6-decimal ERC20 project with immediate release, and checks: Economy admin frozen, cooling-off equal to the proposal lifecycle, treasury platform fees, and contractor and backer REP. Prints `PASS`/`FAIL` per check and exits non-zero on any failure.
+Deploys the factory suite, creates an economy DAO, sets parities with werule's encoding (`parity * 10^(36 - decimals)`), runs a native and a 6-decimal ERC20 project with immediate release, and checks: Economy admin frozen, cooling-off at least the fixed minimum, treasury platform fees, and contractor and backer REP. Prints `PASS`/`FAIL` per check and exits non-zero on any failure.
 
 ### `scripts/indexer-e2e/` (contracts plus indexer plus Firestore emulator)
 

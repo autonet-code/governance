@@ -79,8 +79,10 @@ const MODULES = ["economy", "content_court", "autonet"];
 
 /// Deploys the core factory, catalog, processor and module setups, and publishes each module's
 /// version 1.1 in the catalog. `curator` maintains the repos and the catalog (default: the signer).
-async function deployJurisdictionSuite(ethers, signer, { log = () => {}, curator } = {}) {
+/// `minCoolingOff` (seconds) is the cooling-off no Economy can go below: 1 day, 1 minute on a local chain.
+async function deployJurisdictionSuite(ethers, signer, { log = () => {}, curator, minCoolingOff } = {}) {
     curator = curator ?? signer.address;
+    minCoolingOff = minCoolingOff ?? await defaultMinCoolingOff(ethers);
     const deploy = async (name, ...args) => {
         const c = await (await ethers.getContractFactory(name, signer)).deploy(...args);
         await c.waitForDeployment();
@@ -103,7 +105,7 @@ async function deployJurisdictionSuite(ethers, signer, { log = () => {}, curator
         await s.processor.getAddress());
 
     s.setups = {
-        economy: await deploy("EconomySetup", await s.nativeProject.getAddress(), await s.erc20Project.getAddress()),
+        economy: await deploy("EconomySetup", await s.nativeProject.getAddress(), await s.erc20Project.getAddress(), minCoolingOff),
         content_court: await deploy("ContentCourtSetup"),
         autonet: await deployAutonetSetup(ethers, signer, log),
     };
@@ -121,7 +123,12 @@ async function deployJurisdictionSuite(ethers, signer, { log = () => {}, curator
     return s;
 }
 
+async function defaultMinCoolingOff(ethers) {
+    const { chainId } = await ethers.provider.getNetwork();
+    return chainId === 31337n ? 60 : 86400;
+}
+
 module.exports = {
     AUTONET_BLOBS, MODULES, blobInitCode, deployBlob, deployAutonetSetup,
-    metadata, dataUri, paramType, encodeInstallData, deployJurisdictionSuite,
+    metadata, dataUri, paramType, encodeInstallData, deployJurisdictionSuite, defaultMinCoolingOff,
 };
