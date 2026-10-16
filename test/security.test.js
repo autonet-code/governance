@@ -3,116 +3,62 @@ const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 const { passCoolingOff } = require("./helpers/coolingOff");
 
-// Regression tests for the factory hijack and zero-cost REP farming fixed in Oct 2026.
+// Regression tests for the factory hijack and zero-cost REP farming fixed in Oct 2026, carried over
+// to JurisdictionFactory and the economy module.
 describe("Security", function () {
-    describe("TrustlessFactory deployment binding", function () {
+    describe("JurisdictionFactory deployment binding", function () {
         let victim, attacker, member;
-        let trustlessFactory, nativeProjectImpl, erc20ProjectImpl;
-
-        const tokenParams = (member) => ({
-            name: "Token", symbol: "TKN",
-            initialMembers: [member.address],
-            initialAmounts: [ethers.parseEther("100")],
-        });
-        const govParams = (name) => ({
-            name, votingDelay: 1, votingPeriod: 5,
-            proposalThreshold: ethers.parseEther("1"), quorumFraction: 4,
-        });
-        const economyParams = {
-            arbitrationFeeBps: 500,
-            initialPlatformFeeBps: 100,
-            initialAuthorFeeBps: 100,
-            initialCoolingOffPeriod: 60,
-            initialBackersQuorumBps: 7000,
-            initialProjectThreshold: 0,
-            initialAppealPeriod: 120,
-        };
-
-        async function deployInfra(signer) {
-            const receipt = await (await trustlessFactory.connect(signer).deployInfrastructure(1, 500)).wait();
-            return receipt.logs.find(log => log.eventName === "InfrastructureDeployed").args;
-        }
-
-        async function deployDaoToken(signer, registry, timelock, name) {
-            const receipt = await (await trustlessFactory.connect(signer)
-                .deployDAOToken(registry, timelock, tokenParams(member), govParams(name))).wait();
-            return receipt.logs.find(log => log.eventName === "DAOTokenDeployed").args;
-        }
-
-        async function addressParams(economy, registry, timelock, repToken, dao) {
-            return {
-                implAddresses: [await nativeProjectImpl.getAddress(), await erc20ProjectImpl.getAddress()],
-                contractAddresses: [economy, registry, timelock, repToken, dao],
-            };
-        }
+        const { suite, coreParams, prepare, createJurisdiction } = require("./helpers/jurisdiction");
 
         beforeEach(async function () {
             [victim, attacker, member] = await ethers.getSigners();
-            nativeProjectImpl = await (await ethers.getContractFactory("NativeProject")).deploy();
-            erc20ProjectImpl = await (await ethers.getContractFactory("ERC20Project")).deploy();
-            const infraFactory = await (await ethers.getContractFactory("InfrastructureFactory")).deploy();
-            const daoFactory = await (await ethers.getContractFactory("DAOFactory")).deploy();
-            const repTokenFactory = await (await ethers.getContractFactory("RepTokenFactory")).deploy();
-            const economyFactory = await (await ethers.getContractFactory("EconomyFactory")).deploy();
-            trustlessFactory = await (await ethers.getContractFactory("TrustlessFactory")).deploy(
-                await infraFactory.getAddress(), await daoFactory.getAddress(),
-                await economyFactory.getAddress(), await repTokenFactory.getAddress()
-            );
         });
 
-        it("rejects deployDAOToken against someone else's infrastructure", async function () {
-            const { registry, timelock } = await deployInfra(victim);
-            await expect(deployDaoToken(attacker, registry, timelock, "Evil"))
-                .to.be.revertedWith("No infrastructure pending for caller");
+        it("rejects finalizing someone else's core, or a core with a rogue governor", async function () {
+            const f = (await suite()).jurisdictionFactory;
+            const p = coreParams({ members: [member.address], amounts: [ethers.parseEther("100")] });
+            const core = await f.connect(victim).deployCore.staticCall(p);
+            await f.connect(victim).deployCore(p);
+            const c = { registry: core.registry, timelock: core.timelock, token: core.token, governor: core.governor };
+            const rogue = await f.connect(attacker).deployCore.staticCall(p);
+            await f.connect(attacker).deployCore(p);
 
-            // Attacker with their own pending infra still can't point at the victim's
-            await deployInfra(attacker);
-            await expect(deployDaoToken(attacker, registry, timelock, "Evil"))
-                .to.be.revertedWith("Not the caller's infrastructure");
+            await expect(f.connect(attacker).finalize(c, [], [], [])).to.be.revertedWithCustomError(f, "NotOriginator");
+            await expect(f.connect(victim).finalize({ ...c, governor: rogue.governor }, [], [], []))
+                .to.be.revertedWithCustomError(f, "WrongCore");
+
+            await f.connect(victim).finalize(c, [], [], []);
+            const tl = await ethers.getContractAt("TimelockController", c.timelock);
+            expect(await tl.hasRole(await tl.PROPOSER_ROLE(), c.governor)).to.be.true;
+            expect(await tl.hasRole(await tl.PROPOSER_ROLE(), rogue.governor)).to.be.false;
         });
 
-        it("rejects configureAndFinalize of someone else's deployment with a rogue governor", async function () {
-            const { economy, registry, timelock } = await deployInfra(victim);
-            const { repToken, dao } = await deployDaoToken(victim, registry, timelock, "Victim DAO");
-
-            // Attacker builds their own governor and tries to finalize the victim's suite with it
-            const mine = await deployInfra(attacker);
-            const rogue = await deployDaoToken(attacker, mine.registry, mine.timelock, "Rogue");
-            await expect(trustlessFactory.connect(attacker).configureAndFinalize(
-                await addressParams(economy, registry, timelock, repToken, rogue.dao), economyParams, [], []
-            )).to.be.revertedWith("Addresses do not match caller's deployment");
-
-            // The victim can still finalize, and their governor holds the proposer role
-            await trustlessFactory.connect(victim).configureAndFinalize(
-                await addressParams(economy, registry, timelock, repToken, dao), economyParams, [], []
-            );
-            const tl = await ethers.getContractAt(
-                "@openzeppelin/contracts/governance/TimelockController.sol:TimelockController", timelock);
-            expect(await tl.hasRole(await tl.PROPOSER_ROLE(), dao)).to.be.true;
-            expect(await tl.hasRole(await tl.PROPOSER_ROLE(), rogue.dao)).to.be.false;
-        });
-
-        it("does not let outsiders configure a half-deployed economy", async function () {
-            const { economy } = await deployInfra(victim);
-            const econ = await ethers.getContractAt("Economy", economy);
-            expect(await econ.admin()).to.equal(await trustlessFactory.getAddress());
+        it("hands a prepared economy to the timelock in the same transaction", async function () {
+            const s = await suite();
+            const f = s.jurisdictionFactory;
+            const core = await f.connect(victim).deployCore.staticCall(coreParams());
+            await f.connect(victim).deployCore(coreParams());
+            const c = { registry: core.registry, timelock: core.timelock, token: core.token, governor: core.governor };
+            const { module } = await prepare(s, victim, c, "economy");
+            const econ = await ethers.getContractAt("Economy", module);
+            expect(await econ.timelockAddress()).to.equal(c.timelock);
             await expect(econ.connect(attacker).setImplementations(attacker.address, attacker.address))
                 .to.be.revertedWith("Protected");
             await expect(econ.connect(attacker).setDaoAddresses(
                 attacker.address, attacker.address, attacker.address, attacker.address
-            )).to.be.revertedWith("Protected");
+            )).to.be.revertedWith("DAO addresses can only be set once.");
         });
 
         it("keeps project cooling-off at least a full proposal lifecycle plus a day, even with parties set at creation", async function () {
-            const { economy, registry, timelock } = await deployInfra(victim);
-            const { repToken, dao } = await deployDaoToken(victim, registry, timelock, "Victim DAO");
-            await trustlessFactory.connect(victim).configureAndFinalize(
-                await addressParams(economy, registry, timelock, repToken, dao), economyParams, [], []
-            );
-            const econ = await ethers.getContractAt("Economy", economy);
-            const gov = await ethers.getContractAt("HomebaseDAO", dao);
-            const tl = await ethers.getContractAt(
-                "@openzeppelin/contracts/governance/TimelockController.sol:TimelockController", timelock);
+            const j = await createJurisdiction(victim, {
+                members: [member.address], amounts: [ethers.parseEther("100")],
+                votingDelay: 1, votingPeriod: 5, proposalThreshold: ethers.parseEther("1"), executionDelay: 60,
+                modules: [["economy", { params: { arbitrationFeeBps: 500, platformFeeBps: 100, authorFeeBps: 100,
+                    coolingOffPeriod: 60, backersQuorumBps: 7000, projectThreshold: 0, appealPeriod: 120 } }]],
+            });
+            const econ = j.economy;
+            const gov = j.dao;
+            const tl = j.timelock;
 
             const lifecycle = (await gov.votingDelay()) + (await gov.votingPeriod()) + (await tl.getMinDelay());
             expect(await econ.coolingOffPeriod()).to.equal(60n);
@@ -154,7 +100,7 @@ describe("Security", function () {
         const PLATFORM_FEE_BPS = 100n; // the floor
         const AUTHOR_FEE_BPS = 100n;
         let deployer, timelock, alice, aliceAlt;
-        let economy, registry, repToken, testToken;
+        let economy, registry, repToken, testToken, claim;
 
         beforeEach(async function () {
             [deployer, timelock, alice, aliceAlt] = await ethers.getSigners();
@@ -168,7 +114,9 @@ describe("Security", function () {
             repToken = await (await ethers.getContractFactory("RepToken")).deploy(
                 "Jurisdiction", "JUR", await registry.getAddress(), timelock.address, [], [], false);
             await repToken.setAdmin(timelock.address);
-            await repToken.connect(timelock).setEconomyAddress(await economy.getAddress());
+            claim = await (await ethers.getContractFactory("EconomyRepClaim")).deploy(
+                await economy.getAddress(), await repToken.getAddress(), await registry.getAddress());
+            await repToken.connect(timelock).setMinter(await claim.getAddress(), true);
             await economy.setCoolingOffPeriod(0); // no governance lifecycle to wait for in this fixture
             await economy.setDaoAddresses(timelock.address, await registry.getAddress(), deployer.address, await repToken.getAddress());
             await economy.connect(timelock).setPlatformFee(PLATFORM_FEE_BPS);
@@ -212,8 +160,8 @@ describe("Security", function () {
                 await project.connect(aliceAlt).reclaimArbitrationStake();
             }
 
-            await repToken.connect(alice).claimReputationFromEconomy();
-            await repToken.connect(aliceAlt).claimReputationFromEconomy();
+            await claim.connect(alice).claim();
+            await claim.connect(aliceAlt).claim();
             const repMinted = (await repToken.balanceOf(alice.address)) + (await repToken.balanceOf(aliceAlt.address));
             const treasuryGain = (await testToken.balanceOf(registryAddr)) - treasuryBefore;
             const endBalances = (await testToken.balanceOf(alice.address)) + (await testToken.balanceOf(aliceAlt.address));

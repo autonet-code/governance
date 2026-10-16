@@ -1,0 +1,51 @@
+{
+  "ui": {
+    "requires": ["economy"],
+    "tokenKinds": ["Soulbound", "Transferable"]
+  },
+  "change": "Initial build.",
+  "pluginSetup": {
+    "prepareInstallation": {
+      "description": "Deploys the Substrate, AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry, PaymentChannel, VentureVaultFactory and CharterAnchor, wired to the DAO.",
+      "inputs": [
+        { "internalType": "address", "name": "economy", "type": "address", "description": "The Economy whose appeal window tool verdicts wait out.", "x-ui": { "source": "module:economy" } },
+        {
+          "internalType": "struct AutonetSetup.AutonetParams",
+          "name": "substrate",
+          "type": "tuple",
+          "description": "Substrate, payment channels and charter",
+          "components": [
+            { "internalType": "uint16", "name": "anchorQuorumBps", "type": "uint16", "description": "Share of all REP whose holders (through their delegates) must sign an epoch anchor.", "x-ui": { "label": "Anchor quorum (%)", "unit": "bps-percent", "default": "50", "min": 1, "max": 99, "section": "Substrate" } },
+            { "internalType": "address[]", "name": "genesisSigners", "type": "address[]", "description": "Anchor signers until REP exists. Members hold REP from the start, so none are needed.", "x-ui": { "fixed": [] } },
+            { "internalType": "uint256", "name": "genesisQuorum", "type": "uint256", "description": "Genesis signatures an anchor needs.", "x-ui": { "fixed": "0" } },
+            { "internalType": "uint256", "name": "challengeWindow", "type": "uint256", "description": "How long a counterparty has to challenge a payment channel close.", "x-ui": { "label": "Payment channel challenge window (hours)", "unit": "seconds-hours", "default": "1", "min": 1, "max": 720, "section": "Substrate" } },
+            { "internalType": "bytes32", "name": "charterHash", "type": "bytes32", "description": "Hash of the charter anchored at deployment. Leave empty to anchor one later by proposal.", "x-ui": { "label": "Charter hash (optional)", "unit": "bytes32-optional", "default": "", "section": "Substrate" } },
+            { "internalType": "string", "name": "charterUri", "type": "string", "description": "Where the charter text lives (for example an IPFS URI).", "x-ui": { "label": "Charter URI (optional)", "default": "", "section": "Substrate" } }
+          ]
+        },
+        {
+          "internalType": "struct ToolBond.Params",
+          "name": "toolBond",
+          "type": "tuple",
+          "description": "Tool stakes and REP-settled malware verdicts",
+          "components": [
+            { "internalType": "uint256", "name": "minStake", "type": "uint256", "description": "ATN an author must stake behind each published tool. Nodes ignore unstaked tools.", "x-ui": { "label": "Stake per tool (ATN)", "unit": "decimals:6", "default": "100", "min": 0, "max": 1000000000, "section": "Tool bonds" } },
+            { "internalType": "uint256", "name": "thresholdBps", "type": "uint256", "description": "Combined REP of the auditors flagging a tool that settles its malware verdict.", "x-ui": { "label": "Verdict threshold (% of REP)", "unit": "bps-percent", "default": "5", "min": 0.01, "max": 100, "section": "Tool bonds" } },
+            { "internalType": "uint256", "name": "reviewWindow", "type": "uint256", "description": "How long flags can gather before an unsettled review lapses.", "x-ui": { "label": "Review window (days)", "unit": "seconds-days", "default": "14", "min": 1, "max": 365, "section": "Tool bonds" } },
+            { "internalType": "uint256", "name": "revealWindow", "type": "uint256", "description": "Time auditors have to reveal their hidden flags once the threshold is reached.", "x-ui": { "label": "Reveal window (days)", "unit": "seconds-days", "default": "2", "min": 1, "max": 30, "section": "Tool bonds" } },
+            { "internalType": "uint256", "name": "finderBps", "type": "uint256", "description": "Share of a malicious tool's stake paid to the first auditor who flagged it. The other red flaggers split the rest.", "x-ui": { "label": "Finder share (%)", "unit": "bps-percent", "default": "50", "min": 0, "max": 100, "section": "Tool bonds" } },
+            { "internalType": "uint256", "name": "degradeBps", "type": "uint256", "description": "REP an auditor loses for flagging against the verdict, or for not revealing a flag.", "x-ui": { "label": "Wrong-flag penalty (% of REP)", "unit": "bps-percent", "default": "10", "min": 0, "max": 100, "section": "Tool bonds" } },
+            { "internalType": "uint256", "name": "authorSlashBps", "type": "uint256", "description": "REP the author of a tool found to be malware loses. It goes to the auditors who caught it.", "x-ui": { "label": "Malware author penalty (% of REP)", "unit": "bps-percent", "default": "100", "min": 0, "max": 100, "section": "Tool bonds" } },
+            { "internalType": "uint256", "name": "unbondDelay", "type": "uint256", "description": "How long a stake stays reviewable after its author asks to withdraw. At least the review window.", "x-ui": { "label": "Unbond delay (days)", "unit": "seconds-days", "default": "30", "min": 1, "max": 730, "section": "Tool bonds" } },
+            { "internalType": "uint256", "name": "auditorShareBps", "type": "uint256", "description": "Share of a vetted tool's earnings that goes to the auditors who found it clean.", "x-ui": { "label": "Auditor share of tool earnings (%)", "unit": "bps-percent", "default": "40", "min": 0, "max": 100, "section": "Tool bonds" } }
+          ]
+        }
+      ]
+    },
+    "prepareUpdate": {},
+    "prepareUninstallation": {
+      "description": "Revokes the REP claim's minting rights and ToolBond's slashing rights, and clears the jurisdiction.autonet.* entries. The daemon stops seeing this jurisdiction as an Autonet one.",
+      "inputs": []
+    }
+  }
+}

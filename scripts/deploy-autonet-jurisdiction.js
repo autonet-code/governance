@@ -1,27 +1,25 @@
 /**
- * Deploy an Autonet jurisdiction: a trustless-economy DAO plus its whole Autonet layer (Substrate,
- * AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry, PaymentChannel, VentureVaultFactory,
- * CharterAnchor), the same path the werule wizard takes:
+ * Deploy an Autonet jurisdiction: a core DAO with the economy and autonet modules attached at
+ * origination, the same path the werule wizard takes (docs/modules.md):
  *
- *   1. TrustlessFactory.deployInfrastructure   (Economy, Timelock, Registry)
- *   2. TrustlessFactory.deployDAOToken         (RepToken, governor)
- *   3. AutonetGenesis.launch                   (the Autonet layer, one tx)
- *   4. TrustlessFactory.configureAndFinalizeWithGrants
- *        registry keys: jurisdiction.name, parities, and the autonet module's manifest
- *        (jurisdiction.autonet.*, modules.autonet)
- *        grants:        REP claim -> RepToken minter, ToolBond -> RepToken slasher
+ *   1. JurisdictionFactory.deployCore            (Governor, Timelock, Registry, RepToken)
+ *   2. EconomySetup.prepareInstallation          (Economy + EconomyRepClaim)
+ *   3. AutonetSetup.prepareInstallation          (Substrate, AutonetVault, AutonetRepClaim, ToolBond,
+ *                                                 ServiceRegistry, PaymentChannel, VentureVaultFactory,
+ *                                                 CharterAnchor; one tx)
+ *   4. JurisdictionFactory.finalize              (jurisdiction.name, parities; attaches both modules:
+ *                                                 their grants and jurisdiction.* / modules.* entries)
  *
- * Nothing needs a proposal afterwards. The factory suite (and AutonetGenesis, deployed here if the
- * suite file lacks it) comes from deployments/<network>-trustless.json or
- * deployments/etherlink-shadownet-trustless.json. Run scripts/sync-autonet-artifacts.js first so the
- * genesis code blobs hold the current autonet contracts.
+ * Nothing needs a proposal afterwards. The suite comes from deployments/<etherlink-shadownet|localhost>-jurisdiction.json
+ * (scripts/deploy-jurisdiction-suite.js). Run scripts/sync-autonet-artifacts.js before deploying the
+ * suite so the autonet code blobs hold the current autonet contracts.
  *
  * Usage:
  *   npx hardhat run scripts/deploy-autonet-jurisdiction.js --network ets
  *
  * Environment (all optional):
- *   VOTING_DELAY_SECS (60) VOTING_PERIOD_SECS (604800) TIMELOCK_DELAY_SECS (60): whole minutes,
- *     the factories take minutes. Test networks: 0 / 120 / 0.
+ *   VOTING_DELAY_SECS (60) VOTING_PERIOD_SECS (604800): whole minutes. TIMELOCK_DELAY_SECS (60).
+ *     Test networks: 0 / 120 / 0.
  *   PARITY_TOKENS=0x..,0x..  PARITY_VALUES=<18dp>,<18dp>: vault payment tokens (1 USDC(6d) = 1e30)
  *   ANCHOR_QUORUM_BPS (5000), GENESIS_SIGNERS (none; comma list), GENESIS_QUORUM (0)
  *   CHALLENGE_WINDOW_SECS (3600), CHARTER_HASH (none), CHARTER_URI
@@ -33,22 +31,21 @@
 const { ethers } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
-const { deployAutonetGenesis } = require("./lib/autonet-genesis");
+const { encodeInstallData } = require("./lib/modules");
 
 const JURISDICTION_NAME = "Autonet";
-const TOKEN_NAME = "Autonet Rep";
 const TOKEN_SYMBOL = "AREP";
 const PROPOSAL_THRESHOLD = ethers.parseEther("10");
 const QUORUM_FRACTION = 4;
 
 const ECONOMY = {
   arbitrationFeeBps: 250,
-  initialPlatformFeeBps: 250,
-  initialAuthorFeeBps: 500,
-  initialCoolingOffPeriod: 259200,
-  initialBackersQuorumBps: 5100,
-  initialProjectThreshold: ethers.parseEther("10"),
-  initialAppealPeriod: 604800,
+  platformFeeBps: 250,
+  authorFeeBps: 500,
+  coolingOffPeriod: 259200,
+  backersQuorumBps: 5100,
+  projectThreshold: ethers.parseEther("10"),
+  appealPeriod: 604800,
 };
 
 const env = (k, d) => (process.env[k] === undefined || process.env[k] === "" ? d : process.env[k]);
@@ -63,22 +60,19 @@ function minutes(name, d) {
   return secs / 60;
 }
 
-function event(receipt, contract, name) {
-  for (const log of receipt.logs) {
-    try {
-      const parsed = contract.interface.parseLog(log);
-      if (parsed && parsed.name === name) return parsed.args;
-    } catch (e) { /* another contract's log */ }
-  }
-  throw new Error(`${name} event not found`);
-}
-
 function suiteFile(network) {
-  for (const name of [`${network.name}-trustless.json`, "etherlink-shadownet-trustless.json", "localhost-trustless.json"]) {
+  for (const name of ["etherlink-shadownet-jurisdiction.json", "localhost-jurisdiction.json"]) {
     const p = path.join(__dirname, "..", "deployments", name);
     if (fs.existsSync(p) && BigInt(JSON.parse(fs.readFileSync(p, "utf8")).chainId) === network.chainId) return p;
   }
-  throw new Error("No TrustlessFactory suite for this chain in deployments/; deploy the suite first");
+  throw new Error("No jurisdiction suite for this chain in deployments/; run scripts/deploy-jurisdiction-suite.js first");
+}
+
+async function prepare(setup, from, core, name, values) {
+  await (await setup.prepareInstallation(core, encodeInstallData(ethers, name, values))).wait();
+  const id = await setup.lastPreparedBy(from.address);
+  const [, p] = await setup.installationOf(id);
+  return { id, module: p.module };
 }
 
 async function main() {
@@ -86,32 +80,28 @@ async function main() {
   const network = await ethers.provider.getNetwork();
   console.log(`Autonet jurisdiction on ${network.name} (chain ${network.chainId}), deployer ${deployer.address}`);
 
-  const suitePath = suiteFile(network);
-  const suite = JSON.parse(fs.readFileSync(suitePath, "utf8"));
-  const factory = await ethers.getContractAt("TrustlessFactory", suite.contracts.trustlessFactory);
-  let genesis;
-  if (suite.contracts.autonetGenesis) {
-    genesis = await ethers.getContractAt("AutonetGenesis", suite.contracts.autonetGenesis);
-  } else {
-    console.log("Deploying AutonetGenesis (not in the suite file yet)...");
-    genesis = await deployAutonetGenesis(ethers, deployer, console.log);
-    suite.contracts.autonetGenesis = await genesis.getAddress();
-    fs.writeFileSync(suitePath, JSON.stringify(suite, null, 2));
-  }
-  console.log(`  TrustlessFactory: ${await factory.getAddress()}`);
-  console.log(`  AutonetGenesis:   ${await genesis.getAddress()}`);
+  const suite = JSON.parse(fs.readFileSync(suiteFile(network), "utf8"));
+  const factory = await ethers.getContractAt("JurisdictionFactory", suite.firestoreFields.jurisdictionFactory);
+  const economySetup = await ethers.getContractAt("EconomySetup", suite.modules.economy.setup);
+  const autonetSetup = await ethers.getContractAt("AutonetSetup", suite.modules.autonet.setup);
+  console.log(`  JurisdictionFactory: ${await factory.getAddress()}`);
 
-  // 1. Infrastructure
-  const infra = event(await (await factory.deployInfrastructure(minutes("TIMELOCK_DELAY_SECS", 60), ECONOMY.arbitrationFeeBps)).wait(),
-    factory, "InfrastructureDeployed");
-  console.log(`1. Economy ${infra.economy}, Registry ${infra.registry}, Timelock ${infra.timelock}`);
+  // 1. Core
+  const params = {
+    name: JURISDICTION_NAME, symbol: TOKEN_SYMBOL, description: "", tokenKind: 0, underlying: ethers.ZeroAddress,
+    initialMembers: [deployer.address], initialAmounts: [ethers.parseEther("1000")],
+    votingDelay: minutes("VOTING_DELAY_SECS", 60), votingPeriod: minutes("VOTING_PERIOD_SECS", 604800),
+    proposalThreshold: PROPOSAL_THRESHOLD, quorumFraction: QUORUM_FRACTION,
+    executionDelay: Number(env("TIMELOCK_DELAY_SECS", 60)),
+  };
+  const c = await factory.deployCore.staticCall(params);
+  await (await factory.deployCore(params)).wait();
+  const core = { registry: c.registry, timelock: c.timelock, token: c.token, governor: c.governor };
+  console.log(`1. Governor ${core.governor}, RepToken ${core.token}, Registry ${core.registry}, Timelock ${core.timelock}`);
 
-  // 2. RepToken + governor
-  const tok = event(await (await factory.deployDAOToken(infra.registry, infra.timelock,
-    { name: TOKEN_NAME, symbol: TOKEN_SYMBOL, initialMembers: [deployer.address], initialAmounts: [ethers.parseEther("1000")] },
-    { name: `${JURISDICTION_NAME} DAO`, votingDelay: minutes("VOTING_DELAY_SECS", 60), votingPeriod: minutes("VOTING_PERIOD_SECS", 604800),
-      proposalThreshold: PROPOSAL_THRESHOLD, quorumFraction: QUORUM_FRACTION })).wait(), factory, "DAOTokenDeployed");
-  console.log(`2. RepToken ${tok.repToken}, DAO ${tok.dao}`);
+  // 2. Economy
+  const economy = await prepare(economySetup, deployer, core, "economy", { params: ECONOMY });
+  console.log(`2. Economy ${economy.module} (installation ${economy.id})`);
 
   // 3. Autonet layer
   const reviewWindow = envBig("TOOLBOND_REVIEW_WINDOW_SECS", 14 * 86400);
@@ -137,28 +127,26 @@ async function main() {
     charterHash: env("CHARTER_HASH", ethers.ZeroHash),
     charterUri: env("CHARTER_URI", ""),
   };
-  const j = { registry: infra.registry, timelock: infra.timelock, repToken: tok.repToken, economy: infra.economy, dao: tok.dao };
-  await (await genesis.launch(j, autonetParams, bondParams)).wait();
-  const installId = await genesis.lastInstallBy(deployer.address);
-  const d = await genesis.deploymentOf(installId);
-  const m = await genesis.manifest(installId);
-  console.log("3. Autonet layer:");
+  const autonet = await prepare(autonetSetup, deployer, core, "autonet",
+    { economy: economy.module, substrate: autonetParams, toolBond: bondParams });
+  const d = await autonetSetup.deploymentOf(autonet.id);
+  console.log(`3. Autonet layer (installation ${autonet.id}):`);
   for (const k of ["substrate", "vault", "repClaim", "toolBond", "serviceRegistry", "paymentChannel", "ventureVaultFactory", "charterAnchor"]) {
     console.log(`     ${k.padEnd(20)} ${d[k]}`);
   }
 
-  // 4. Finalize with registry entries and grants
-  const keys = ["jurisdiction.name", ...m.registryKeys];
-  const values = [JURISDICTION_NAME, ...m.registryValues];
+  // 4. Finalize: name, parities, both modules attached
+  const keys = ["jurisdiction.name"];
+  const values = [JURISDICTION_NAME];
   const pTokens = env("PARITY_TOKENS", "").split(",").filter(Boolean);
   const pValues = env("PARITY_VALUES", "").split(",").filter(Boolean);
   if (pTokens.length !== pValues.length) throw new Error("PARITY_TOKENS and PARITY_VALUES length mismatch");
   pTokens.forEach((t, i) => { keys.push(`jurisdiction.parity.${t.trim().toLowerCase()}`); values.push(pValues[i].trim()); });
-  await (await factory.configureAndFinalizeWithGrants(
-    { implAddresses: [suite.projectImplementations.nativeProject, suite.projectImplementations.erc20Project],
-      contractAddresses: [infra.economy, infra.registry, infra.timelock, tok.repToken, tok.dao] },
-    ECONOMY, keys, values, [...m.minters], [...m.slashers])).wait();
-  console.log("4. Finalized: timelock owns everything; REP claim is a minter, ToolBond a slasher.");
+  await (await factory.finalize(core, [
+    { setup: await economySetup.getAddress(), id: economy.id },
+    { setup: await autonetSetup.getAddress(), id: autonet.id },
+  ], keys, values)).wait();
+  console.log("4. Finalized: timelock owns everything; economy and autonet attached.");
 
   const out = {
     jurisdiction: JURISDICTION_NAME,
@@ -166,10 +154,10 @@ async function main() {
     chainId: Number(network.chainId),
     deployer: deployer.address,
     timestamp: new Date().toISOString(),
-    autonetGenesis: await genesis.getAddress(),
-    autonetInstallId: Number(installId),
-    dao: { governor: tok.dao, repToken: tok.repToken, economy: infra.economy, registry: infra.registry, timelock: infra.timelock },
+    dao: { governor: core.governor, repToken: core.token, registry: core.registry, timelock: core.timelock },
+    economy: { economy: economy.module, installation: Number(economy.id) },
     autonet: {
+      installation: Number(autonet.id),
       substrate: d.substrate, vault: d.vault, repClaim: d.repClaim, toolBond: d.toolBond,
       serviceRegistry: d.serviceRegistry, paymentChannel: d.paymentChannel,
       ventureVaultFactory: d.ventureVaultFactory, charterAnchor: d.charterAnchor,

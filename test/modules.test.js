@@ -1,128 +1,145 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
-const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { suite, prepare, createJurisdiction, govern, REP } = require("./helpers/jurisdiction");
+const { metadata, paramType } = require("../scripts/lib/modules");
 
-// Jurisdiction modules, with ContentCourt as the example: installed and attached at origination
-// (configureAndFinalizeWithGrants), and installed later by anyone and attached by proposal through
-// ModuleAttacher, then detached the same way.
+// Modules after origination: anyone prepares an installation, the DAO attaches it by a proposal
+// built by ModuleProcessor, and detaches it the same way. The catalog decides which setups count.
 describe("Modules", function () {
     let deployer, member, outsider;
-    let trustlessFactory, courts, attacher, nativeImpl, erc20Impl;
-
-    const DAY = 86400;
-    const COURT = {
-        caseDeposit: ethers.parseEther("1"), thresholdBps: 5500, reviewWindow: 3 * DAY, revealWindow: DAY,
-        degradeBps: 1000, assertionSlashBps: 2000,
-    };
-
-    const deploy = async (name, ...args) => (await ethers.getContractFactory(name)).deploy(...args);
-
-    // Steps 1 and 2; `modules(j)` installs modules and returns their manifests before step 3
-    async function originate(modules = async () => []) {
-        const f = trustlessFactory.connect(member);
-        const infra = (await (await f.deployInfrastructure(0, 250)).wait())
-            .logs.find((l) => l.eventName === "InfrastructureDeployed").args;
-        const tok = (await (await f.deployDAOToken(infra.registry, infra.timelock,
-            { name: "Rep", symbol: "REP", initialMembers: [member.address], initialAmounts: [ethers.parseEther("1000")] },
-            { name: "DAO", votingDelay: 0, votingPeriod: 2, proposalThreshold: 0, quorumFraction: 4 }
-        )).wait()).logs.find((l) => l.eventName === "DAOTokenDeployed").args;
-        const j = { registry: infra.registry, timelock: infra.timelock, repToken: tok.repToken, economy: infra.economy, dao: tok.dao };
-
-        const manifests = await modules(j);
-        const all = (field) => manifests.flatMap((m) => [...m[field]]);
-        await f.configureAndFinalizeWithGrants(
-            { implAddresses: [await nativeImpl.getAddress(), await erc20Impl.getAddress()],
-              contractAddresses: [infra.economy, infra.registry, infra.timelock, tok.repToken, tok.dao] },
-            { arbitrationFeeBps: 250, initialPlatformFeeBps: 250, initialAuthorFeeBps: 500, initialCoolingOffPeriod: 60,
-              initialBackersQuorumBps: 5100, initialProjectThreshold: 0, initialAppealPeriod: 120 },
-            all("registryKeys"), all("registryValues"), all("minters"), all("slashers"));
-        return {
-            j,
-            dao: await ethers.getContractAt("HomebaseDAO", tok.dao),
-            rep: await ethers.getContractAt("RepToken", tok.repToken),
-            registry: await ethers.getContractAt("Registry", infra.registry),
-        };
-    }
-
-    async function installCourt(j, from = outsider) {
-        await courts.connect(from).install(j, COURT);
-        return courts.lastInstallBy(from.address);
-    }
-
-    async function govern(dao, [targets, values, calldatas], description) {
-        const rc = await (await dao.connect(member).propose([...targets], [...values], [...calldatas], description)).wait();
-        const id = rc.logs.map((l) => { try { return dao.interface.parseLog(l); } catch { return null; } })
-            .find((e) => e && e.name === "ProposalCreated").args.proposalId;
-        await dao.connect(member).castVote(id, 1);
-        await time.increase(121);
-        await dao.queue([...targets], [...values], [...calldatas], ethers.id(description));
-        await dao.execute([...targets], [...values], [...calldatas], ethers.id(description));
-    }
+    let s;
 
     before(async function () {
         [deployer, member, outsider] = await ethers.getSigners();
-        nativeImpl = await deploy("NativeProject");
-        erc20Impl = await deploy("ERC20Project");
-        trustlessFactory = await deploy("TrustlessFactory",
-            await (await deploy("InfrastructureFactory")).getAddress(),
-            await (await deploy("DAOFactory")).getAddress(),
-            await (await deploy("EconomyFactory")).getAddress(),
-            await (await deploy("RepTokenFactory")).getAddress());
-        courts = await deploy("ContentCourtFactory");
-        attacher = await deploy("ModuleAttacher");
+        s = await suite();
     });
 
-    it("attaches a module at origination", async function () {
-        const { rep, registry } = await originate(async (j) => [await courts.manifest(await installCourt(j, member))]);
-        const id = await courts.lastInstallBy(member.address);
-        const court = await courts.courtOf(id);
+    async function liveDao(modules = []) {
+        const j = await createJurisdiction(member, { members: [member.address], amounts: [REP(1000)], modules });
+        await j.rep.connect(member).delegate(member.address);
+        return j;
+    }
 
-        expect(await rep.slashers(court)).to.equal(true);
-        expect(await registry.getRegistryValue("jurisdiction.content_court.court")).to.equal(court.toLowerCase());
-        expect(await registry.getRegistryValue("modules.content_court"))
-            .to.equal(`${(await courts.getAddress()).toLowerCase()}:${id}`);
-        const c = await ethers.getContractAt("ContentCourt", court);
-        expect(await c.timelock()).to.equal(await rep.timelockAddress());
-        expect(await c.treasury()).to.equal(await registry.getAddress());
+    it("a prepared installation is inert until a proposal attaches it; a proposal detaches it", async function () {
+        const j = await liveDao(["economy"]);
+        const court = await prepare(s, outsider, j.core, "content_court", {}, j.installs);
+        expect(await j.rep.slashers(court.module)).to.equal(false);
+
+        await govern(j.dao, member, await s.processor.installCalls(await court.setup.getAddress(), court.id), "Attach the court");
+        expect(await j.rep.slashers(court.module)).to.equal(true);
+        expect(await j.registry.getRegistryValue("jurisdiction.content_court.court")).to.equal(court.module.toLowerCase());
+        const keyCount = (await j.registry.getAllKeys()).length;
+
+        await govern(j.dao, member, await s.processor.uninstallCalls(await court.setup.getAddress(), court.id), "Detach the court");
+        expect(await j.rep.slashers(court.module)).to.equal(false);
+        expect(await j.registry.getRegistryValue("modules.content_court")).to.equal("");
+
+        // Attaching it again doesn't list the keys twice
+        await govern(j.dao, member, await s.processor.installCalls(await court.setup.getAddress(), court.id), "Attach again");
+        expect(await j.rep.slashers(court.module)).to.equal(true);
+        expect((await j.registry.getAllKeys()).length).to.equal(keyCount);
     });
 
-    it("an installed module is inert until a proposal attaches it, and a proposal detaches it", async function () {
-        const { j, dao, rep, registry } = await originate();
-        await rep.connect(member).delegate(member.address);
-
-        const id = await installCourt(j);
-        const court = await courts.courtOf(id);
-        expect(await rep.slashers(court)).to.equal(false);
-
-        await govern(dao, await attacher.attachCalls(await courts.getAddress(), id), "Attach the content court");
-        expect(await rep.slashers(court)).to.equal(true);
-        expect(await registry.getRegistryValue("jurisdiction.content_court.court")).to.equal(court.toLowerCase());
-        const keyCount = (await registry.getAllKeys()).length;
-
-        await govern(dao, await attacher.detachCalls(await courts.getAddress(), id), "Detach the content court");
-        expect(await rep.slashers(court)).to.equal(false);
-        expect(await registry.getRegistryValue("jurisdiction.content_court.court")).to.equal("");
-        expect(await registry.getRegistryValue("modules.content_court")).to.equal("");
-
-        // Attaching again doesn't list the keys twice
-        await govern(dao, await attacher.attachCalls(await courts.getAddress(), id), "Attach it again");
-        expect(await rep.slashers(court)).to.equal(true);
-        expect((await registry.getAllKeys()).length).to.equal(keyCount);
+    it("adds the Economy to a DAO created without it", async function () {
+        const j = await liveDao();
+        const economy = await prepare(s, member, j.core, "economy");
+        await govern(j.dao, member, await s.processor.installCalls(await economy.setup.getAddress(), economy.id), "Add the economy");
+        const [ok, module] = await s.processor.attachedModule(j.core.registry, "economy");
+        expect(ok).to.equal(true);
+        expect(module).to.equal(economy.module);
+        expect(await j.rep.minters(economy.prepared.helpers[0])).to.equal(true);
     });
 
-    it("won't build a proposal for a module wired to a mismatched jurisdiction", async function () {
-        const a = await originate();
-        const b = await originate();
-        // Registry of A, timelock of B: an installation that would answer to B's governance
-        const id = await installCourt({ ...a.j, timelock: b.j.timelock });
-        await expect(attacher.attachCalls(await courts.getAddress(), id))
-            .to.be.revertedWithCustomError(attacher, "NotAJurisdiction");
+    it("enforces dependencies both ways", async function () {
+        const j = await liveDao();
+        const economy = await prepare(s, member, j.core, "economy");
+        const court = await prepare(s, member, j.core, "content_court", {}, { economy });
+        // The court depends on an economy that isn't attached
+        await expect(s.processor.installCalls(await court.setup.getAddress(), court.id))
+            .to.be.revertedWithCustomError(s.processor, "MissingDependency").withArgs("economy");
+
+        await govern(j.dao, member, await s.processor.installCalls(await economy.setup.getAddress(), economy.id), "Economy");
+        await govern(j.dao, member, await s.processor.installCalls(await court.setup.getAddress(), court.id), "Court");
+        // The economy can't be detached while the court depends on it
+        await expect(s.processor.uninstallCalls(await economy.setup.getAddress(), economy.id))
+            .to.be.revertedWithCustomError(s.processor, "HasDependents").withArgs("content_court");
+
+        // A court wired to a different economy doesn't satisfy the dependency either
+        const other = await liveDao(["economy"]);
+        const stray = await prepare(s, member, other.core, "content_court", { economy: economy.module });
+        await expect(s.processor.installCalls(await stray.setup.getAddress(), stray.id))
+            .to.be.revertedWithCustomError(s.processor, "MissingDependency");
     });
 
-    it("rejects missing jurisdiction addresses and unknown installations", async function () {
-        const z = ethers.ZeroAddress;
-        await expect(courts.install({ registry: z, timelock: z, repToken: z, economy: z, dao: z }, COURT))
-            .to.be.revertedWithCustomError(courts, "ZeroAddress");
-        await expect(courts.manifest(999)).to.be.revertedWithCustomError(courts, "UnknownInstall");
+    it("refuses a second installation of an attached module", async function () {
+        const j = await liveDao(["economy"]);
+        const again = await prepare(s, member, j.core, "economy");
+        await expect(s.processor.installCalls(await again.setup.getAddress(), again.id))
+            .to.be.revertedWithCustomError(s.processor, "AlreadyAttached");
+    });
+
+    it("won't build a proposal for an installation wired to a mismatched core", async function () {
+        const a = await liveDao(["economy"]);
+        const b = await liveDao();
+        // Registry and token of A, governor of B
+        const x = await prepare(s, outsider, { ...a.core, governor: b.core.governor }, "content_court", {}, a.installs);
+        await expect(s.processor.installCalls(await x.setup.getAddress(), x.id))
+            .to.be.revertedWithCustomError(s.processor, "NotAJurisdiction");
+    });
+
+    describe("Catalog", function () {
+        it("lists the published modules with their metadata", async function () {
+            expect([...(await s.catalog.names())]).to.deep.equal(["economy", "content_court", "autonet"]);
+            const repo = await ethers.getContractAt("ModuleRepo", await s.catalog.repoOf("content_court"));
+            const v = await repo.latestVersion();
+            expect(v.setup).to.equal(await s.setups.content_court.getAddress());
+            expect([v.release, v.build]).to.deep.equal([1n, 1n]);
+            const build = JSON.parse(Buffer.from(v.buildMetadata.split(",")[1], "base64").toString());
+            expect(build.ui.requires).to.deep.equal(["economy"]);
+            expect(await repo.releaseMetadata(1)).to.match(/^data:application\/json;base64,/);
+        });
+
+        it("versions are tagged RELEASE.BUILD and immutable, and only the maintainer publishes", async function () {
+            const repo = await (await ethers.getContractFactory("ModuleRepo")).deploy("content_court", deployer.address);
+            const setup = async () => (await (await ethers.getContractFactory("ContentCourtSetup")).deploy()).getAddress();
+            const s1 = await setup();
+            await expect(repo.createVersion(2, s1, "b", "r")).to.be.revertedWithCustomError(repo, "BadRelease");
+            await repo.createVersion(1, s1, "b", "r");
+            await expect(repo.createVersion(1, s1, "b", "")).to.be.revertedWithCustomError(repo, "SetupAlreadyPublished");
+            await repo.createVersion(1, await setup(), "b2", "");
+            await repo.createVersion(2, await setup(), "b3", "r2");
+            expect((await repo.latestVersion()).build).to.equal(1n);
+            expect((await repo.getVersion(1, 2)).buildMetadata).to.equal("b2");
+            await expect(repo.createVersion(1, await (await (await ethers.getContractFactory("EconomySetup")).deploy(
+                ethers.ZeroAddress, ethers.ZeroAddress)).getAddress(), "b", "")).to.be.revertedWithCustomError(repo, "WrongModule");
+            await expect(repo.connect(outsider).createVersion(1, await setup(), "b", ""))
+                .to.be.revertedWithCustomError(repo, "OwnableUnauthorizedAccount");
+        });
+
+        it("the curator registers and removes repos", async function () {
+            const catalog = await (await ethers.getContractFactory("ModuleCatalog")).deploy(deployer.address);
+            const repo = await (await ethers.getContractFactory("ModuleRepo")).deploy("content_court", deployer.address);
+            const setup = await (await ethers.getContractFactory("ContentCourtSetup")).deploy();
+            await repo.createVersion(1, await setup.getAddress(), "b", "r");
+            await expect(catalog.connect(outsider).register(await repo.getAddress()))
+                .to.be.revertedWithCustomError(catalog, "OwnableUnauthorizedAccount");
+            await catalog.register(await repo.getAddress());
+            expect(await catalog.isPublished(await setup.getAddress())).to.equal(true);
+            await expect(catalog.register(await repo.getAddress())).to.be.revertedWithCustomError(catalog, "NameTaken");
+            await catalog.remove("content_court");
+            expect(await catalog.isPublished(await setup.getAddress())).to.equal(false);
+            expect([...(await catalog.names())]).to.deep.equal([]);
+        });
+    });
+
+    it("every module's build metadata encodes the data its setup decodes", async function () {
+        // createJurisdiction encodes from metadata; this checks the types line up with the contracts
+        for (const name of ["economy", "content_court", "autonet"]) {
+            const inputs = metadata(name, "build").pluginSetup.prepareInstallation.inputs;
+            expect(inputs.map(paramType).join(",")).to.not.include("undefined");
+        }
+        const j = await liveDao(["economy", "content_court", "autonet"]);
+        const [ok] = await s.processor.attachedModule(j.core.registry, "autonet");
+        expect(ok).to.equal(true);
     });
 });

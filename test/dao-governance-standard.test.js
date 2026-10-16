@@ -5,62 +5,20 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 describe("Standard DAO Governance", function () {
     let deployer, member1, member2, member3, recipient;
     let dao, token, timelock, registry;
-    let standardFactory;
 
     beforeEach(async function () {
         [deployer, member1, member2, member3, recipient] = await ethers.getSigners();
 
-        // Deploy factory dependencies
-        const infraFactory = await (await ethers.getContractFactory("InfrastructureFactory")).deploy();
-        const daoFactory = await (await ethers.getContractFactory("DAOFactory")).deploy();
-        const repTokenFactory = await (await ethers.getContractFactory("RepTokenFactory")).deploy();
-
-        // Deploy StandardFactory
-        const StandardFactory = await ethers.getContractFactory("StandardFactory");
-        standardFactory = await StandardFactory.deploy(
-            await infraFactory.getAddress(),
-            await daoFactory.getAddress(),
-            await repTokenFactory.getAddress()
-        );
-
-        // Deploy a DAO with proper governance params
-        const daoParams = {
-            name: "Test DAO",
-            symbol: "TDAO",
-            description: "A test DAO for governance",
-            decimals: 18,
-            executionDelay: 60, // 1 minute
-            initialMembers: [member1.address, member2.address],
-            initialAmounts: [
-                ethers.parseEther("100"), // member1 gets 100 tokens
-                ethers.parseEther("50"),  // member2 gets 50 tokens
-                1,  // votingDelay: 1 minute
-                2,  // votingPeriod: 2 minutes
-                ethers.parseEther("1"), // proposalThreshold: 1 token
-                4   // quorum: 4%
-            ],
-            keys: [],
-            values: [],
-            transferrableStr: "false"
-        };
-
-        const tx = await standardFactory.deployDAOwithToken(daoParams);
-        const receipt = await tx.wait();
-
-        // Get deployed addresses from event
-        const event = receipt.logs.find(log => {
-            try {
-                const parsed = standardFactory.interface.parseLog(log);
-                return parsed.name === "NewDaoCreated";
-            } catch {
-                return false;
-            }
+        const { createJurisdiction } = require("./helpers/jurisdiction");
+        const j = await createJurisdiction(deployer, {
+            name: "Test DAO", symbol: "TDAO", description: "A test DAO for governance",
+            members: [member1.address, member2.address], amounts: [ethers.parseEther("100"), ethers.parseEther("50")],
+            votingDelay: 1, votingPeriod: 2, proposalThreshold: ethers.parseEther("1"), quorumFraction: 4,
+            executionDelay: 60,
         });
-
-        const parsedEvent = standardFactory.interface.parseLog(event);
-        const daoAddress = parsedEvent.args.dao;
-        const tokenAddress = parsedEvent.args.token;
-        const registryAddress = parsedEvent.args.registry;
+        const daoAddress = j.core.governor;
+        const tokenAddress = j.core.token;
+        const registryAddress = j.core.registry;
 
         // Get contract instances
         dao = await ethers.getContractAt("HomebaseDAO", daoAddress);

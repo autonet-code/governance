@@ -1,0 +1,83 @@
+const { expect } = require("chai");
+const { ethers } = require("hardhat");
+
+const { autonet } = require("./helpers/autonet");
+const { createJurisdiction, suite, REP } = require("./helpers/jurisdiction");
+
+// The autonet module, attached at origination the way the werule wizard does it: the core, the
+// economy module, then autonet (which depends on it). Everything is live at genesis.
+describe("AutonetSetup", function () {
+    let deployer, launcher, member, buyer;
+    let s;
+    const ATN = (n) => ethers.parseUnits(String(n), 6);
+    const CHARTER = ethers.id("charter v1");
+
+    before(async function () {
+        [deployer, launcher, member, buyer] = await ethers.getSigners();
+        s = await suite();
+    });
+
+    async function launch(from, usdc) {
+        const parityKey = `jurisdiction.parity.${(await usdc.getAddress()).toLowerCase()}`;
+        const j = await createJurisdiction(from, {
+            members: [member.address], amounts: [REP(1000)],
+            modules: ["economy", ["autonet", { substrate: { anchorQuorumBps: 5000, genesisSigners: [from.address],
+                genesisQuorum: 1, challengeWindow: 3600, charterHash: CHARTER, charterUri: "ipfs://charter" } }]],
+            keys: [parityKey], values: [(10n ** 30n).toString()],
+        });
+        return { j, d: await s.setups.autonet.deploymentOf(j.installs.autonet.id) };
+    }
+
+    it("launches a jurisdiction's whole Autonet layer, wired and live at genesis", async function () {
+        const usdc = await (await ethers.getContractFactory("TestERC20")).deploy("USD Coin", "USDC", 6, 0);
+        const { j, d } = await launch(launcher, usdc);
+
+        const substrate = autonet("Substrate", deployer).attach(d.substrate);
+        expect(await substrate.vaultMinter()).to.equal(d.vault);
+        expect(await substrate.treasury()).to.equal(j.core.registry);
+        expect(await substrate.governor()).to.equal(j.core.timelock);
+        expect(await substrate.repToken()).to.equal(j.core.token);
+        expect(await substrate.isGenesisSigner(launcher.address)).to.equal(true);
+
+        expect(await j.rep.minters(d.repClaim)).to.equal(true);
+        expect(await j.rep.slashers(d.toolBond)).to.equal(true);
+        expect(await j.rep.admin()).to.equal(j.core.timelock);
+
+        const charter = autonet("CharterAnchor", deployer).attach(d.charterAnchor);
+        expect(await charter.versionCount()).to.equal(1n);
+        expect(await charter.governor()).to.equal(j.core.timelock);
+
+        const bond = await ethers.getContractAt("ToolBond", d.toolBond);
+        expect(await bond.auditorShareBps()).to.equal(4000n);
+        expect(await bond.timelock()).to.equal(j.core.timelock);
+        expect(await bond.economy()).to.equal(await j.economy.getAddress());
+
+        expect(await j.registry.getRegistryValue("jurisdiction.autonet.substrate")).to.equal(d.substrate.toLowerCase());
+        expect(await j.registry.getRegistryValue("jurisdiction.autonet.economy")).to.equal((await j.economy.getAddress()).toLowerCase());
+        expect(await j.registry.getRegistryValue("modules.autonet"))
+            .to.equal(`${(await s.setups.autonet.getAddress()).toLowerCase()}:${j.installs.autonet.id}`);
+
+        // The vault sells ATN at parity straight away
+        await usdc.mint(buyer.address, 1_000_000);
+        await usdc.connect(buyer).approve(d.vault, 1_000_000);
+        await (await ethers.getContractAt("AutonetVault", d.vault)).connect(buyer).buy(await usdc.getAddress(), 1_000_000);
+        expect(await substrate.balanceOf(buyer.address)).to.equal(ATN(1));
+    });
+
+    it("a second launch from the same setup still wires its own vault", async function () {
+        const usdc = await (await ethers.getContractFactory("TestERC20")).deploy("USD Coin", "USDC", 6, 0);
+        const { d } = await launch(deployer, usdc);
+        expect(await autonet("Substrate", deployer).attach(d.substrate).vaultMinter()).to.equal(d.vault);
+        expect(await s.setups.autonet.installations()).to.be.greaterThan(1n);
+    });
+
+    it("rejects a missing economy and unknown installations", async function () {
+        const setup = s.setups.autonet;
+        const { DEFAULTS } = require("./helpers/jurisdiction");
+        const { encodeInstallData } = require("../scripts/lib/modules");
+        const core = { registry: buyer.address, timelock: buyer.address, token: buyer.address, governor: buyer.address };
+        await expect(setup.prepareInstallation(core, encodeInstallData(ethers, "autonet",
+            { ...DEFAULTS.autonet, economy: ethers.ZeroAddress }))).to.be.revertedWithCustomError(setup, "ZeroAddress");
+        await expect(setup.installationOf(999)).to.be.revertedWithCustomError(setup, "UnknownInstallation");
+    });
+});

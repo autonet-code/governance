@@ -11,6 +11,7 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 // and run in order.
 
 const { autonet, mintLeaf, submitAnchor } = require("./helpers/autonet");
+const { createJurisdiction } = require("./helpers/jurisdiction");
 
 describe("Autonet integration (real Substrate, ServiceMarket, CharterAnchor)", function () {
     let deployer, member, buyer, agent, outsider;
@@ -39,30 +40,15 @@ describe("Autonet integration (real Substrate, ServiceMarket, CharterAnchor)", f
         [deployer, member, buyer, agent, outsider] = await ethers.getSigners();
 
         const deploy = async (name, ...args) => (await ethers.getContractFactory(name)).deploy(...args);
-        const nativeImpl = await deploy("NativeProject");
-        const erc20Impl = await deploy("ERC20Project");
-        const trustlessFactory = await deploy("TrustlessFactory",
-            await (await deploy("InfrastructureFactory")).getAddress(),
-            await (await deploy("DAOFactory")).getAddress(),
-            await (await deploy("EconomyFactory")).getAddress(),
-            await (await deploy("RepTokenFactory")).getAddress());
-
         // Test-network timing: no voting delay, 2 minute vote, no timelock delay
-        const infra = (await (await trustlessFactory.deployInfrastructure(0, 250)).wait())
-            .logs.find((l) => l.eventName === "InfrastructureDeployed").args;
-        registryAddr = infra.registry;
-        timelockAddr = infra.timelock;
-        const tok = (await (await trustlessFactory.deployDAOToken(registryAddr, timelockAddr,
-            { name: "Autonet Rep", symbol: "AREP", initialMembers: [member.address], initialAmounts: [ethers.parseEther("1000")] },
-            { name: "Autonet DAO", votingDelay: 0, votingPeriod: 2, proposalThreshold: ethers.parseEther("10"), quorumFraction: 4 }
-        )).wait()).logs.find((l) => l.eventName === "DAOTokenDeployed").args;
-        repTokenAddr = tok.repToken;
-        await trustlessFactory.configureAndFinalize(
-            { implAddresses: [await nativeImpl.getAddress(), await erc20Impl.getAddress()],
-              contractAddresses: [infra.economy, registryAddr, timelockAddr, repTokenAddr, tok.dao] },
-            { arbitrationFeeBps: 250, initialPlatformFeeBps: 250, initialAuthorFeeBps: 500, initialCoolingOffPeriod: 60,
-              initialBackersQuorumBps: 5100, initialProjectThreshold: 0, initialAppealPeriod: 120 },
-            [], []);
+        const j = await createJurisdiction(member, {
+            name: "Autonet DAO", symbol: "AREP", members: [member.address], amounts: [ethers.parseEther("1000")],
+            proposalThreshold: ethers.parseEther("10"), modules: ["economy"],
+        });
+        registryAddr = j.core.registry;
+        timelockAddr = j.core.timelock;
+        repTokenAddr = j.core.token;
+        const tok = { dao: j.core.governor };
 
         registry = await ethers.getContractAt("Registry", registryAddr);
         repToken = await ethers.getContractAt("RepToken", repTokenAddr);

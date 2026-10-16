@@ -6,7 +6,7 @@ const { passCoolingOff } = require("./helpers/coolingOff");
 describe("Backer spending", function () {
     const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
     let deployer, timelock, author, backer, contractor, arbiter;
-    let economy, registry, repToken;
+    let economy, registry, repToken, claim;
 
     async function createProject() {
         const receipt = await (await economy.connect(author).createProject(
@@ -31,7 +31,9 @@ describe("Backer spending", function () {
         repToken = await (await ethers.getContractFactory("RepToken")).deploy(
             "Jurisdiction", "JUR", await registry.getAddress(), timelock.address, [], [], false);
         await repToken.setAdmin(timelock.address);
-        await repToken.connect(timelock).setEconomyAddress(await economy.getAddress());
+        claim = await (await ethers.getContractFactory("EconomyRepClaim")).deploy(
+            await economy.getAddress(), await repToken.getAddress(), await registry.getAddress());
+        await repToken.connect(timelock).setMinter(await claim.getAddress(), true);
         await economy.setCoolingOffPeriod(0); // no governance lifecycle to wait for in this fixture
         await economy.setDaoAddresses(timelock.address, await registry.getAddress(), deployer.address, await repToken.getAddress());
         await registry.connect(timelock).editRegistry(`jurisdiction.parity.${NATIVE.toLowerCase()}`, ethers.parseEther("1").toString());
@@ -50,7 +52,7 @@ describe("Backer spending", function () {
         await project.connect(backer).voteToReleasePayment();
         expect(await spentNative(backer.address)).to.equal(amount);
 
-        await repToken.connect(backer).claimReputationFromEconomy();
+        await claim.connect(backer).claim();
         expect(await repToken.balanceOf(backer.address)).to.equal(amount);
     });
 
