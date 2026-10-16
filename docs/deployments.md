@@ -6,6 +6,8 @@ Addresses, build commands, deploy scripts and the local end-to-end harnesses. AP
 
 ### Etherlink Shadownet (chainId 127823)
 
+> **Pre-modules suite, pending redeploy.** The live Shadownet contracts below are the suite deployed 2026-10-13, before the [module](modules.md) refactor: per-kind factories (StandardFactory family, TrustlessFactory with EconomyFactory) that no longer exist in this repo. A redeploy with `scripts/deploy-jurisdiction-suite.js` replaces them with JurisdictionFactory, ModuleCatalog, ModuleProcessor and the module setups, under the new Firestore fields listed below.
+
 Deployed 2026-10-13. **The source of truth is Firestore `contracts/Etherlink-Shadownet`** (in both `homebase-6907d` and `trustless-58262`); the web apps and the indexer read factory and implementation addresses from there. The old Ghostnet testnet (chainId 128123) is retired.
 
 | Contract | Firestore field | Address |
@@ -22,7 +24,18 @@ Deployed 2026-10-13. **The source of truth is Firestore `contracts/Etherlink-Sha
 | EconomyFactory | | `0x5675e32c042eeeF863F7B06FB3cEbb48D1175FDb` |
 | WrappedRepTokenFactory | | `0x4d14Fd053337D467C625057780d1b258F84FF4Aa` |
 
-Everything was deployed together by `scripts/deployFullFactorySuiteShadownet.js` (output in `deployments/etherlink-shadownet-full-suite.json`). Economies created through the web app take implementation addresses from Firestore, so project-only changes do not need a factory redeploy.
+Everything was deployed together by the since-removed full-suite script (output in `deployments/etherlink-shadownet-full-suite.json`). Economies created through the web app take implementation addresses from Firestore, so project-only changes do not need a factory redeploy (on the pre-modules suite).
+
+After the redeploy, `contracts/<network>` holds these fields (written to `deployments/<etherlink-shadownet|localhost>-jurisdiction.json` by `scripts/deploy-jurisdiction-suite.js`); `wrapper`, `wrapper_t`, `wrapper_w`, `wrapper_trustless` and `autonetGenesis` go away:
+
+| Field | Contract |
+|-------|----------|
+| `jurisdictionFactory` | JurisdictionFactory (the indexer watches its `NewDaoCreated`) |
+| `moduleCatalog` | ModuleCatalog (modules, versions, metadata; werule lists modules from it) |
+| `moduleProcessor` | ModuleProcessor (builds attach and detach proposals) |
+| `nativeProject`, `erc20Project` | Project implementations (EconomySetup also holds them as immutables) |
+
+The JSON file also records the sub-factories and each module's setup, repo and version.
 
 Autonet satellites on Shadownet (vault, REP claim, Substrate) are recorded in each jurisdiction's own Registry under `jurisdiction.autonet.substrate`, `jurisdiction.autonet.vault` and `jurisdiction.autonet.rep_claim`. Read them from there rather than from `deployments/autonet-jurisdiction-ets.json`, which records an earlier (2026-07-08) attachment with different addresses.
 
@@ -63,44 +76,40 @@ Run with `npx hardhat run <script> --network <name>`.
 
 | Script | What it does |
 |--------|--------------|
-| `scripts/deployFullFactorySuiteShadownet.js` | **Current.** Fresh full suite on `ets`: base factories, all four wrappers, project implementations, the [module](modules.md) factories (AutonetGenesis, ContentCourtFactory) and ModuleAttacher. Writes `deployments/etherlink-shadownet-full-suite.json` with the Firestore field mapping |
-| `scripts/deployProjectImplsShadownet.js` | Redeploys only `NativeProject` and `ERC20Project` (refuses any chain but 127823). Update `nativeProjectImpl` / `erc20ProjectImpl` in Firestore afterwards |
-| `scripts/deployStandardFactory.js` | Fresh sub-factories plus `StandardFactory`. Writes `deployments/etherlink-testnet-standard.json` (Ghostnet-era name) |
-| `scripts/deployStandardFactoryTransferable.js`, `deployStandardFactoryWrapped.js`, `deployStandardNonTransferable.js` | The other standard wrappers |
-| `scripts/deployTrustlessFactory.js` | Project implementations, sub-factories and `TrustlessFactory`. Writes `deployments/etherlink-shadownet-trustless.json` |
-| `scripts/deployTestEconomyDAO.js` | Creates a test economy DAO through the 3-step flow |
-| `scripts/deploy-autonet-jurisdiction.js` | Autonet jurisdiction: DAO suite plus the whole Autonet layer through `AutonetGenesis`, no follow-up proposals. See [autonet.md](autonet.md#genesis-autonetgenesis) |
+| `scripts/deploy-jurisdiction-suite.js` | **Current.** Fresh suite on `ets` or a local node: JurisdictionFactory and its sub-factories, project implementations, ModuleCatalog, ModuleProcessor and the [module](modules.md) setups (EconomySetup, ContentCourtSetup, AutonetSetup) with version 1.1 of each published. `CURATOR` hands the catalog and repos to another address. Writes `deployments/<etherlink-shadownet\|localhost>-jurisdiction.json` with the Firestore field mapping |
+| `scripts/deployProjectImplsShadownet.js` | Redeploys only `NativeProject` and `ERC20Project` (refuses any chain but 127823). Update `nativeProjectImpl` / `erc20ProjectImpl` in Firestore afterwards. Pre-modules suite only: with the module suite, new economies take the implementations held by `EconomySetup`, so a project change needs a new EconomySetup version (existing economies switch by proposal with `setImplementations`) |
+| `scripts/deploy-autonet-jurisdiction.js` | Autonet jurisdiction on the suite from `deployments/<network>-jurisdiction.json`: `deployCore`, `EconomySetup.prepareInstallation`, `AutonetSetup.prepareInstallation`, then `finalize` attaching both, no follow-up proposals. See [autonet.md](autonet.md#genesis-autonetsetup) |
 | `scripts/deploy-autonet-vault.js`, `deploy-autonet-rep-claim.js` | Individual Autonet satellites; print the governance calldata they need |
 | `scripts/deployCOLocal.js`, `deployTestCOShadownet.js`, `deployTestCOBaseSepolia.js` | Isolated CoinOffering stacks (Registry, transferable RepToken, test USDC) |
 | `scripts/updateFirestoreShadownet.js`, `backupFirestoreAddresses.js` | Write / back up Firestore address docs |
 
-Older one-off scripts (`redeploy*`, `check*`, `debug*`, `deployAllToMainnet.js` and similar) are historical and target previous deployments.
+Older one-off scripts (`redeploy*`, `check*`, `debug*`, `updateTrustlessFactory.js` and similar) are historical and target previous deployments or removed factories.
 
-Factory timing units: governor voting delay and period are **minutes** (multiplied by 60 on-chain, timestamp clock). TrustlessFactory's timelock delay is minutes; the standard factories' `executionDelay` is seconds. `deploy-autonet-jurisdiction.js` takes seconds via env and converts.
+Factory timing units: `CoreParams.votingDelay` and `votingPeriod` are **minutes** (multiplied by 60 on-chain, timestamp clock); `executionDelay` (the timelock delay) is **seconds**. `deploy-autonet-jurisdiction.js` takes seconds via env and converts.
 
 ## Local end-to-end harnesses
 
 ### `scripts/e2eLocal.js`
 
-Contracts-only smoke run against a live node:
+Contracts-only smoke run against a live node. **Being ported:** it still deploys the removed TrustlessFactory and does not run against the current contracts until the port lands.
 
 ```bash
 npx hardhat node
 npx hardhat run scripts/e2eLocal.js --network localhost
 ```
 
-Deploys the factory suite, creates an economy DAO through the 3-step TrustlessFactory flow, sets parities with werule's encoding (`parity * 10^(36 - decimals)`), runs a native and a 6-decimal ERC20 project with immediate release, and checks: Economy admin frozen, cooling-off equal to the proposal lifecycle, treasury platform fees, and contractor and backer REP. Prints `PASS`/`FAIL` per check and exits non-zero on any failure.
+Deploys the factory suite, creates an economy DAO, sets parities with werule's encoding (`parity * 10^(36 - decimals)`), runs a native and a 6-decimal ERC20 project with immediate release, and checks: Economy admin frozen, cooling-off equal to the proposal lifecycle, treasury platform fees, and contractor and backer REP. Prints `PASS`/`FAIL` per check and exits non-zero on any failure.
 
 ### `scripts/indexer-e2e/` (contracts plus indexer plus Firestore emulator)
 
-All Firestore writes go to the emulator (`FIRESTORE_EMULATOR_HOST=127.0.0.1:8080` is forced), never production.
+**Being ported** to JurisdictionFactory and the module setups, like `e2eLocal.js`; the descriptions below are of the harness's shape. All Firestore writes go to the emulator (`FIRESTORE_EMULATOR_HOST=127.0.0.1:8080` is forced), never production.
 
 | File | Role |
 |------|------|
 | `run.sh <indexer dir> [--replay]` | Needs `npx hardhat node` and `firebase emulators:start --only firestore` running. Clears both emulator projects and the indexer's local state, runs `deploy.js` and `seed_emulator.py`, starts the indexer (`app.py localhost homebase trustless --no-alerts`), runs `events.js`, waits until the indexer log is quiet for 15 s, then runs `verify.py`. `--replay` rewinds both checkpoints to block 1, restarts the indexer and verifies again to catch double counting |
-| `deploy.js` | Deploys all factories and project implementations to the local node; writes `out/deployment.json` in the Firestore `contracts/<network>` shape |
+| `deploy.js` | Deploys the factories and project implementations to the local node; writes `out/deployment.json` in the Firestore `contracts/<network>` shape |
 | `seed_emulator.py <indexer dir>` | Writes `out/deployment.json` to `contracts/Localhost` in both emulator projects (`homebase`, `trustless`) |
-| `events.js` | Emits every DAO and trustless event type the indexer handles (standard, transferable, wrapped and economy DAOs; proposals through execute; delegation; project flows) and records expectations in `out/manifest.json` |
+| `events.js` | Emits every DAO and trustless event type the indexer handles (soulbound, transferable, wrapped and economy DAOs; proposals through execute; delegation; project flows) and records expectations in `out/manifest.json` |
 | `verify.py <indexer dir>` | Compares emulator documents (`idaosLocalhost`, members, proposals, votes, registry, economy and project docs) with the manifest. `PASS`/`FAIL` lines, exit 1 on any failure |
 | `ui.sh <indexer dir> <app dir> <integration test>` | UI write flows. Needs the emulator and chromedriver (port 4444). Restarts the hardhat node so chain time matches the browser, deploys, seeds, starts the indexer with `--skip-historical`, runs `ui_setup.js`, then `flutter drive` on Chrome with the addresses passed as `--dart-define`s |
 | `ui_setup.js` | On a fresh chain without time travel: an economy DAO for trustless flows and a standard DAO with an open proposal for werule voting. Writes `out/ui.json` |

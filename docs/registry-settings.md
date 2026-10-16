@@ -1,18 +1,18 @@
-# Economy DAO Settings
+# Economy Settings
 
-Every configurable value of an economy DAO, where it lives, and how to change it. Values live in two places: typed parameters on the Economy contract, and string key/value pairs in the Registry. After deployment both are changed only by DAO proposals executed by the Timelock (see [governance.md](governance.md)).
+Every configurable value of a DAO with the `economy` [module](modules.md), where it lives, and how to change it. Values live in two places: typed parameters on the Economy contract, and string key/value pairs in the Registry. After deployment both are changed only by DAO proposals executed by the Timelock (see [governance.md](governance.md)).
 
 Related: [economy.md](economy.md) (what the parameters do in the project lifecycle), [immediate-release.md](immediate-release.md), [technical-reference.md](technical-reference.md), [architecture.md](architecture.md).
 
 ## Economy contract parameters
 
-Setters are `onlyGovernance`: the Economy's `admin` until `setDaoAddresses` runs, the Timelock after. The TrustlessFactory sets the initial values (except `maxImmediateBps`) inside `configureAndFinalize`, then sets the DAO addresses.
+Setters are `onlyGovernance`: the Economy's `admin` until `setDaoAddresses` runs, the Timelock after. `EconomySetup.prepareInstallation` sets the initial values (except `maxImmediateBps`) from `EconomySetup.Params`, then sets the DAO addresses, in the same transaction.
 
 | Parameter | Unit | Default | Bounds | Setter | Read by projects |
 |-----------|------|---------|--------|--------|------------------|
 | `platformFeeBps` | bps | 100 (1%) | 100 (`MIN_PLATFORM_FEE_BPS`) to 5000 | `setPlatformFee(uint)` | On every fee-path payout |
 | `authorFeeBps` | bps of payout after platform fee | 100 (1%) | at most 2500 (`MAX_AUTHOR_FEE_BPS`) | `setAuthorFee(uint)` | On every contractor payout |
-| `arbitrationFeeBps` | bps of `totalLocked` | `EconomyParams.arbitrationFeeBps` in `configureAndFinalize` | at most 2500 (`MAX_ARBITRATION_FEE_BPS`) | `setArbitrationFee(uint)` | Once, at signing |
+| `arbitrationFeeBps` | bps of `totalLocked` | `EconomySetup.Params.arbitrationFeeBps` | at most 2500 (`MAX_ARBITRATION_FEE_BPS`) | `setArbitrationFee(uint)` | Once, at signing |
 | `coolingOffPeriod` | seconds | 120 | none; effective value is `max(coolingOffPeriod, proposalLifecycle() + 1 day)` | `setCoolingOffPeriod(uint)` | Once, when parties are set |
 | `backersVoteQuorumBps` | bps of `totalLocked` | 7000 (70%) | 5000 to 9900 | `setBackersVoteQuorum(uint)` | On each backer vote |
 | `projectThreshold` | REP (18 decimals) | 0 | none | `setProjectThreshold(uint)` | REP balance to create a project |
@@ -24,7 +24,7 @@ Fixed constants on projects: `ARBITRATION_TIMEOUT = 150 days`.
 
 `proposalLifecycle()` is `governor.votingDelay() + governor.votingPeriod() + timelock.getMinDelay()`; `effectiveCoolingOffPeriod()` exposes the result. Both use seconds (the Governor clock is timestamp based).
 
-`deployInfrastructure` also takes an arbitration fee for the Economy constructor; `configureAndFinalize` then sets `EconomyParams.arbitrationFeeBps`, which is the value that sticks.
+`EconomySetup` passes `arbitrationFeeBps` to the Economy constructor. `coolingOffPeriod` and `appealPeriod` in `Params` are seconds. The setup also sets the implementations it holds; `maxImmediateBps` keeps the constructor default until a proposal changes it.
 
 ### Example proposal
 
@@ -38,11 +38,23 @@ A value outside the bounds makes the proposal revert at execution.
 
 ## Registry keys
 
-The Registry stores string keys and string values. Edits are allowed from the `owner` (the Timelock after deployment) or the `wrapper`. Initial keys can be passed to `configureAndFinalize` as `_registryKeys` / `_registryValues`.
+The Registry stores string keys and string values. Edits are allowed from the `owner` (the Timelock after deployment) or the `wrapper` (none for DAOs from `JurisdictionFactory`). Initial keys can be passed to `JurisdictionFactory.deploy` or `finalize` as `keys` / `values`.
+
+### Module entries
+
+Attaching a module records its entries; detaching clears them. See [modules.md](modules.md).
+
+| Key | Value |
+|-----|-------|
+| `modules.<name>` | `"<setup>:<id>"` for each attached module (`economy`, `content_court`, `autonet`) |
+| `jurisdiction.economy` | The Economy. Its presence marks an economy DAO |
+| `jurisdiction.economy.rep_claim` | The Economy's `EconomyRepClaim` |
+| `jurisdiction.content_court.court` | The ContentCourt ([content-court.md](content-court.md)) |
+| `jurisdiction.autonet.*` | The Autonet layer ([autonet.md](autonet.md#genesis-autonetsetup)) |
 
 ### `jurisdiction.parity.<token>`
 
-REP minted per unit of a payment token. Read by `RepToken.claimReputationFromEconomy()` (and by the CoinOffering and AutonetVault contracts, which use the same convention).
+REP minted per unit of a payment token. Read by `EconomyRepClaim.claim()` (and by the CoinOffering and AutonetVault contracts, which use the same convention).
 
 | | |
 |---|---|

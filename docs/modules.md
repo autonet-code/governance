@@ -1,30 +1,72 @@
 # Modules
 
-A module is an optional part of a jurisdiction (the Autonet layer, the ContentCourt, ...) built from a module factory in `contracts/modules/`. A DAO is created from a core type (Standard or Economy) plus any modules, and can add or remove modules later by proposal. Modules need the Economy core: their verdicts wait out the Economy's appeal window.
+Every DAO has the same core: a Governor (`HomebaseDAO`), a `TimelockController`, a `Registry` and a governance token (a soulbound or transferable `RepToken`, or a `WrappedRepToken` over an existing ERC20). Everything else is a module: the Economy, the Autonet layer, the ContentCourt. A DAO picks modules at origination and can add or remove them later by proposal.
 
-## Install, then attach
+The design follows [Aragon OSx plugins](https://docs.aragon.org/osx-contracts/1.x/framework/plugin-repos/): setups that prepare installations, versioned repos, a registry of repos, and release and build metadata that apps render setup forms from. It is adapted to an OpenZeppelin core, where rights live on the token and the Registry instead of in a DAO permission manager, and the timelock executes attach actions itself instead of a setup processor.
 
-A module joins a jurisdiction in two steps.
+## Contracts
 
-1. **Install.** Anyone calls the factory's typed `install` (for AutonetGenesis, `launch`) with the jurisdiction's addresses (`Jurisdiction { registry, timelock, repToken, economy, dao }`) and the module's parameters. It deploys the module's contracts wired to that jurisdiction and returns an installation id (also `lastInstallBy(installer)`). An installed module has no rights, so installing is harmless.
-2. **Attach.** The jurisdiction grants what the installation's `manifest(id)` lists: RepToken `minters` and `slashers`, plus Registry entries. Every manifest includes `modules.<name>` = `"<factory>:<id>"`, so a jurisdiction's attached modules can be read from its Registry.
+| Contract | Aragon OSx | Role |
+|---|---|---|
+| `IModuleSetup`, `ModuleSetup` | `PluginSetup` | Prepares installations of one module. |
+| `ModuleRepo` | `PluginRepo` | One module's versions, tagged `RELEASE.BUILD`, with metadata URIs. The maintainer (owner) publishes. |
+| `ModuleCatalog` | `PluginRepoRegistry` | The modules a network offers, one repo per module name. The curator (owner) registers and removes repos. |
+| `ModuleProcessor` | `PluginSetupProcessor` | Checks installations and builds the attach and detach proposal actions. Holds no state and no rights. |
+| `JurisdictionFactory` | `DAOFactory` | Creates the core and attaches modules at origination. |
+
+## Installing a module
+
+1. **Prepare.** Anyone calls `setup.prepareInstallation(core, data)` with the DAO's `Core { registry, timelock, token, governor }`. It deploys the module's contracts wired to that core and returns an installation id (also `lastPreparedBy(preparer)`). `data` is the ABI encoding of the inputs in the version's build metadata. A prepared installation has no rights.
+2. **Attach.** `setup.installationOf(id)` returns the `Prepared` installation: the module's main contract, its helpers, the `install` and `uninstall` actions (RepToken grants such as `setMinter` and `setSlasher`), its Registry entries, and its dependencies. Attaching executes `install` and records the entries. Every installation's entries include `modules.<name>` = `"<setup>:<id>"`, so a DAO's attached modules can be read from its Registry.
 
 Attaching happens at one of two points:
 
-- **At origination.** The founder installs each module between `deployDAOToken` and finalize, then passes the merged manifests to `TrustlessFactory.configureAndFinalizeWithGrants(..., keys, values, minters, slashers)`. The factory makes the grants while it is still the RepToken admin, so no proposal is needed.
-- **After origination.** A member installs the module, then proposes the actions from `ModuleAttacher.attachCalls(factory, id)`. `detachCalls(factory, id)` builds the reverse proposal: it revokes the grants and clears the entries. Both first check that the installation's Registry, Timelock, RepToken and Economy all point at each other (`NotAJurisdiction` otherwise), so the proposal can't attach a module that answers to a different jurisdiction.
+- **At origination.** `JurisdictionFactory.deployCore(params)` creates the core with the factory as token admin and Registry owner. The founder prepares each module for that core, then calls `finalize(core, modules, keys, values)`. That attaches the modules in order and hands everything to the timelock. The factory executes a module's actions only against that DAO's own token and Registry (`ForeignTarget` otherwise). Only the account that deployed a core can finalize it. A DAO with no modules is one call: `deploy(params, keys, values)`.
+- **After origination.** A member prepares the installation and proposes `ModuleProcessor.installCalls(setup, id)`. `uninstallCalls(setup, id)` builds the reverse proposal: it revokes the grants and clears the entries. The proposal lists every grant, so voters see exactly what they approve.
 
-The Registry lists a cleared key only once, so a module can be detached and attached again.
+Both paths apply the same checks (`ModuleProcessor.checkInstall`):
 
-## Factories
+- The setup is a published version in the catalog (`NotPublished`).
+- The installation was prepared for this core (`WrongCore`). After origination, the core must also be a live jurisdiction whose Registry, Timelock, token and Governor point at each other (`NotAJurisdiction`).
+- No installation of the same module is attached (`AlreadyAttached`).
+- Every dependency is attached at the address the installation was wired to (`MissingDependency`). At origination, modules attach in order, so dependencies come first.
 
-| Module (`moduleName`) | Factory | Install | Grants | Registry entries |
-|---|---|---|---|---|
-| `autonet` | `AutonetGenesis` | `launch(j, AutonetParams, ToolBond.Params)` | REP claim (minter), ToolBond (slasher) | `jurisdiction.autonet.*` ([autonet.md](autonet.md#genesis-autonetgenesis)) |
-| `content_court` | `ContentCourtFactory` | `install(j, ContentCourt.Params)` | court (slasher) | `jurisdiction.content_court.court` ([content-court.md](content-court.md)) |
+Detaching is refused while an attached module depends on the one being removed (`HasDependents`). The Registry lists a cleared key once, so a module can be detached and attached again.
 
-Each factory extends `ModuleFactory` (ids, jurisdictions, the marker entry) and implements `IModuleFactory`. To add a module, write a factory with a typed `install` that calls `_register(j)`, and a `manifest(id)` built from `_manifest(id, entries, minters, slashers)`.
+## Modules
+
+| Module | Setup | `data` | Grants | Depends on | Registry entries |
+|---|---|---|---|---|---|
+| `economy` | `EconomySetup` | `EconomySetup.Params` | `EconomyRepClaim` (minter) | none | `jurisdiction.economy`, `jurisdiction.economy.rep_claim` |
+| `content_court` | `ContentCourtSetup` | `(address economy, ContentCourt.Params)` | court (slasher) | `economy` | `jurisdiction.content_court.court` ([content-court.md](content-court.md)) |
+| `autonet` | `AutonetSetup` | `(address economy, AutonetParams, ToolBond.Params)` | REP claim (minter), ToolBond (slasher) | `economy` | `jurisdiction.autonet.*` ([autonet.md](autonet.md#genesis-autonetsetup)) |
+
+The Economy module deploys an `Economy`, configures it, and hands it to the timelock in the same transaction. Its `EconomyRepClaim` mints REP for what members earn and spend in it, at the jurisdiction's parities. RepToken knows nothing about any Economy: reputation comes only from minters the DAO grants and revokes.
+
+Modules need a RepToken, so DAOs on a wrapped token can't take them: the grant actions revert.
+
+## Metadata
+
+Each module's metadata lives in `modules/<name>/` and is published with each version as a `data:application/json;base64,` URI, so no external host is needed. It follows Aragon's format:
+
+- `release-metadata.json`: `{ name, description, images }`.
+- `build-metadata.json`: `{ ui, change, pluginSetup: { prepareInstallation: { description, inputs }, prepareUpdate, prepareUninstallation } }`. `inputs` is Solidity JSON ABI with a `description` per element, in the order the setup decodes `data`.
+
+Two extensions, both ignored by anything that only reads Aragon's fields:
+
+- `ui.requires` lists the modules this one depends on, and `ui.tokenKinds` the core token kinds it supports.
+- Each input may carry `x-ui` hints for form rendering: `label`, `section`, `default`, `min`, `max`, and `unit`. Units are `bps-percent` (entered as a percent, encoded times 100), `seconds-days`, `seconds-hours`, `decimals:<n>` (a decimal amount in base units), and `bytes32-optional` (empty encodes as zero). `fixed` encodes a constant without showing a field, and `source: "module:<name>"` fills an address with that attached module's main contract.
+
+`scripts/lib/modules.js` `encodeInstallData(name, values)` encodes `data` from the metadata. The tests prepare every module through it, so the metadata and the setups can't drift apart.
+
+## Publishing a new module or version
+
+1. Write a setup that extends `ModuleSetup`, with `moduleName()`, `_prepare` (decode `data`, deploy, return the main contract) and `_describe` (actions, entries, dependencies). The helpers `_repGrants`, `_entries` and `_dependsOn` cover the usual cases.
+2. Write `modules/<name>/release-metadata.json` and `build-metadata.json`.
+3. Deploy the setup. Deploy a `ModuleRepo(name, maintainer)` and call `createVersion(1, setup, buildMetadata, releaseMetadata)`, then have the curator `register` the repo in the catalog. For a new version of an existing module, only `createVersion` is needed: a new build for compatible changes, a new release for breaking ones.
+
+Apps list modules from the catalog, so neither step needs an app release.
 
 ## Trust
 
-A proposal built by `ModuleAttacher` grants whatever the factory's manifest lists, so voters are trusting the factory. Front ends offer only the factories on the network's list: the Firestore field `modules` (name → factory) in `contracts/<network>`, written by `scripts/deployFullFactorySuiteShadownet.js` with `moduleAttacher`.
+Attaching grants whatever a setup's installation lists, so the catalog is the trust root: JurisdictionFactory and ModuleProcessor accept only setups published in it. The curator and each repo's maintainer are the deployer on Shadownet. Pass `CURATOR` to `scripts/deploy-jurisdiction-suite.js` to hand them to governance.

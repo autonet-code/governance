@@ -33,7 +33,7 @@ Until finalization, anyone can `submitAssertion(caseId, label, sig)`: a member's
 
 ## Governance
 
-The timelock adds and retires labels (`setLabel(name, active)`) and sets `Params { caseDeposit, thresholdBps, reviewWindow, revealWindow, degradeBps, assertionSlashBps }`. The court needs slasher rights on the RepToken. It is the `content_court` [module](modules.md): `ContentCourtFactory.install(jurisdiction, params)` deploys a court (treasury = Registry), and attaching it grants the rights and records `jurisdiction.content_court.court`, at origination or by proposal.
+The timelock adds and retires labels (`setLabel(name, active)`) and sets `Params { caseDeposit, thresholdBps, reviewWindow, revealWindow, degradeBps, assertionSlashBps }`. The court needs slasher rights on the RepToken. It is the `content_court` [module](modules.md), which depends on `economy` (its appeal window): `ContentCourtSetup.prepareInstallation(core, abi.encode(economy, Params))` deploys a court (treasury = Registry), and attaching it grants the slasher rights and records `jurisdiction.content_court.court`, at origination or by proposal.
 
 ## Not yet
 

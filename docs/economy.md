@@ -1,6 +1,6 @@
 # Trustless Economy
 
-The Economy is a jurisdiction's marketplace for work. An author posts a project, backers fund it into escrow, a contractor signs and delivers, and backers either release the escrow or send it to an arbiter. The jurisdiction (its Governor and Timelock) sits above every project: it can veto, hear appeals, and tune the economy's parameters. Paid work and funded work both accrue reputation (REP) in the jurisdiction.
+The Economy is a jurisdiction's marketplace for work. An author posts a project, backers fund it into escrow, a contractor signs and delivers, and backers either release the escrow or send it to an arbiter. The jurisdiction (its Governor and Timelock) sits above every project: it can veto, hear appeals, and tune the economy's parameters. Paid work and funded work both accrue reputation (REP) in the jurisdiction. The Economy is the `economy` [module](modules.md): `EconomySetup` deploys and configures it for a DAO's core, and attaching it records `jurisdiction.economy` and `jurisdiction.economy.rep_claim` in the Registry.
 
 Contracts:
 
@@ -9,6 +9,8 @@ Contracts:
 | `contracts/Economy.sol` | One per jurisdiction. Deploys projects as minimal clones, holds DAO-governed parameters, keeps the earnings/spending ledger that REP is minted from. |
 | `contracts/NativeProject.sol` | Escrow for one project paid in the chain's native currency. |
 | `contracts/ERC20Project.sol` | Same lifecycle, paid in one ERC20 token (SafeERC20 transfers). |
+| `contracts/EconomyRepClaim.sol` | One per Economy. A RepToken minter that mints REP for a member's earnings and spendings, at the jurisdiction's parities. |
+| `contracts/modules/EconomySetup.sol` | The module setup: deploys, configures and hands over an Economy and its EconomyRepClaim. |
 | `contracts/IEconomy.sol` | Callbacks projects make into the Economy (`updateEarnings`, `registerBacker`, `registerProjectRoles`). |
 | `contracts/IGovernedEconomy.sol` | Parameter getters projects read from the Economy. |
 
@@ -158,12 +160,12 @@ At signing: locked 8,000, arbitration fee 800, contractor stakes 400. Immediate 
 
 ## Reputation
 
-The Economy keeps the ledger; the RepToken mints from it.
+The Economy keeps the ledger; `EconomyRepClaim` mints REP from it as a RepToken minter (granted on attach, revoked on detach).
 
 - Earnings: each project calls `economy.updateEarnings(payee, net, token)` for the contractor's net, the author fee, and the arbiter's net. Token is `NATIVE_CURRENCY` (`0xEeee...EEeE`) for native projects.
 - Spending: projects call `registerBacker(backer)` on a backer's first contribution, which adds the project to `projectsAsBacker[backer]` once. `projectToken[project]` records its payment token. Each project exposes `spentBy(backer) = total - exit` once Closed (0 before). `Economy.getUser()` sums `spentBy` over all backed projects per token, so spending accrues at close without the backer withdrawing, and withdrawing (`contributorSettled`) does not double count. A backer who withdraws before signing spends 0.
 - The legacy `updateSpendings` callback and `spendings` mapping remain and are included in `getUser()`, but current projects do not call them.
-- Claiming: `repToken.claimReputationFromEconomy()` reads `getUser(msg.sender)` and mints `amount * parity / 1e18` for each token's unclaimed delta, where parity is the Registry value `jurisdiction.parity.<lowercase token address>`. No parity set means no REP for that token. See [registry-settings.md](registry-settings.md).
+- Claiming: `EconomyRepClaim.claim()` reads `getUser(msg.sender)` and mints `amount * parity / 1e18` for each token's unclaimed delta, where parity is the Registry value `jurisdiction.parity.<lowercase token address>`. No parity set means no REP for that token. Watermarks are `claimedEarnings[user][token]` and `claimedSpendings[user][token]` on the claim contract, so each earning and spending counts once per Economy; `claimable(user)` previews. Emits `ReputationClaimedFromEconomy(user, amount)`. See [registry-settings.md](registry-settings.md).
 
 What a backer spends includes immediate funds paid out and their share of the arbitration fee; refunds are excluded.
 
@@ -184,7 +186,7 @@ createERC20Project(name, contractor, arbiter, termsHash, repo, description, toke
 
 ### Admin and governance
 
-`onlyGovernance`: before `setDaoAddresses` the `admin` may call setters; after, only the Timelock. `admin` is the deployer, `EconomyFactory` hands it to the caller (the TrustlessFactory) with `transferAdmin`, which only works before DAO addresses are set. `setDaoAddresses(timelock, registry, governor, repToken)` is admin-only and one-time. The TrustlessFactory configures parameters, then sets the DAO addresses, so after deployment only DAO proposals can change anything.
+`onlyGovernance`: before `setDaoAddresses` the `admin` may call setters; after, only the Timelock. `admin` is the deployer (`EconomySetup`); `transferAdmin` only works before DAO addresses are set. `setDaoAddresses(timelock, registry, governor, repToken)` is admin-only and one-time. `EconomySetup.prepareInstallation(core, data)` decodes `EconomySetup.Params { arbitrationFeeBps, platformFeeBps, authorFeeBps, coolingOffPeriod, backersQuorumBps, projectThreshold, appealPeriod }`, sets the implementations it holds and those parameters, then sets the DAO addresses in the same transaction, so from then on only DAO proposals can change anything.
 
 | Setter | Bounds | Default |
 |--------|--------|---------|
@@ -218,4 +220,5 @@ Projects: `SetParties`, `SendFunds(who, amount, immediateBps)`, `ContractSigned`
 | `test/arbitration-accounting.test.js` | Every outcome's payouts, immediate release with disputes, multiple backers, zero leftover balance |
 | `test/appeals.test.js` | Direct DAO overrule, finalize after window, late and early overrule rejected, silent-arbiter ruling, `receive()`, ERC20 sweep before and after payouts, refund of excess native stake |
 | `test/backer-spending.test.js` | `spentBy`, no double counting, reimburse, pre-signing veto refund, one listing per backed project |
+| `test/economy-rep-claim.test.js` | EconomyRepClaim: first claim, no double claim, incremental claims, earnings plus spendings, parity changes |
 | `test/security.test.js` | Factory binding, cooling-off lifecycle floor, platform fee floor, wash-trading cost |

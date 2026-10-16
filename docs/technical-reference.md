@@ -3,18 +3,18 @@
 Per-contract API for the production suite: key functions, parameters, constants, events and access control. Signatures are taken from the current source. Autonet satellites are covered in [autonet.md](autonet.md); deployed addresses and scripts in [deployments.md](deployments.md); the threat model in [security.md](security.md).
 
 - [Roles after deployment](#roles-after-deployment)
-- [HomebaseDAO](#homebasedao) · [RepToken](#reptoken) · [Registry](#registry) · [Economy](#economy) · [NativeProject / ERC20Project](#nativeproject--erc20project)
-- [Factories](#factories) · [WrappedRepToken](#wrappedreptoken) · [Debates](#debates)
+- [HomebaseDAO](#homebasedao) · [RepToken](#reptoken) · [Registry](#registry) · [Economy](#economy) · [EconomyRepClaim](#economyrepclaim) · [NativeProject / ERC20Project](#nativeproject--erc20project)
+- [Factories](#factories) (JurisdictionFactory, modules) · [WrappedRepToken](#wrappedreptoken) · [Debates](#debates)
 - [Events](#events) · [Constants and defaults](#constants-and-defaults)
 
 ## Roles after deployment
 
 | Contract | Privileged party after finalize | Notes |
 |----------|----------------------------------|-------|
-| TimelockController | `PROPOSER_ROLE`: the governor. `EXECUTOR_ROLE`: `address(0)` (anyone). Factory's `DEFAULT_ADMIN_ROLE` revoked | All governance actions are timelock calls |
-| RepToken | `admin` = timelock; `timelockAddress` immutable | See the StandardFactory caveat below |
-| Registry | `owner` = timelock; `wrapper` = StandardFactory (standard DAOs) or `address(0)` (economy DAOs); `jurisdictionAddress` = RepToken | |
-| Economy | `timelockAddress` set once by `setDaoAddresses`; `admin` frozen | |
+| TimelockController | `PROPOSER_ROLE`, `CANCELLER_ROLE`: the governor. `EXECUTOR_ROLE`: `address(0)` (anyone). Factory's `DEFAULT_ADMIN_ROLE` revoked | All governance actions are timelock calls |
+| RepToken | `admin` = timelock; `timelockAddress` immutable (the timelock); `minters` and `slashers` granted by modules or proposals | See the old-factory caveat below |
+| Registry | `owner` = timelock; `wrapper` = `address(0)`; `jurisdictionAddress` = the token | Old standard-factory DAOs have the factory as `wrapper` |
+| Economy | `timelockAddress` set once by `setDaoAddresses` (inside `EconomySetup.prepareInstallation`); `admin` frozen | `economy` module |
 | Projects | `daoTimelock`, `daoGovernor` copied at initialization | |
 
 ---
@@ -43,7 +43,7 @@ constructor(string name, string symbol, address payable _registryAddress, addres
             address[] initialMembers, uint256[] initialAmounts, bool _isTransferable)
 ```
 
-State: `admin`, `isTransferable` (immutable), `registryAddress` (immutable), `timelockAddress` (immutable), `economyAddress`, `defaultDelegate`, `autoDelegateExempt[account]`, `minters[account]`, `claimedEarnings[user][token]`, `claimedSpendings[user][token]`.
+State: `admin`, `isTransferable` (immutable), `registryAddress` (immutable), `timelockAddress` (immutable), `defaultDelegate`, `autoDelegateExempt[account]`, `minters[account]`, `slashers[account]`, `slashedCredit[slasher]`. RepToken has no Economy link; see [EconomyRepClaim](#economyrepclaim).
 
 ### Access control
 
@@ -54,24 +54,15 @@ State: `admin`, `isTransferable` (immutable), `registryAddress` (immutable), `ti
 | `burn(address from, uint256 amount)` | `admin` |
 | `setAdmin(address newAdmin)` | `admin` (non-zero) |
 | `setMinter(address account, bool allowed)` | `admin` or `timelockAddress` |
-| `setEconomyAddress(address)` | `admin` or `timelockAddress`, once |
+| `setSlasher(address account, bool allowed)` | `admin` or `timelockAddress` |
+| `slash(address from, uint256 amount)`, `reassign(address to, uint256 amount)` | a `slashers` entry; `reassign` up to that slasher's `slashedCredit` |
 | `setDefaultDelegate(address)` | `admin` or `timelockAddress`; `address(0)` disables |
 | `setAutoDelegateExempt(address account, bool exempt)` | `admin` or `timelockAddress` |
 | `setDelegateShareBps(uint16)` | `timelockAddress` only, `<= MAX_DELEGATE_SHARE_BPS` |
 | `startNewRewardEpoch(uint256 budget, address paymentToken)` | `timelockAddress` only |
 | `transfer`, `transferFrom` | revert `"RepToken: Reputation is non-transferable"` unless `isTransferable` |
 
-> **StandardFactory caveat.** The current source of the standard factories passes the DAO's timelock as `_timelockAddress`. Earlier builds passed `address(this)`, so DAOs created by those factories (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) have the factory as their immutable `timelockAddress`. In those DAOs, functions gated to `timelockAddress` only (`startNewRewardEpoch`, `setDelegateShareBps`) are unreachable; admin-or-timelock functions still work because `admin` is handed to the timelock. Economy DAOs (TrustlessFactory) always passed the real timelock.
-
-### Reputation from the Economy
-
-`claimReputationFromEconomy()`: reads `Economy.getUser(msg.sender)` and mints REP for the unclaimed delta of earnings and spendings per token, priced by the Registry key `jurisdiction.parity.<token>`:
-
-```
-rep = amount * parity / 1e18        (PARITY_ONE = 1e18; missing or 0 parity = no REP)
-```
-
-See [autonet.md](autonet.md#parity-one-registry-key-one-formula) for how parity values encode decimals. Emits `ReputationClaimedFromEconomy(user, amount)`.
+> **Old-factory caveat.** `JurisdictionFactory` passes the DAO's timelock as `_timelockAddress`. Early builds of the removed standard factories passed `address(this)`, so DAOs created by those builds (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) have the factory as their immutable `timelockAddress`. In those DAOs, functions gated to `timelockAddress` only (`startNewRewardEpoch`, `setDelegateShareBps`) are unreachable; admin-or-timelock functions still work because `admin` is handed to the timelock. Economy DAOs always had the real timelock.
 
 ### Reward epochs
 
@@ -140,8 +131,8 @@ modifier onlyGovernance() {
 }
 ```
 
-- Before `setDaoAddresses`, `admin` (the factory) configures. After it, only the timelock can; `admin` is inert.
-- `transferAdmin(address newAdmin)`: only while `timelockAddress == 0` and only by `admin` (`EconomyFactory` uses it to hand admin to the calling factory). Emits `AdminTransferred`.
+- Before `setDaoAddresses`, `admin` (`EconomySetup`) configures. After it, only the timelock can; `admin` is inert.
+- `transferAdmin(address newAdmin)`: only while `timelockAddress == 0` and only by `admin`. Emits `AdminTransferred`.
 - `setDaoAddresses(address _timelock, address _registry, address _governor, address _repToken)`: `admin` only, once, `_timelock != 0`. Emits `DaoAddressesSet`.
 
 ### Governed setters (`onlyGovernance`)
@@ -181,6 +172,28 @@ Projects use `effectiveCoolingOffPeriod()`, so the DAO always has time to pass a
 
 ---
 
+## EconomyRepClaim
+
+`contracts/EconomyRepClaim.sol`. One per Economy, deployed by `EconomySetup` and granted RepToken minter rights when the `economy` module is attached (revoked on detach). Registry key `jurisdiction.economy.rep_claim`.
+
+```solidity
+constructor(address _economy, address _repToken, address payable _registry)
+function claim() external returns (uint256 amount)
+function claimable(address user) external view returns (uint256 amount)
+mapping(address => mapping(address => uint256)) public claimedEarnings;   // [user][token]
+mapping(address => mapping(address => uint256)) public claimedSpendings;  // [user][token]
+```
+
+`claim()` reads `Economy.getUser(msg.sender)` and mints REP (`RepToken.mint`) for the unclaimed delta of earnings and spendings per token, priced by the Registry key `jurisdiction.parity.<token>`:
+
+```
+rep = amount * parity / 1e18        (PARITY_ONE = 1e18; missing or 0 parity = no REP)
+```
+
+The watermark advances even when parity is missing. See [autonet.md](autonet.md#parity-one-registry-key-one-formula) for how parity values encode decimals. Emits `ReputationClaimedFromEconomy(user, amount)`.
+
+---
+
 ## NativeProject / ERC20Project
 
 `contracts/NativeProject.sol`, `contracts/ERC20Project.sol`. Escrow clones, initialized by the Economy. ERC20Project uses `SafeERC20` for all token movements. Neither inherits `ReentrancyGuard`; state is updated before every external transfer.
@@ -212,48 +225,67 @@ Fees on every reputation-accruing payout (`_payWithFees`): platform fee to the R
 
 ## Factories
 
-### StandardFactory family (single transaction)
+### JurisdictionFactory
 
-`StandardFactory` (non-transferable, Firestore `wrapper`), `StandardFactoryTransferable` (`wrapper_t`), `StandardFactoryNonTransferable`, `StandardFactoryWrapped` (`wrapper_w`).
-
-```solidity
-function deployDAOwithToken(DaoParams memory params) public payable
-function deployDAOwithToken(string name, string symbol, string description, uint8 decimals,
-    uint256 executionDelay, address[] initialMembers, uint256[] initialAmounts,
-    string[] keys, string[] values) public payable                      // legacy overload
-function deployDAOwithWrappedToken(DaoParamsWrapped memory params) public payable   // StandardFactoryWrapped
-```
-
-- `initialAmounts` = member amounts followed by `[votingDelayMins, votingPeriodMins, proposalThreshold, quorumPercent]`.
-- `executionDelay` is the timelock min delay in **seconds**.
-- Finalization: `Registry.setJurisdictionAddress(token)`, token admin to timelock, Registry ownership to timelock, governor gets `PROPOSER_ROLE` and `CANCELLER_ROLE`, `EXECUTOR_ROLE` to `address(0)`, factory admin role revoked, then `batchEditRegistry` (allowed because the factory stays the Registry `wrapper`).
-- Event: `NewDaoCreated` (`DaoWrappedDeploymentInfo` for the wrapped factory).
-
-### TrustlessFactory (three transactions)
-
-Each in-progress deployment is stored in `mapping(address => DeploymentData) private pendingDeployments` keyed by `msg.sender`. Steps 2 and 3 check that the caller started step 1 and that the addresses passed are the caller's own, so nobody else can finalize a half-deployed suite with their own governor.
+`contracts/factories/JurisdictionFactory.sol`. Creates every DAO (Firestore `jurisdictionFactory`). Flow and rationale: [architecture.md](architecture.md#jurisdictionfactory), [modules.md](modules.md).
 
 ```solidity
-function deployInfrastructure(uint48 timelockDelayInMinutes, uint arbitrationFeeBps) external
-function deployDAOToken(address registryAddr, address timelockAddr,
-                        TokenParams calldata, GovParams calldata) external
-function configureAndFinalize(AddressParams calldata, EconomyParams calldata,
-                              string[] calldata _registryKeys, string[] calldata _registryValues) external
-function configureAndFinalizeWithGrants(AddressParams calldata, EconomyParams calldata,
-                              string[] calldata _registryKeys, string[] calldata _registryValues,
-                              address[] calldata _minters, address[] calldata _slashers) external
+enum TokenKind { Soulbound, Transferable, Wrapped }
+struct CoreParams {
+    string name; string symbol; string description;
+    TokenKind tokenKind;
+    address underlying;          // Wrapped only
+    address[] initialMembers;    // RepToken only
+    uint256[] initialAmounts;
+    uint48 votingDelay;          // minutes
+    uint32 votingPeriod;         // minutes
+    uint256 proposalThreshold;
+    uint8 quorumFraction;        // percent of supply
+    uint256 executionDelay;      // seconds (timelock min delay)
+}
+struct ModuleRef { IModuleSetup setup; uint256 id; }
+
+function deploy(CoreParams calldata, string[] calldata keys, string[] calldata values) external returns (Core memory)
+function deployCore(CoreParams calldata) public returns (Core memory)
+function finalize(Core memory core, ModuleRef[] memory modules, string[] calldata keys, string[] calldata values) public
+function pendingOf(address registry) external view returns (address originator, Core memory core)
 ```
 
-`configureAndFinalizeWithGrants` also grants RepToken minter and slasher rights before the admin handover (used for the grants in [module](modules.md) manifests, such as an `AutonetGenesis` launch's REP claim and ToolBond; see [autonet.md](autonet.md#genesis-autonetgenesis)).
+- `deployCore`: Timelock (admin = factory), Registry (owner = factory, no wrapper), token (RepToken with `timelockAddress` = the Timelock, or a non-transferable WrappedRepToken over `underlying`), Governor, `setJurisdictionAddress(token)`. Records the pending core under its Registry, bound to `msg.sender`. Emits `CoreDeployed`.
+- `finalize`: originator only. Writes `keys`/`values`, then for each module in order runs `ModuleProcessor.checkInstall`, executes its `install` actions (only against this token or Registry), writes its entries and emits `ModuleAttached`. Then token admin and Registry ownership to the timelock, governor gets `PROPOSER_ROLE` and `CANCELLER_ROLE`, `EXECUTOR_ROLE` to `address(0)`, factory admin role revoked. Emits `NewDaoCreated` and deletes the pending entry.
+- `deploy`: `deployCore` plus `finalize` with no modules.
+- Errors: `BadParams` (member and amount lengths differ, or Wrapped without `underlying`), `NotPending`, `NotOriginator`, `WrongCore`, `ForeignTarget(target)`, `ActionFailed(index)`.
 
-| Struct | Fields |
-|--------|--------|
-| `TokenParams` | `name, symbol, initialMembers[], initialAmounts[]` (token is always non-transferable) |
-| `GovParams` | `name, votingDelay` (minutes), `votingPeriod` (minutes), `proposalThreshold, quorumFraction` |
-| `AddressParams` | `implAddresses[2]` = [native, erc20]; `contractAddresses[5]` = [economy, registry, timelock, repToken, dao] |
-| `EconomyParams` | `arbitrationFeeBps` (at most 2500), `initialPlatformFeeBps` (must be `>= 100`), `initialAuthorFeeBps, initialCoolingOffPeriod, initialBackersQuorumBps, initialProjectThreshold, initialAppealPeriod` |
+### Modules
 
-Step 3 sets implementations and parameters, links RepToken and Registry, writes the registry keys, calls `setDaoAddresses` (freezing Economy admin), hands RepToken admin and Registry ownership to the timelock, wires timelock roles, then emits `SuiteConfigured` and `NewDaoCreated` and deletes the pending entry. `maxImmediateBps` is left at its default (2000).
+`contracts/modules/`. Concepts, checks and the module table: [modules.md](modules.md).
+
+```solidity
+struct Core { address payable registry; address timelock; address token; address governor; }
+struct Action { address target; bytes data; }
+struct Dependency { string name; address module; }
+struct Prepared { address module; address[] helpers; Action[] install; Action[] uninstall;
+                  string[] registryKeys; string[] registryValues; Dependency[] dependencies; }
+
+// IModuleSetup (ModuleSetup implements it)
+function moduleName() external view returns (string memory);
+function prepareInstallation(Core calldata core, bytes calldata data) external returns (uint256 id);
+function installationOf(uint256 id) external view returns (Core memory core, Prepared memory p);
+function lastPreparedBy(address preparer) external view returns (uint256);
+function installations() external view returns (uint256);
+
+// ModuleProcessor (no state, no rights)
+function checkCore(Core memory c) public view;
+function checkInstall(IModuleSetup setup, uint256 id, address registry) public view returns (Core memory, Prepared memory);
+function attachedModule(address registry, string memory name) public view returns (bool, address);
+function installCalls(IModuleSetup setup, uint256 id) external view returns (address[] targets, uint256[] values, bytes[] calldatas);
+function uninstallCalls(IModuleSetup setup, uint256 id) external view returns (address[] targets, uint256[] values, bytes[] calldatas);
+```
+
+- `ModuleRepo(name, maintainer)`: `createVersion(release, setup, buildMetadata, releaseMetadata)` (owner), `updateReleaseMetadata`, `getVersion(release, build)`, `latestVersion()`, `versionOf(setup)`, `isPublished(setup)`.
+- `ModuleCatalog`: `register(repo)`, `remove(name)` (owner, the curator), `names()`, `isPublished(setup)`.
+- Setups: `EconomySetup(nativeProjectImpl, erc20ProjectImpl)` with `data = abi.encode(EconomySetup.Params)` and `claimOf(id)`; `ContentCourtSetup` with `data = abi.encode(address economy, ContentCourt.Params)`; `AutonetSetup(6 code blobs)` with `data = abi.encode(address economy, AutonetParams, ToolBond.Params)` and `deploymentOf(id)` ([autonet.md](autonet.md#genesis-autonetsetup)).
+- ModuleProcessor errors: `NotPublished`, `WrongCore`, `NotAJurisdiction`, `AlreadyAttached`, `NotAttached`, `MissingDependency(name)`, `HasDependents(name)`.
 
 ### Sub-factories
 
@@ -262,8 +294,7 @@ Step 3 sets implementations and parameters, links RepToken and Registry, writes 
 | `InfrastructureFactory` | `deployTimelock(address admin, uint256 executionDelay)`, `deployRegistry(address initialOwner, address wrapperAddress)` |
 | `DAOFactory` | `deployDAO(address token, address timelock, string name, uint[] daoSettings)`; emits `Deployed` |
 | `RepTokenFactory` | `deployRepToken(name, symbol, registry, timelock, members, amounts, transferrable)`; hands admin to the caller |
-| `EconomyFactory` | `deployEconomy(uint arbitrationFeeBps)`; `transferAdmin(msg.sender)` |
-| `WrappedRepTokenFactory` | `deployWrappedRepToken(IERC20 underlying, name, symbol, transferrable)` |
+| `WrappedRepTokenFactory` | `deployWrappedRepToken(IERC20 underlying, name, symbol, transferrable)`; hands admin to the caller |
 
 ---
 
@@ -284,10 +315,15 @@ Step 3 sets implementations and parameters, links RepToken and Registry, writes 
 event NewDaoCreated(address indexed dao, address token, address[] initialMembers, uint256[] initialAmounts,
     string name, string symbol, string description, uint256 executionDelay, address registry,
     string[] keys, string[] values);
-event InfrastructureDeployed(address economy, address registry, address timelock);           // TrustlessFactory
-event DAOTokenDeployed(address repToken, address dao);                                         // TrustlessFactory
-event SuiteConfigured(address deployer, address indexed economy, address registry, address timelock,
-    address indexed repToken, address indexed dao);                                            // TrustlessFactory
+event CoreDeployed(address indexed originator, address registry, address timelock, address token,
+    address indexed governor);                                                                 // JurisdictionFactory
+event ModuleAttached(address indexed governor, string name, address setup, uint256 id);       // JurisdictionFactory
+
+// Modules
+event InstallationPrepared(uint256 indexed id, address indexed registry, address indexed preparer, address module); // setups
+event VersionCreated(uint8 release, uint16 build, address indexed setup, string buildMetadata);                    // ModuleRepo
+event ReleaseMetadataUpdated(uint8 release, string releaseMetadata);                                               // ModuleRepo
+event RepoRegistered(string name, address repo); event RepoRemoved(string name, address repo);                     // ModuleCatalog
 
 // Economy
 event NewProject(address indexed contractAddress, string projectName, address contractor, address arbiter,
@@ -320,11 +356,16 @@ event OrphanedTokensSwept(address indexed token, uint256 amount);      // ERC20P
 event NewRewardEpoch(uint256 indexed epochId, uint256 budget, address indexed paymentToken, uint16 delegateShareBps);
 event RewardClaimed(address indexed account, uint256 indexed epochId, uint256 amount);
 event DelegateShareSet(uint16 delegateShareBps);
-event ReputationClaimedFromEconomy(address indexed user, uint256 amount);
 event DefaultDelegateUpdated(address indexed previous, address indexed current);
 event AutoDelegateExemptSet(address indexed account, bool exempt);
 event MinterSet(address indexed account, bool allowed);
+event SlasherSet(address indexed account, bool allowed);
+event Slashed(address indexed slasher, address indexed from, uint256 amount);
+event Reassigned(address indexed slasher, address indexed to, uint256 amount);
 event AutoDelegated(address indexed account, address indexed delegatee);
+
+// EconomyRepClaim
+event ReputationClaimedFromEconomy(address indexed user, uint256 amount);
 
 // Registry
 event RegistryUpdated(string key, string value);
@@ -359,9 +400,9 @@ event SpendWindowReset(address indexed token, uint256 windowStart);
 | `APPEAL_BUFFER` | `2 days`, added to the proposal lifecycle for `effectiveAppealPeriod` | Economy |
 | `NATIVE_CURRENCY` / `NATIVE_TOKEN` | `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` | Economy / Registry |
 | `MAX_DELEGATE_SHARE_BPS` | `2500` | RepToken |
-| `PARITY_ONE` | `1e18` | RepToken, CoinOffering, AutonetVault |
+| `PARITY_ONE` | `1e18` | EconomyRepClaim, CoinOffering, AutonetVault |
 
-Economy constructor defaults (TrustlessFactory overrides all but `maxImmediateBps` and the arbitration fee, which comes from step 1):
+Economy constructor defaults (`EconomySetup` sets all but `maxImmediateBps` from its `Params`, the arbitration fee through the constructor):
 
 | Parameter | Default |
 |-----------|---------|

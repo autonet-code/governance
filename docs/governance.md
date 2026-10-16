@@ -10,7 +10,7 @@ Sources: `contracts/Dao.sol`, `RepToken.sol`, `WrappedRepToken.sol`, `Registry.s
 |---|---|---|
 | `HomebaseDAO` (`Dao.sol`) | OpenZeppelin 5.x Governor: proposals and votes | Itself (settings changes go through proposals) |
 | `TimelockController` (OZ) | Executes passed proposals after a delay; the jurisdiction's identity on-chain | Governor is the only proposer; anyone may execute |
-| `RepToken` | ERC20Votes reputation token, reward epochs, Economy reputation pull | `admin` = Timelock, plus `timelockAddress` for epoch functions |
+| `RepToken` | ERC20Votes reputation token, reward epochs, minters and slashers | `admin` = Timelock, plus `timelockAddress` for epoch functions |
 | `WrappedRepToken` | ERC20Votes wrapper over an existing ERC20 (wrapped-token DAOs) | `admin` = Timelock (no other admin powers) |
 | `Registry` | Treasury (native, ERC20, ERC721), key/value config, earmarks, spend cap | `owner` = Timelock |
 
@@ -77,7 +77,7 @@ There is no `Expired` state in practice: the OZ `TimelockController` has no grac
 
 ### Timelock roles
 
-The factories deploy the Timelock with empty proposer and executor lists and the factory as temporary admin, then finalize:
+`JurisdictionFactory` deploys the Timelock with empty proposer and executor lists and itself as temporary admin, then `finalize` sets:
 
 | Role | Holder after deployment |
 |---|---|
@@ -88,15 +88,9 @@ The factories deploy the Timelock with empty proposer and executor lists and the
 
 Consequences: role changes are possible, but only through a proposal executed by the Timelock. A queued operation cannot be cancelled by anyone, and the Governor's own `cancel` only works while a proposal is `Pending`.
 
-### Parameters by factory
+### Parameters
 
-Voting delay and period are always minutes (the Governor converts). Timelock delay units differ by factory:
-
-| Factory | Voting delay / period / threshold / quorum | Timelock delay |
-|---|---|---|
-| `StandardFactory`, `StandardFactoryNonTransferable`, `StandardFactoryTransferable` | Last four entries of `initialAmounts` (appended after the member amounts) | `executionDelay`, passed straight through, seconds |
-| `StandardFactoryWrapped` | `governanceSettings[4]` | `executionDelay`, seconds |
-| `TrustlessFactory` | `GovParams.votingDelay` (minutes) | `deployInfrastructure(timelockDelayInMinutes, ...)`, minutes |
+`JurisdictionFactory.CoreParams` carries `votingDelay` and `votingPeriod` in **minutes** (the Governor converts), `proposalThreshold`, `quorumFraction` (percent of supply) and `executionDelay`, the Timelock delay, in **seconds**.
 
 ## RepToken
 
@@ -106,7 +100,7 @@ Voting delay and period are always minutes (the Governor converts). Timelock del
 
 Two addresses matter, and they are set differently:
 
-- `admin`: starts as the deployer (`RepTokenFactory`), handed to the calling top-level factory, then to the Timelock in finalization. `setAdmin` is admin-only and rejects `address(0)`.
+- `admin`: starts as the deployer (`RepTokenFactory`), handed to `JurisdictionFactory`, then to the Timelock in `finalize`. Module grants (`setMinter`, `setSlasher`) at origination run while the factory is still admin. `setAdmin` is admin-only and rejects `address(0)`.
 - `timelockAddress`: **immutable**, set in the constructor. Reward epoch functions (`startNewRewardEpoch`, `setDelegateShareBps`) check this address, not `admin`.
 
 | Function | Caller |
@@ -116,17 +110,16 @@ Two addresses matter, and they are set differently:
 | `burn(from, amount)` | `admin` only |
 | `slash(from, amount)` / `reassign(to, amount)` | An address in `slashers`; `reassign` mints only out of what that slasher burned |
 | `setMinter`, `setSlasher`, `setDefaultDelegate`, `setAutoDelegateExempt` | `admin` or `timelockAddress` |
-| `setEconomyAddress` | `admin` or `timelockAddress`, once only |
 | `startNewRewardEpoch`, `setDelegateShareBps` | `timelockAddress` only |
 | `setAdmin` | `admin` only |
 
 ### Transferability
 
-`isTransferable` is immutable. When false, `transfer` and `transferFrom` revert; minting and burning still work. `TrustlessFactory` always deploys non-transferable tokens; `StandardFactory` and `StandardFactoryNonTransferable` deploy non-transferable; `StandardFactoryTransferable` deploys transferable.
+`isTransferable` is immutable. When false, `transfer` and `transferFrom` revert; minting and burning still work. `JurisdictionFactory` deploys a non-transferable (soulbound) RepToken for `TokenKind.Soulbound` and a transferable one for `TokenKind.Transferable`.
 
 ### Minters
 
-`minters[account]` lets a contract mint without being admin. It exists for satellites such as `CoinOffering` (mints to buyers up to its cap) and `AutonetRepClaim` (mints REP against Autonet earnings). Granting it is a governance action. See [autonet.md](autonet.md).
+`minters[account]` lets a contract mint without being admin. It exists for modules and satellites such as `EconomyRepClaim` (mints REP for Economy earnings and spendings), `AutonetRepClaim` (mints REP against Autonet earnings) and `CoinOffering` (mints to buyers up to its cap). Granting it is a governance action (a module attach proposal or a direct `setMinter`), except for modules attached at origination, whose grants the factory makes before handing the token to the Timelock. See [autonet.md](autonet.md).
 
 ### Slashers
 
@@ -138,7 +131,7 @@ If `defaultDelegate != address(0)`, any account that receives tokens (mint or tr
 
 ### Reputation from the Economy
 
-In Economy DAOs, `claimReputationFromEconomy()` reads the caller's cumulative earnings and spendings per token from `Economy.getUser`, takes the increase since the last claim, and mints:
+RepToken knows nothing about any Economy. In a DAO with the `economy` [module](modules.md), `EconomyRepClaim.claim()` reads the caller's cumulative earnings and spendings per token from `Economy.getUser`, takes the increase since the last claim (watermarks `claimedEarnings` / `claimedSpendings` on the claim contract), and mints through `RepToken.mint` as a minter:
 
 ```
 reputation = unclaimedAmount * parity / 1e18
@@ -189,7 +182,7 @@ Summed over all holders the weights equal total supply, so payouts never exceed 
 
 ## WrappedRepToken
 
-`ERC20 + ERC20Permit + ERC20Votes + ERC20Wrapper`, timestamp clock, decimals inherited from the underlying token. Holders call `depositFor` / `withdrawTo` to wrap and unwrap 1:1; wrapped balances are the voting power. `isTransferable` (immutable) blocks `transfer`/`transferFrom` only. It has an `admin` (set to the Timelock) but no mint, burn, epoch, Economy or Registry features, and `StandardFactoryWrapped` does not set the Registry's `jurisdictionAddress`. Reward epochs and the Economy reputation pull are therefore RepToken-only.
+`ERC20 + ERC20Permit + ERC20Votes + ERC20Wrapper`, timestamp clock, decimals inherited from the underlying token. Holders call `depositFor` / `withdrawTo` to wrap and unwrap 1:1; wrapped balances are the voting power. `isTransferable` (immutable) blocks `transfer`/`transferFrom` only. `JurisdictionFactory` deploys it non-transferable. It has an `admin` (set to the Timelock) but no mint, burn, epoch, minter, slasher or Registry features. Reward epochs and modules (whose grants need a RepToken) are therefore RepToken-only.
 
 ## Registry
 
@@ -205,7 +198,7 @@ One contract per jurisdiction. `owner` is the Timelock after deployment.
 | `jurisdictionAddress` only | | `disburseEarmarked` |
 | `owner` | | `transferOwnership` |
 
-`wrapper` is fixed at construction: the factory address for the Standard factories, `address(0)` for `TrustlessFactory`. `jurisdictionAddress` is the RepToken.
+`wrapper` is fixed at construction: `address(0)` for DAOs from `JurisdictionFactory` (DAOs from the old standard factories have the factory). `jurisdictionAddress` is the governance token.
 
 ### Configuration store
 
@@ -248,6 +241,7 @@ All are `dao.propose([target], [0], [calldata], description)`.
 | Arm the spend cap | Registry | `setSpendCap(token, cap)` |
 | Grant a minter | RepToken | `setMinter(contract, true)` |
 | Grant a slasher | RepToken | `setSlasher(contract, true)` |
+| Attach or detach a module | as built | `ModuleProcessor.installCalls(setup, id)` / `uninstallCalls(setup, id)` (see [modules.md](modules.md)) |
 | Economy parameter | Economy | `setPlatformFee(bps)` etc. (see [economy.md](economy.md)) |
 | Overrule arbitration | Project | `daoOverrule(percent, rulingHash)` (inside the appeal window, or on a silent arbiter) |
 | Veto a project | Project | `daoVeto()` |
@@ -256,7 +250,7 @@ An appeal is just this proposal: nothing is registered on the project. The appea
 
 ## Known caveats
 
-- **Standard DAOs cannot run reward epochs.** All three `StandardFactory*` contracts pass `address(this)` (the factory) as the RepToken's `timelockAddress`. Because it is immutable, `startNewRewardEpoch` and `setDelegateShareBps` are permanently uncallable on those DAOs. Admin-gated functions still work because `admin` is moved to the real Timelock. `TrustlessFactory` passes the real Timelock and is unaffected.
+- **Old standard DAOs cannot run reward epochs.** Early builds of the removed `StandardFactory*` contracts passed `address(this)` (the factory) as the RepToken's `timelockAddress`. Because it is immutable, `startNewRewardEpoch` and `setDelegateShareBps` are permanently uncallable on those DAOs. Admin-gated functions still work because `admin` is moved to the real Timelock. `JurisdictionFactory` passes the real Timelock.
 - **Reward-epoch events are not indexed.** The indexer does not listen to `NewRewardEpoch` or `RewardClaimed`; apps must read them from chain.
 
 ## Further reading

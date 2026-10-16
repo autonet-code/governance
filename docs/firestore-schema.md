@@ -6,7 +6,7 @@ This document describes the Firestore database structure for the Trustless Econo
 
 The Trustless Economy uses a hierarchical structure where:
 - **Network** is the root collection (e.g., `Etherlink-Shadownet`)
-- **Economy** documents represent deployed Economy DAOs
+- **Economy** documents represent the Economy of each DAO with the `economy` [module](modules.md)
 - **Projects** are nested subcollections within each Economy
 
 ## Schema Structure
@@ -19,9 +19,11 @@ contracts/                                    [collection - configuration]
         ├── blockExplorer: string
         ├── symbol: string
         ├── arbitrationFee: string
-        ├── wrapper_trustless: string         [TrustlessFactory address]
-        ├── nativeProjectImpl: string         [NativeProject implementation]
-        └── erc20ProjectImpl: string          [ERC20Project implementation]
+        ├── jurisdictionFactory: string       [JurisdictionFactory address]
+        ├── moduleCatalog: string             [ModuleCatalog address]
+        ├── moduleProcessor: string           [ModuleProcessor address]
+        ├── nativeProject: string             [NativeProject implementation]
+        └── erc20Project: string              [ERC20Project implementation]
 
 {networkName}/                                [collection - e.g., "Etherlink-Shadownet"]
   └── {economyAddress}/                       [document - Economy instance]
@@ -65,15 +67,19 @@ Network configuration document. Contains factory addresses and network settings.
 | `blockExplorer` | string | Block explorer base URL |
 | `symbol` | string | Native currency symbol (e.g., "XTZ") |
 | `arbitrationFee` | string | Default arbitration fee |
-| `wrapper_trustless` | string | TrustlessFactory contract address |
-| `nativeProjectImpl` | string | NativeProject implementation address |
-| `erc20ProjectImpl` | string | ERC20Project implementation address |
+| `jurisdictionFactory` | string | JurisdictionFactory address (creates every DAO; the indexer watches its `NewDaoCreated`) |
+| `moduleCatalog` | string | ModuleCatalog address (modules, versions, metadata) |
+| `moduleProcessor` | string | ModuleProcessor address (builds attach and detach proposals) |
+| `nativeProject` | string | NativeProject implementation address |
+| `erc20Project` | string | ERC20Project implementation address |
+
+These are the fields `scripts/deploy-jurisdiction-suite.js` writes. Until Shadownet is redeployed, the live document still holds the pre-modules fields (`wrapper`, `wrapper_t`, `wrapper_w`, `wrapper_trustless`, `nativeProjectImpl`, `erc20ProjectImpl`); see [deployments.md](deployments.md).
 
 **Example path:** `contracts/Etherlink-Shadownet`
 
 ### `{networkName}/{economyAddress}`
 
-Economy document. Created when a new Economy DAO is deployed via TrustlessFactory.
+Economy document. Created by the indexer when a new DAO's Registry has a `jurisdiction.economy` key (the `economy` module, attached at origination or later).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -82,7 +88,7 @@ Economy document. Created when a new Economy DAO is deployed via TrustlessFactor
 | `registryAddress` | string | Registry (treasury) contract address |
 | `timelockAddress` | string | TimelockController address |
 | `repTokenAddress` | string | RepToken governance token address |
-| `creator` | string | Address that deployed the Economy DAO |
+| `creator` | string | Address that created the DAO |
 | `createdAt` | timestamp | Deployment timestamp |
 | `createdAtBlock` | number | Block number of deployment |
 

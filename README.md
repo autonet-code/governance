@@ -8,7 +8,7 @@
 
 **[Eight Rice](https://eightrice.xyz)** | [werule.io](https://werule.io) | [trustless.business](https://trustless.business) | [autonet.computer](https://autonet.computer)
 
-*Beta, on testnet. The full suite (standard and economy DAO factories, project implementations, Autonet satellites) is live on Etherlink Shadownet (chainId 127823) since October 2026; addresses in [`docs/deployments.md`](docs/deployments.md). This README is the living paper: each section links to its full specification in [`docs/`](docs/README.md).*
+*Beta, on testnet. A full suite (DAO factories, project implementations, Autonet satellites) is live on Etherlink Shadownet (chainId 127823) since October 2026, pending a redeploy of the module architecture described here; addresses in [`docs/deployments.md`](docs/deployments.md). This README is the living paper: each section links to its full specification in [`docs/`](docs/README.md).*
 
 ## 1. The promise of trustless coordination
 
@@ -27,11 +27,11 @@ This is not a replacement for traditional systems but an alternative that exists
 
 ## 2. Governance: the jurisdiction itself
 
-A jurisdiction is a DAO built on [OpenZeppelin's Governor](https://docs.openzeppelin.com/contracts/5.x/governance): a Governor that counts votes, a Timelock that delays and executes every decision and holds the treasury's authority, a Registry that is both treasury and the jurisdiction's key-value constitution, and a RepToken that carries voting power. Reputation is non-transferable by default, so influence cannot be bought on a market; transferable and wrapped variants exist for communities that want them. Every governance action passes through the Timelock, which gives members time to review, object, or exit before anything executes. ([full spec →](docs/governance.md))
+A jurisdiction is a DAO built on [OpenZeppelin's Governor](https://docs.openzeppelin.com/contracts/5.x/governance): a Governor that counts votes, a Timelock that delays and executes every decision and holds the treasury's authority, a Registry that is both treasury and the jurisdiction's key-value constitution, and a RepToken that carries voting power. Reputation is non-transferable by default, so influence cannot be bought on a market; transferable and wrapped variants exist for communities that want them. Every governance action passes through the Timelock, which gives members time to review, object, or exit before anything executes. One factory creates this core for every DAO; everything else (the economy, the content court, the Autonet layer) is a module the DAO attaches at origination or later by proposal. ([full spec →](docs/governance.md), [modules →](docs/modules.md))
 
 ## 3. Agreements that enforce themselves
 
-An economy DAO adds a marketplace. Anyone can open a project; backers fund it into an escrow contract; a contractor and an arbiter are named; the contractor signs by staking half the arbitration fee. From then on the money moves only by rule:
+The economy module adds a marketplace. Anyone can open a project; backers fund it into an escrow contract; a contractor and an arbiter are named; the contractor signs by staking half the arbitration fee. From then on the money moves only by rule:
 
 1. **Cooling-off.** Before the contractor can sign, the jurisdiction always has time to veto: the cooling-off period is never shorter than one full proposal lifecycle (voting delay + voting period + timelock delay) plus a day to execute the result, whatever the DAO configures. A veto refunds backers in full.
 2. **Immediate release.** Backers may release part of their contribution (up to a DAO-set cap, 20% by default) to the contractor at signing, as operating capital. The rest stays in escrow. ([spec →](docs/immediate-release.md))
@@ -43,7 +43,7 @@ Every payout (immediate release, escrow release, the arbiter's fee) pays a platf
 
 ## 4. Reputation from economic activity
 
-The economy keeps an on-chain ledger of what each participant has earned and spent, per token. Members claim RepToken against that ledger at a parity the DAO sets per token in the Registry (`jurisdiction.parity.<token>`, an 18-decimal multiplier that absorbs each token's decimals). Contractors earn reputation for completed work, backers for funding it, arbiters for resolving it. The more you contribute to the economy, the more you shape its rules: fees, quorums, thresholds, and the power to overrule arbitration. ([parity and settings →](docs/registry-settings.md))
+The economy keeps an on-chain ledger of what each participant has earned and spent, per token. Members claim RepToken against that ledger (through the economy's REP claim contract, a RepToken minter) at a parity the DAO sets per token in the Registry (`jurisdiction.parity.<token>`, an 18-decimal multiplier that absorbs each token's decimals). Contractors earn reputation for completed work, backers for funding it, arbiters for resolving it. The more you contribute to the economy, the more you shape its rules: fees, quorums, thresholds, and the power to overrule arbitration. ([parity and settings →](docs/registry-settings.md))
 
 ## 5. Paying the people who govern
 
@@ -61,8 +61,9 @@ Guarantees that depend on an operator's good behaviour are not guarantees. The s
 | Fee capture or a free-riding economy | Platform fee bounded to 1% to 50%; author and arbitration fees capped at 25% |
 | Bad arbitration | DAO overrule by proposal, inside an appeal window that always fits a proposal |
 | Abandoned projects | 150-day arbitration timeout |
-| Hijacked DAO deployment | Per-deployer pending deployments in the factories |
-| Economy administered by a key | Admin hands over to governance (`transferAdmin`) |
+| Hijacked DAO deployment | A pending DAO can be finalized only by the account that started it |
+| Malicious module | Only setups published in the module catalog attach, and only against the DAO's own token and Registry |
+| Economy administered by a key | The economy is handed to the Timelock in the transaction that creates it |
 | Reentrancy and non-standard tokens | ReentrancyGuard, SafeERC20 |
 
 ([threat model →](docs/security.md))
@@ -95,7 +96,7 @@ Events from every contract are indexed into Firestore and read by two web apps: 
 
 | # | Section | Doc |
 |---|---------|-----|
-| 1 | Architecture: contracts, factories, indexer, apps | [`docs/architecture.md`](docs/architecture.md) |
+| 1 | Architecture: contracts, factory, modules, indexer, apps | [`docs/architecture.md`](docs/architecture.md) |
 | 2 | Governance: Governor, Timelock, Registry, RepToken, reward epochs | [`docs/governance.md`](docs/governance.md) |
 | 3 | The trustless economy: project lifecycle, escrow, arbitration | [`docs/economy.md`](docs/economy.md) |
 | 4 | Immediate release | [`docs/immediate-release.md`](docs/immediate-release.md) |
@@ -124,8 +125,10 @@ Deploy scripts, network names and the local end-to-end harness (Hardhat node, Fi
 
 | Path | What |
 |------|------|
-| `contracts/` | Governor (`Dao.sol`), `RepToken`, `Registry`, `Economy`, project escrows (`NativeProject`, `ERC20Project`), Autonet satellites |
-| `contracts/factories/` | Standard, transferable, wrapped and trustless DAO factories plus their sub-factories |
+| `contracts/` | Governor (`Dao.sol`), `RepToken`, `Registry`, `Economy`, `EconomyRepClaim`, project escrows (`NativeProject`, `ERC20Project`), Autonet satellites |
+| `contracts/factories/` | `JurisdictionFactory` (every DAO core) plus its sub-factories |
+| `contracts/modules/` | Module standard (`ModuleSetup`, `ModuleRepo`, `ModuleCatalog`, `ModuleProcessor`) and the economy, content court and Autonet setups |
+| `modules/` | Release and build metadata per module |
 | `scripts/` | Deploy and operational scripts; `scripts/indexer-e2e/` is the local end-to-end harness |
 | `test/` | Hardhat test suite |
 | `docs/` | The specification (see §9) |
