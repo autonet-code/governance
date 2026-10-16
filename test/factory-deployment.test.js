@@ -1,6 +1,6 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
-const { suite, coreParams, prepare, createJurisdiction, REP } = require("./helpers/jurisdiction");
+const { suite, coreParams, prepare, prepareDependent, createJurisdiction, REP } = require("./helpers/jurisdiction");
 
 describe("JurisdictionFactory", function () {
     let deployer, m1, m2, outsider;
@@ -72,13 +72,13 @@ describe("JurisdictionFactory", function () {
         await f.deployCore(coreParams());
         const c = { registry: core.registry, timelock: core.timelock, token: core.token, governor: core.governor };
         const economy = await prepare(s, m1, c, "economy");
-        const court = await prepare(s, m1, c, "content_court", {}, { economy });
+        const dependent = await prepareDependent(m1, c, economy.module);
         const ref = async (x) => ({ setup: await x.setup.getAddress(), id: x.id });
-        await expect(f.finalize(c, [await ref(court), await ref(economy)], [], []))
+        await expect(f.finalize(c, [await ref(dependent), await ref(economy)], [], []))
             .to.be.revertedWithCustomError(s.processor, "MissingDependency").withArgs("economy");
-        await f.finalize(c, [await ref(economy), await ref(court)], [], []);
-        const rep = await ethers.getContractAt("RepToken", c.token);
-        expect(await rep.slashers(court.module)).to.equal(true);
+        await f.finalize(c, [await ref(economy), await ref(dependent)], [], []);
+        const [ok, module] = await s.processor.attachedModule(c.registry, "dependent");
+        expect([ok, module]).to.deep.equal([true, dependent.module]);
     });
 
     it("refuses an installation prepared for another core, or from an unpublished setup", async function () {

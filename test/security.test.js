@@ -53,13 +53,16 @@ describe("Security", function () {
             const j = await createJurisdiction(victim, {
                 members: [member.address], amounts: [ethers.parseEther("100")],
                 votingDelay: 1, votingPeriod: 5, proposalThreshold: ethers.parseEther("1"), executionDelay: 60,
-                modules: [["economy", { params: { arbitrationFeeBps: 500, platformFeeBps: 100, authorFeeBps: 100,
-                    coolingOffPeriod: 60, backersQuorumBps: 7000, projectThreshold: 0, appealPeriod: 120 } }]],
+                modules: ["economy", "content_court", "autonet"],
             });
             const lifecycle = (await j.dao.votingDelay()) + (await j.dao.votingPeriod()) + (await j.timelock.getMinDelay());
             expect(await j.economy.proposalLifecycle()).to.equal(lifecycle);
-            // Verdicts can't hold for a DAO proposal, so their window fits one; projects hold instead
-            expect(await j.economy.effectiveAppealPeriod()).to.equal(lifecycle + (await j.economy.APPEAL_BUFFER()));
+            // Verdicts can't hold for a DAO proposal, so their window fits one (appealPeriod is 120 s here);
+            // projects hold instead
+            const court = await ethers.getContractAt("ContentCourt", j.installs.content_court.module);
+            const bond = await ethers.getContractAt("ToolBond", j.installs.autonet.prepared.helpers[2]);
+            expect(await court.appealWindow()).to.equal(lifecycle + 2n * 86400n);
+            expect(await bond.appealWindow()).to.equal(lifecycle + 2n * 86400n);
         });
 
         it("bounds the author and arbitration fees", async function () {

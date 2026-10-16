@@ -1,6 +1,6 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
-const { suite, prepare, createJurisdiction, govern, REP } = require("./helpers/jurisdiction");
+const { suite, prepare, prepareDependent, createJurisdiction, govern, REP } = require("./helpers/jurisdiction");
 const { metadata, paramType } = require("../scripts/lib/modules");
 
 // Modules after origination: anyone prepares an installation, the DAO attaches it by a proposal
@@ -53,20 +53,20 @@ describe("Modules", function () {
     it("enforces dependencies both ways", async function () {
         const j = await liveDao();
         const economy = await prepare(s, member, j.core, "economy");
-        const court = await prepare(s, member, j.core, "content_court", {}, { economy });
-        // The court depends on an economy that isn't attached
-        await expect(s.processor.installCalls(await court.setup.getAddress(), court.id))
+        const dependent = await prepareDependent(member, j.core, economy.module);
+        // It depends on an economy that isn't attached
+        await expect(s.processor.installCalls(await dependent.setup.getAddress(), dependent.id))
             .to.be.revertedWithCustomError(s.processor, "MissingDependency").withArgs("economy");
 
         await govern(j.dao, member, await s.processor.installCalls(await economy.setup.getAddress(), economy.id), "Economy");
-        await govern(j.dao, member, await s.processor.installCalls(await court.setup.getAddress(), court.id), "Court");
-        // The economy can't be detached while the court depends on it
+        await govern(j.dao, member, await s.processor.installCalls(await dependent.setup.getAddress(), dependent.id), "Dependent");
+        // The economy can't be detached while a module depends on it
         await expect(s.processor.uninstallCalls(await economy.setup.getAddress(), economy.id))
-            .to.be.revertedWithCustomError(s.processor, "HasDependents").withArgs("content_court");
+            .to.be.revertedWithCustomError(s.processor, "HasDependents").withArgs("dependent");
 
-        // A court wired to a different economy doesn't satisfy the dependency either
+        // One wired to a different economy doesn't satisfy the dependency either
         const other = await liveDao(["economy"]);
-        const stray = await prepare(s, member, other.core, "content_court", { economy: economy.module });
+        const stray = await prepareDependent(member, other.core, economy.module);
         await expect(s.processor.installCalls(await stray.setup.getAddress(), stray.id))
             .to.be.revertedWithCustomError(s.processor, "MissingDependency");
     });
@@ -82,20 +82,21 @@ describe("Modules", function () {
         const a = await liveDao(["economy"]);
         const b = await liveDao();
         // Registry and token of A, governor of B
-        const x = await prepare(s, outsider, { ...a.core, governor: b.core.governor }, "content_court", {}, a.installs);
+        const x = await prepare(s, outsider, { ...a.core, governor: b.core.governor }, "content_court");
         await expect(s.processor.installCalls(await x.setup.getAddress(), x.id))
             .to.be.revertedWithCustomError(s.processor, "NotAJurisdiction");
     });
 
     describe("Catalog", function () {
         it("lists the published modules with their metadata", async function () {
-            expect([...(await s.catalog.names())]).to.deep.equal(["economy", "content_court", "autonet"]);
+            // Other tests publish a test-only module after these
+            expect([...(await s.catalog.names())].slice(0, 3)).to.deep.equal(["economy", "content_court", "autonet"]);
             const repo = await ethers.getContractAt("ModuleRepo", await s.catalog.repoOf("content_court"));
             const v = await repo.latestVersion();
             expect(v.setup).to.equal(await s.setups.content_court.getAddress());
             expect([v.release, v.build]).to.deep.equal([1n, 1n]);
             const build = JSON.parse(Buffer.from(v.buildMetadata.split(",")[1], "base64").toString());
-            expect(build.ui.requires).to.deep.equal(["economy"]);
+            expect(build.ui.requires).to.deep.equal([]);
             expect(await repo.releaseMetadata(1)).to.match(/^data:application\/json;base64,/);
         });
 

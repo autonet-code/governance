@@ -4,8 +4,8 @@ const { ethers } = require("hardhat");
 const { autonet } = require("./helpers/autonet");
 const { createJurisdiction, suite, REP } = require("./helpers/jurisdiction");
 
-// The autonet module, attached at origination the way the werule wizard does it: the core, the
-// economy module, then autonet (which depends on it). Everything is live at genesis.
+// The autonet module, attached at origination the way the werule wizard does it: the core, then
+// autonet, with no Economy needed. Everything is live at genesis.
 describe("AutonetSetup", function () {
     let deployer, launcher, member, buyer;
     let s;
@@ -21,7 +21,7 @@ describe("AutonetSetup", function () {
         const parityKey = `jurisdiction.parity.${(await usdc.getAddress()).toLowerCase()}`;
         const j = await createJurisdiction(from, {
             members: [member.address], amounts: [REP(1000)],
-            modules: ["economy", ["autonet", { substrate: { anchorQuorumBps: 5000, genesisSigners: [from.address],
+            modules: [["autonet", { substrate: { anchorQuorumBps: 5000, genesisSigners: [from.address],
                 genesisQuorum: 1, challengeWindow: 3600, charterHash: CHARTER, charterUri: "ipfs://charter" } }]],
             keys: [parityKey], values: [(10n ** 30n).toString()],
         });
@@ -43,17 +43,20 @@ describe("AutonetSetup", function () {
         expect(await j.rep.slashers(d.toolBond)).to.equal(true);
         expect(await j.rep.admin()).to.equal(j.core.timelock);
 
-        const charter = autonet("CharterAnchor", deployer).attach(d.charterAnchor);
-        expect(await charter.versionCount()).to.equal(1n);
-        expect(await charter.governor()).to.equal(j.core.timelock);
+        // The charter is a registry entry the DAO changes by proposal
+        expect(await j.registry.getRegistryValue("jurisdiction.autonet.charter")).to.equal(CHARTER);
+        expect(await j.registry.getRegistryValue("jurisdiction.autonet.charter_uri")).to.equal("ipfs://charter");
 
         const bond = await ethers.getContractAt("ToolBond", d.toolBond);
         expect(await bond.auditorShareBps()).to.equal(4000n);
         expect(await bond.timelock()).to.equal(j.core.timelock);
-        expect(await bond.economy()).to.equal(await j.economy.getAddress());
+        expect(await bond.governor()).to.equal(j.core.governor);
+        // Never shorter than one proposal lifecycle plus two days
+        const lifecycle = (await j.dao.votingDelay()) + (await j.dao.votingPeriod()) + (await j.timelock.getMinDelay());
+        expect(await bond.appealWindow()).to.equal(lifecycle + 2n * 86400n);
 
         expect(await j.registry.getRegistryValue("jurisdiction.autonet.substrate")).to.equal(d.substrate.toLowerCase());
-        expect(await j.registry.getRegistryValue("jurisdiction.autonet.economy")).to.equal((await j.economy.getAddress()).toLowerCase());
+        expect(await j.registry.getRegistryValue("jurisdiction.autonet.economy")).to.equal("");
         expect(await j.registry.getRegistryValue("modules.autonet"))
             .to.equal(`${(await s.setups.autonet.getAddress()).toLowerCase()}:${j.installs.autonet.id}`);
 
@@ -71,13 +74,10 @@ describe("AutonetSetup", function () {
         expect(await s.setups.autonet.installations()).to.be.greaterThan(1n);
     });
 
-    it("rejects a missing economy and unknown installations", async function () {
-        const setup = s.setups.autonet;
-        const { DEFAULTS } = require("./helpers/jurisdiction");
-        const { encodeInstallData } = require("../scripts/lib/modules");
-        const core = { registry: buyer.address, timelock: buyer.address, token: buyer.address, governor: buyer.address };
-        await expect(setup.prepareInstallation(core, encodeInstallData(ethers, "autonet",
-            { ...DEFAULTS.autonet, economy: ethers.ZeroAddress }))).to.be.revertedWithCustomError(setup, "ZeroAddress");
-        await expect(setup.installationOf(999)).to.be.revertedWithCustomError(setup, "UnknownInstallation");
+    it("records no charter when none is given, and rejects unknown installations", async function () {
+        const j = await createJurisdiction(launcher, { members: [member.address], amounts: [REP(1000)], modules: ["autonet"] });
+        expect(await j.registry.getRegistryValue("jurisdiction.autonet.charter")).to.equal("");
+        expect(await j.registry.getRegistryValue("jurisdiction.autonet.substrate")).to.not.equal("");
+        await expect(s.setups.autonet.installationOf(999)).to.be.revertedWithCustomError(s.setups.autonet, "UnknownInstallation");
     });
 });

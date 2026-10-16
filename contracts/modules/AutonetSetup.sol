@@ -8,12 +8,12 @@ import "./ModuleSetup.sol";
 
 /// @title AutonetSetup
 /// @notice The `autonet` module: a jurisdiction's whole Autonet layer in one transaction. The
-///         Substrate, AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry, PaymentChannel,
-///         VentureVaultFactory and CharterAnchor (with its genesis charter anchored), wired to the
-///         jurisdiction's timelock (governor), Registry (treasury) and RepToken. Depends on the
-///         `economy` module (ToolBond's appeal window). Attaching it grants the REP claim minter
-///         rights and the bond slasher rights, and records the jurisdiction.autonet.* entries the
-///         daemon joins a jurisdiction from.
+///         Substrate, AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry, PaymentChannel and
+///         VentureVaultFactory, wired to the jurisdiction's timelock (governor), Registry (treasury)
+///         and RepToken. Attaching it grants the REP claim minter rights and the bond slasher rights,
+///         and records the jurisdiction.autonet.* entries the daemon joins a jurisdiction from,
+///         including the charter (jurisdiction.autonet.charter and .charter_uri), which the DAO
+///         changes by proposal like any registry entry.
 ///
 ///         The autonet contracts' creation code is stored on-chain as code blobs fixed when this
 ///         contract is deployed, so a preparer chooses parameters but never the code.
@@ -26,7 +26,7 @@ contract AutonetSetup is ModuleSetup {
         address[] genesisSigners;  // Substrate: anchor signers until REP exists
         uint256 genesisQuorum;     // Substrate: genesis signatures an anchor needs
         uint256 challengeWindow;   // PaymentChannel
-        bytes32 charterHash;       // CharterAnchor: v1 charter, anchored at construction (0 = none)
+        bytes32 charterHash;       // sha256 of the canonical charter the daemons follow (0 = none recorded)
         string charterUri;
     }
 
@@ -38,8 +38,8 @@ contract AutonetSetup is ModuleSetup {
         address serviceRegistry;
         address paymentChannel;
         address ventureVaultFactory;
-        address charterAnchor;
-        address economy;
+        bytes32 charterHash;
+        string charterUri;
     }
 
     // Code blobs: contracts whose runtime code is 0x00 followed by the creation code
@@ -47,7 +47,6 @@ contract AutonetSetup is ModuleSetup {
     address public immutable serviceRegistryCode;
     address public immutable paymentChannelCode;
     address public immutable ventureVaultFactoryCode;
-    address public immutable charterAnchorCode;
     address public immutable toolBondCode;
 
     mapping(uint256 => Deployment) private _deployments;
@@ -59,14 +58,12 @@ contract AutonetSetup is ModuleSetup {
         address _serviceRegistryCode,
         address _paymentChannelCode,
         address _ventureVaultFactoryCode,
-        address _charterAnchorCode,
         address _toolBondCode
     ) {
         substrateCode = _substrateCode;
         serviceRegistryCode = _serviceRegistryCode;
         paymentChannelCode = _paymentChannelCode;
         ventureVaultFactoryCode = _ventureVaultFactoryCode;
-        charterAnchorCode = _charterAnchorCode;
         toolBondCode = _toolBondCode;
     }
 
@@ -78,14 +75,12 @@ contract AutonetSetup is ModuleSetup {
         return _deployments[id];
     }
 
-    /// @param data abi.encode(address economy, AutonetParams, ToolBond.Params)
+    /// @param data abi.encode(AutonetParams, ToolBond.Params)
     function _prepare(uint256 id, Core calldata core, bytes calldata data) internal override returns (address) {
-        (address economy, AutonetParams memory s, ToolBond.Params memory b) =
-            abi.decode(data, (address, AutonetParams, ToolBond.Params));
-        if (economy == address(0)) revert ZeroAddress();
+        (AutonetParams memory s, ToolBond.Params memory b) = abi.decode(data, (AutonetParams, ToolBond.Params));
         bytes32 salt = bytes32(id);
         Deployment memory d;
-        d.economy = economy;
+        (d.charterHash, d.charterUri) = (s.charterHash, s.charterUri);
 
         // Substrate(treasury, vaultMinter, governor, repToken, anchorQuorumBps, genesisSigners, genesisQuorum)
         // needs the vault, and the vault needs the Substrate: compute the Substrate's address first.
@@ -102,11 +97,10 @@ contract AutonetSetup is ModuleSetup {
         if (d.substrate != substrateAddr) revert CreateFailed();
 
         d.repClaim = address(new AutonetRepClaim(d.substrate, core.token, new address[](0), new uint256[](0)));
-        d.toolBond = _create(abi.encodePacked(_read(toolBondCode), abi.encode(d.substrate, core.token, economy, core.timelock, b)));
+        d.toolBond = _create(abi.encodePacked(_read(toolBondCode), abi.encode(d.substrate, core.token, core.governor, core.timelock, b)));
         d.serviceRegistry = _create(abi.encodePacked(_read(serviceRegistryCode), abi.encode(d.substrate)));
         d.paymentChannel = _create(abi.encodePacked(_read(paymentChannelCode), abi.encode(d.substrate, s.challengeWindow)));
         d.ventureVaultFactory = _create(abi.encodePacked(_read(ventureVaultFactoryCode), abi.encode(d.substrate)));
-        d.charterAnchor = _create(abi.encodePacked(_read(charterAnchorCode), abi.encode(core.timelock, s.charterHash, s.charterUri)));
 
         _deployments[id] = d;
         return d.substrate;
@@ -114,27 +108,33 @@ contract AutonetSetup is ModuleSetup {
 
     function _describe(uint256 id, Core memory core, Prepared memory p) internal view override {
         Deployment memory d = _deployments[id];
-        p.helpers = new address[](7);
+        p.helpers = new address[](6);
         (p.helpers[0], p.helpers[1], p.helpers[2], p.helpers[3]) = (d.vault, d.repClaim, d.toolBond, d.serviceRegistry);
-        (p.helpers[4], p.helpers[5], p.helpers[6]) = (d.paymentChannel, d.ventureVaultFactory, d.charterAnchor);
+        (p.helpers[4], p.helpers[5]) = (d.paymentChannel, d.ventureVaultFactory);
         _repGrants(p, core.token, _one(d.repClaim), _one(d.toolBond));
-        string[13] memory n = ["substrate", "vault", "rep_claim", "tool_bond", "service_registry",
-            "payment_channel", "venture_vault_factory", "charter_anchor", "rep_token", "dao", "timelock",
-            "economy", "registry"];
-        address[13] memory a = [d.substrate, d.vault, d.repClaim, d.toolBond, d.serviceRegistry,
-            d.paymentChannel, d.ventureVaultFactory, d.charterAnchor, core.token, core.governor, core.timelock,
-            d.economy, address(core.registry)];
-        string[] memory names = new string[](13);
-        address[] memory addrs = new address[](13);
-        for (uint256 i = 0; i < 13; i++) (names[i], addrs[i]) = (n[i], a[i]);
+        string[11] memory n = ["substrate", "vault", "rep_claim", "tool_bond", "service_registry",
+            "payment_channel", "venture_vault_factory", "rep_token", "dao", "timelock", "registry"];
+        address[11] memory a = [d.substrate, d.vault, d.repClaim, d.toolBond, d.serviceRegistry,
+            d.paymentChannel, d.ventureVaultFactory, core.token, core.governor, core.timelock, address(core.registry)];
+        bool charter = d.charterHash != bytes32(0);
+        string[] memory names = new string[](11);
+        address[] memory addrs = new address[](11);
+        for (uint256 i = 0; i < 11; i++) (names[i], addrs[i]) = (n[i], a[i]);
         _entries(p, "jurisdiction.autonet.", names, addrs);
-        _dependsOn(p, "economy", d.economy);
+        if (!charter) return;
+        // The charter: hash as 0x + 64 lowercase hex, like the address entries
+        string[] memory keys = new string[](13);
+        string[] memory values = new string[](13);
+        for (uint256 i = 0; i < 11; i++) (keys[i], values[i]) = (p.registryKeys[i], p.registryValues[i]);
+        (keys[11], values[11]) = ("jurisdiction.autonet.charter", Strings.toHexString(uint256(d.charterHash), 32));
+        (keys[12], values[12]) = ("jurisdiction.autonet.charter_uri", d.charterUri);
+        (p.registryKeys, p.registryValues) = (keys, values);
     }
 
     // Every CREATE and CREATE2 from this contract bumps its nonce, which started at 1. Each launch
     // creates exactly CREATES_PER_LAUNCH contracts (a failed one reverts the launch), so the count of
     // past launches gives the nonce, and from it the address, of this launch's first create: the vault.
-    uint256 private constant CREATES_PER_LAUNCH = 8;
+    uint256 private constant CREATES_PER_LAUNCH = 7;
 
     function _createAddress(uint256 nonce) private view returns (address) {
         bytes memory rlpNonce;

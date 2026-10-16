@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "./IGovernedEconomy.sol";
+import "./ProposalLifecycle.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -99,6 +99,7 @@ contract ContentCourt is EIP712, ReentrancyGuard {
         uint256 revealWindow;      // seconds to reveal once the threshold is reached
         uint256 degradeBps;        // share of snapshot REP a losing or silent juror loses
         uint256 assertionSlashBps; // share of snapshot REP a holder loses per losing off-chain label
+        uint256 appealPeriod;      // seconds to appeal a verdict to the DAO, never below one proposal lifecycle
     }
 
     uint256 public constant BPS = 10_000;
@@ -107,7 +108,7 @@ contract ContentCourt is EIP712, ReentrancyGuard {
     bytes32 public constant KEY_GRANT_TYPEHASH = keccak256("KeyGrant(address holder,uint48 validUntil)");
 
     IContentCourtRep public immutable rep;
-    IGovernedEconomy public immutable economy; // source of the jurisdiction's appeal window
+    address public immutable governor; // with the timelock, the proposal lifecycle that floors the appeal window
     address public immutable timelock;
     address payable public immutable treasury;
 
@@ -117,6 +118,7 @@ contract ContentCourt is EIP712, ReentrancyGuard {
     uint256 public revealWindow;
     uint256 public degradeBps;
     uint256 public assertionSlashBps;
+    uint256 public appealPeriod;
 
     mapping(bytes32 => bool) public labelActive;   // the DAO's taxonomy, by keccak256(name)
     mapping(address => LabelKey) public labelKeys;
@@ -145,7 +147,7 @@ contract ContentCourt is EIP712, ReentrancyGuard {
     event Claimed(uint256 indexed caseId, address indexed juror, uint256 rep);
     event Refunded(address indexed opener, uint256 amount);
     event ParamsSet(uint256 caseDeposit, uint256 thresholdBps, uint256 reviewWindow, uint256 revealWindow,
-        uint256 degradeBps, uint256 assertionSlashBps);
+        uint256 degradeBps, uint256 assertionSlashBps, uint256 appealPeriod);
 
     error NotTimelock();
     error NotHolder();
@@ -167,11 +169,11 @@ contract ContentCourt is EIP712, ReentrancyGuard {
     error BadParams();
     error TransferFailed();
 
-    constructor(address _rep, address _economy, address _timelock, address payable _treasury, Params memory p)
+    constructor(address _rep, address _governor, address _timelock, address payable _treasury, Params memory p)
         EIP712("ContentCourt", "1")
     {
         rep = IContentCourtRep(_rep);
-        economy = IGovernedEconomy(_economy);
+        governor = _governor;
         timelock = _timelock;
         treasury = _treasury;
         _setParams(p);
@@ -186,9 +188,10 @@ contract ContentCourt is EIP712, ReentrancyGuard {
         return k.holder;
     }
 
-    /// @notice The appeal window after a verdict: the jurisdiction's, which never undercuts a proposal lifecycle.
+    /// @notice The appeal window after a verdict: appealPeriod, never shorter than one proposal
+    ///         lifecycle plus two days, so the DAO always has time to overrule by proposal.
     function appealWindow() public view returns (uint256) {
-        return economy.effectiveAppealPeriod();
+        return ProposalLifecycle.appealWindow(appealPeriod, governor, timelock);
     }
 
     function getCase(uint256 caseId) external view returns (
@@ -492,6 +495,8 @@ contract ContentCourt is EIP712, ReentrancyGuard {
         revealWindow = p.revealWindow;
         degradeBps = p.degradeBps;
         assertionSlashBps = p.assertionSlashBps;
-        emit ParamsSet(p.caseDeposit, p.thresholdBps, p.reviewWindow, p.revealWindow, p.degradeBps, p.assertionSlashBps);
+        appealPeriod = p.appealPeriod;
+        emit ParamsSet(p.caseDeposit, p.thresholdBps, p.reviewWindow, p.revealWindow, p.degradeBps, p.assertionSlashBps,
+            p.appealPeriod);
     }
 }

@@ -6,13 +6,13 @@ const { autonet } = require("./helpers/autonet");
 
 // ToolBond against the real Substrate and a RepToken. The deployer is the Substrate's vault minter
 // (to fund accounts with ATN) and the RepToken's admin (to grant the bond slasher rights); a plain
-// signer stands in for the timelock; a standalone Economy supplies the appeal window (7 days).
+// signer stands in for the governor and timelock, so the appeal window is the 7-day appealPeriod.
 //
 // REP: a1 300, a2 200, a3 100, author 400 (total 1000). Threshold 55% = 550, so all three
 // auditors fit in a round and the third commit closes it.
 describe("ToolBond", function () {
     let deployer, timelock, author, a1, a2, a3, outsider;
-    let substrate, rep, economy, bond;
+    let substrate, rep, bond;
 
     const ATN = (n) => ethers.parseUnits(String(n), 6);
     const REP = (n) => ethers.parseEther(String(n));
@@ -24,6 +24,7 @@ describe("ToolBond", function () {
     const PARAMS = {
         minStake: MIN_STAKE, thresholdBps: 5500, reviewWindow: 3 * DAY, revealWindow: DAY,
         finderBps: 5000, degradeBps: 1000, authorSlashBps: 10000, unbondDelay: 14 * DAY, auditorShareBps: 4000,
+        appealPeriod: 7 * DAY,
     };
     const EVIDENCE = ethers.id("evidence");
     const salts = new Map();
@@ -62,9 +63,9 @@ describe("ToolBond", function () {
         substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, ethers.ZeroAddress, ethers.ZeroAddress, 5000, [deployer.address], 1);
         rep = await (await ethers.getContractFactory("RepToken")).deploy("Rep", "REP", deployer.address, timelock.address,
             [a1.address, a2.address, a3.address, author.address], [REP(300), REP(200), REP(100), REP(400)], false);
-        economy = await (await ethers.getContractFactory("Economy")).deploy(250);
+        // Signers stand in for the governor and timelock, so the lifecycle floor is just the 2-day buffer
         bond = await (await ethers.getContractFactory("ToolBond")).deploy(
-            await substrate.getAddress(), await rep.getAddress(), await economy.getAddress(), timelock.address, PARAMS);
+            await substrate.getAddress(), await rep.getAddress(), deployer.address, timelock.address, PARAMS);
         await rep.setSlasher(await bond.getAddress(), true);
 
         await substrate.connect(author).registerAgent(ethers.id("author"), "0x01");

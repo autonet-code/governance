@@ -13,13 +13,14 @@ const DEFAULTS = {
     },
     content_court: {
         params: { caseDeposit: ethers.parseEther("1"), thresholdBps: 5500, reviewWindow: 3 * DAY, revealWindow: DAY,
-            degradeBps: 1000, assertionSlashBps: 2000 },
+            degradeBps: 1000, assertionSlashBps: 2000, appealPeriod: 120 },
     },
     autonet: {
         substrate: { anchorQuorumBps: 5000, genesisSigners: [], genesisQuorum: 0, challengeWindow: 3600,
             charterHash: ethers.ZeroHash, charterUri: "" },
         toolBond: { minStake: 100_000_000n, thresholdBps: 500, reviewWindow: 14 * DAY, revealWindow: 2 * DAY,
-            finderBps: 5000, degradeBps: 1000, authorSlashBps: 10000, unbondDelay: 30 * DAY, auditorShareBps: 4000 },
+            finderBps: 5000, degradeBps: 1000, authorSlashBps: 10000, unbondDelay: 30 * DAY, auditorShareBps: 4000,
+            appealPeriod: 120 },
     },
 };
 
@@ -40,13 +41,35 @@ function coreParams(o = {}) {
     };
 }
 
-/// Prepares an installation of `name` for `core`; returns its id. Economy dependencies default to
-/// the economy installed in `installs`.
-async function prepare(s, from, core, name, values = {}, installs = {}) {
+/// Prepares an installation of `name` for `core`; returns its id
+async function prepare(s, from, core, name, values = {}) {
     const v = { ...DEFAULTS[name], ...values };
-    if (name !== "economy" && v.economy === undefined) v.economy = installs.economy?.module;
     const setup = s.setups[name].connect(from);
     await (await setup.prepareInstallation(core, encodeInstallData(ethers, name, v))).wait();
+    const id = await setup.lastPreparedBy(from.address);
+    const [, p] = await setup.installationOf(id);
+    return { id, setup, module: p.module, prepared: p };
+}
+
+/// A test-only module, published in the suite's catalog, that depends on an attached economy.
+/// prepareDependent(from, core, economy) prepares it like `prepare` does.
+let _dependent;
+async function dependentSetup() {
+    const s = await suite();
+    if (!_dependent) {
+        const [deployer] = await ethers.getSigners();
+        const setup = await (await ethers.getContractFactory("MockDependentSetup", deployer)).deploy();
+        const repo = await (await ethers.getContractFactory("ModuleRepo", deployer)).deploy("dependent", deployer.address);
+        await (await repo.createVersion(1, await setup.getAddress(), "", "")).wait();
+        await (await s.catalog.connect(deployer).register(await repo.getAddress())).wait();
+        _dependent = setup;
+    }
+    return _dependent;
+}
+
+async function prepareDependent(from, core, economy) {
+    const setup = (await dependentSetup()).connect(from);
+    await (await setup.prepareInstallation(core, ethers.AbiCoder.defaultAbiCoder().encode(["address"], [economy]))).wait();
     const id = await setup.lastPreparedBy(from.address);
     const [, p] = await setup.installationOf(id);
     return { id, setup, module: p.module, prepared: p };
@@ -64,7 +87,7 @@ async function createJurisdiction(from, o = {}) {
     const refs = [];
     for (const m of o.modules ?? []) {
         const [name, values] = Array.isArray(m) ? m : [m, {}];
-        installs[name] = await prepare(s, from, c, name, values, installs);
+        installs[name] = await prepare(s, from, c, name, values);
         refs.push({ setup: await installs[name].setup.getAddress(), id: installs[name].id });
     }
     await (await f.finalize(c, refs, o.keys ?? [], o.values ?? [])).wait();
@@ -93,4 +116,4 @@ async function govern(dao, voter, [targets, values, calldatas], description) {
     return id;
 }
 
-module.exports = { REP, DAY, DEFAULTS, suite, coreParams, prepare, createJurisdiction, govern };
+module.exports = { REP, DAY, DEFAULTS, suite, coreParams, prepare, prepareDependent, createJurisdiction, govern };

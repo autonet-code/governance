@@ -150,14 +150,13 @@ modifier onlyGovernance() {
 | `setAppealPeriod(uint)` | none | `AppealPeriodSet` |
 | `setMaxImmediateBps(uint)` | `<= 5000` | `MaxImmediateBpsSet` |
 
-### Court and tool appeal floor
+### Proposal lifecycle
 
 ```solidity
-function proposalLifecycle() public view returns (uint)      // governor.votingDelay() + votingPeriod() + timelock.getMinDelay()
-function effectiveAppealPeriod() external view returns (uint) // max(appealPeriod, proposalLifecycle() + APPEAL_BUFFER)
+function proposalLifecycle() public view returns (uint) // governor.votingDelay() + votingPeriod() + timelock.getMinDelay()
 ```
 
-Only ContentCourt and ToolBond verdicts use `effectiveAppealPeriod()`, since they can't hold for a proposal. Projects use `coolingOffPeriod` and `appealPeriod` as set and hold instead (below). Unreadable targets count as 0.
+It calls the `ProposalLifecycle` library (`contracts/ProposalLifecycle.sol`), which ContentCourt and ToolBond also use for their own appeal floor: `appealWindow() = max(appealPeriod, total(governor, timelock) + APPEAL_BUFFER)`, each with its own `appealPeriod`, since their verdicts can't hold for a proposal. Projects use `coolingOffPeriod` and `appealPeriod` as set and hold instead (below). Unreadable targets count as 0.
 
 ### Projects and ledgers
 
@@ -288,7 +287,8 @@ function uninstallCalls(IModuleSetup setup, uint256 id) external view returns (a
 
 - `ModuleRepo(name, maintainer)`: `createVersion(release, setup, buildMetadata, releaseMetadata)` (owner), `updateReleaseMetadata`, `getVersion(release, build)`, `latestVersion()`, `versionOf(setup)`, `isPublished(setup)`.
 - `ModuleCatalog`: `register(repo)`, `remove(name)` (owner, the curator), `names()`, `isPublished(setup)`.
-- Setups: `EconomySetup(nativeProjectImpl, erc20ProjectImpl, minCoolingOffPeriod)` (deploy scripts pass 60 s on chain 31337, 1 day elsewhere) with `data = abi.encode(EconomySetup.Params)` and `claimOf(id)`; `ContentCourtSetup` with `data = abi.encode(address economy, ContentCourt.Params)`; `AutonetSetup(6 code blobs)` with `data = abi.encode(address economy, AutonetParams, ToolBond.Params)` and `deploymentOf(id)` ([autonet.md](autonet.md#genesis-autonetsetup)).
+- Setups: `EconomySetup(nativeProjectImpl, erc20ProjectImpl, minCoolingOffPeriod)` (deploy scripts pass 60 s on chain 31337, 1 day elsewhere) with `data = abi.encode(EconomySetup.Params)` and `claimOf(id)`; `ContentCourtSetup` with `data = abi.encode(ContentCourt.Params)`; `AutonetSetup(5 code blobs)` with `data = abi.encode(AutonetParams, ToolBond.Params)` and `deploymentOf(id)` ([autonet.md](autonet.md#genesis-autonetsetup)).
+- No published module declares a dependency; `Dependency` and the checks below are there for future modules.
 - ModuleProcessor errors: `NotPublished`, `WrongCore`, `NotAJurisdiction`, `AlreadyAttached`, `NotAttached`, `MissingDependency(name)`, `HasDependents(name)`.
 
 ### Sub-factories
@@ -401,7 +401,7 @@ event SpendWindowReset(address indexed token, uint256 windowStart);
 | `ARBITRATION_TIMEOUT` | `150 days` | projects |
 | `MIN_PLATFORM_FEE_BPS` / `MAX_PLATFORM_FEE_BPS` | `100` (1%) / `5000` (50%) | Economy |
 | `MAX_AUTHOR_FEE_BPS` / `MAX_ARBITRATION_FEE_BPS` | `2500` (25%) each | Economy |
-| `APPEAL_BUFFER` | `2 days`, added to the proposal lifecycle for `effectiveAppealPeriod` (court and tool verdicts) | Economy |
+| `APPEAL_BUFFER` | `2 days`, added to the proposal lifecycle for court and tool `appealWindow()` | ProposalLifecycle |
 | `GRACE` / `MAX_HELD` | `1 days` / `8`, DAO proposal holds | DaoProposalHold |
 | `NATIVE_CURRENCY` / `NATIVE_TOKEN` | `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` | Economy / Registry |
 | `MAX_DELEGATE_SHARE_BPS` | `2500` | RepToken |

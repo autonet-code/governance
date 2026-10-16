@@ -5,10 +5,13 @@
  *   1. JurisdictionFactory.deployCore            (Governor, Timelock, Registry, RepToken)
  *   2. EconomySetup.prepareInstallation          (Economy + EconomyRepClaim)
  *   3. AutonetSetup.prepareInstallation          (Substrate, AutonetVault, AutonetRepClaim, ToolBond,
- *                                                 ServiceRegistry, PaymentChannel, VentureVaultFactory,
- *                                                 CharterAnchor; one tx)
+ *                                                 ServiceRegistry, PaymentChannel, VentureVaultFactory;
+ *                                                 one tx)
  *   4. JurisdictionFactory.finalize              (jurisdiction.name, parities; attaches both modules:
- *                                                 their grants and jurisdiction.* / modules.* entries)
+ *                                                 their grants and jurisdiction.* / modules.* entries,
+ *                                                 including jurisdiction.autonet.charter)
+ *
+ * Autonet doesn't need the Economy; this reference jurisdiction has both.
  *
  * Nothing needs a proposal afterwards. The suite comes from deployments/<etherlink-shadownet|localhost>-jurisdiction.json
  * (scripts/deploy-jurisdiction-suite.js). Run scripts/sync-autonet-artifacts.js before deploying the
@@ -22,16 +25,17 @@
  *     Test networks: 0 / 120 / 0.
  *   PARITY_TOKENS=0x..,0x..  PARITY_VALUES=<18dp>,<18dp>: vault payment tokens (1 USDC(6d) = 1e30)
  *   ANCHOR_QUORUM_BPS (5000), GENESIS_SIGNERS (none; comma list), GENESIS_QUORUM (0)
- *   CHALLENGE_WINDOW_SECS (3600), CHARTER_HASH (none), CHARTER_URI
+ *   CHALLENGE_WINDOW_SECS (3600), CHARTER_HASH CHARTER_URI (the current charter, from the module metadata)
  *   TOOLBOND_MIN_STAKE (100 ATN) TOOLBOND_THRESHOLD_BPS (500) TOOLBOND_REVIEW_WINDOW_SECS (14d)
  *   TOOLBOND_REVEAL_WINDOW_SECS (2d) TOOLBOND_FINDER_BPS (5000) TOOLBOND_DEGRADE_BPS (1000)
  *   TOOLBOND_AUTHOR_SLASH_BPS (10000) TOOLBOND_AUDITOR_SHARE_BPS (4000) TOOLBOND_UNBOND_DELAY_SECS (30d)
+ *   TOOLBOND_APPEAL_PERIOD_SECS (10d; never less than one proposal lifecycle plus 2 days)
  */
 
 const { ethers } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
-const { encodeInstallData } = require("./lib/modules");
+const { encodeInstallData, metadata } = require("./lib/modules");
 
 const JURISDICTION_NAME = "Autonet";
 const TOKEN_SYMBOL = "AREP";
@@ -114,24 +118,28 @@ async function main() {
     finderBps: envBig("TOOLBOND_FINDER_BPS", 5000),
     degradeBps: envBig("TOOLBOND_DEGRADE_BPS", 1000),
     authorSlashBps: envBig("TOOLBOND_AUTHOR_SLASH_BPS", 10000),
-    // Long enough for a review, a reveal and an appeal (the appeal window is set at finalize)
+    // Long enough for a review, a reveal and an appeal
     unbondDelay: envBig("TOOLBOND_UNBOND_DELAY_SECS", 30 * 86400),
     auditorShareBps: envBig("TOOLBOND_AUDITOR_SHARE_BPS", 4000),
+    appealPeriod: envBig("TOOLBOND_APPEAL_PERIOD_SECS", 10 * 86400),
   };
+  // The current charter, as the module metadata records it
+  const charterFixed = (name) => metadata("autonet", "build").pluginSetup.prepareInstallation.inputs
+    .find((i) => i.name === "substrate").components.find((c) => c.name === name)["x-ui"].fixed;
   const signers = env("GENESIS_SIGNERS", "").split(",").map((s) => s.trim()).filter(Boolean);
   const autonetParams = {
     anchorQuorumBps: Number(env("ANCHOR_QUORUM_BPS", 5000)),
     genesisSigners: signers,
     genesisQuorum: Number(env("GENESIS_QUORUM", 0)),
     challengeWindow: envBig("CHALLENGE_WINDOW_SECS", 3600),
-    charterHash: env("CHARTER_HASH", ethers.ZeroHash),
-    charterUri: env("CHARTER_URI", ""),
+    charterHash: env("CHARTER_HASH", charterFixed("charterHash")),
+    charterUri: env("CHARTER_URI", charterFixed("charterUri")),
   };
   const autonet = await prepare(autonetSetup, deployer, core, "autonet",
-    { economy: economy.module, substrate: autonetParams, toolBond: bondParams });
+    { substrate: autonetParams, toolBond: bondParams });
   const d = await autonetSetup.deploymentOf(autonet.id);
   console.log(`3. Autonet layer (installation ${autonet.id}):`);
-  for (const k of ["substrate", "vault", "repClaim", "toolBond", "serviceRegistry", "paymentChannel", "ventureVaultFactory", "charterAnchor"]) {
+  for (const k of ["substrate", "vault", "repClaim", "toolBond", "serviceRegistry", "paymentChannel", "ventureVaultFactory"]) {
     console.log(`     ${k.padEnd(20)} ${d[k]}`);
   }
 
@@ -160,7 +168,7 @@ async function main() {
       installation: Number(autonet.id),
       substrate: d.substrate, vault: d.vault, repClaim: d.repClaim, toolBond: d.toolBond,
       serviceRegistry: d.serviceRegistry, paymentChannel: d.paymentChannel,
-      ventureVaultFactory: d.ventureVaultFactory, charterAnchor: d.charterAnchor,
+      ventureVaultFactory: d.ventureVaultFactory, charter: d.charterHash, charterUri: d.charterUri,
     },
   };
   const outPath = path.join(__dirname, "..", "deployments", `autonet-jurisdiction-${network.name}.json`);

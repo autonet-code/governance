@@ -9,7 +9,7 @@ import "../EconomyRepClaim.sol";
 /// @notice The `economy` module: an Economy (projects, escrow, disputes and appeals) configured and
 ///         handed to the jurisdiction's timelock, and its EconomyRepClaim. Attaching it makes the
 ///         claim a RepToken minter and records jurisdiction.economy and jurisdiction.economy.rep_claim.
-///         Modules that use the Economy's appeal window (ToolBond, ContentCourt) depend on it.
+///         The other modules don't depend on it.
 contract EconomySetup is ModuleSetup {
     struct Params {
         uint256 arbitrationFeeBps;

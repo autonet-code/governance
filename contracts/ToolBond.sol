@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "./IGovernedEconomy.sol";
+import "./ProposalLifecycle.sol";
 
 /// @notice The parts of the autonet Substrate a bond needs: tool authorship and the ATN token.
 interface IToolBondSubstrate {
@@ -89,7 +89,7 @@ contract ToolBond {
 
     IToolBondSubstrate public immutable substrate;
     IToolBondRep public immutable rep;
-    IGovernedEconomy public immutable economy; // source of the jurisdiction's appeal window
+    address public immutable governor; // with the timelock, the proposal lifecycle that floors the appeal window
     address public immutable timelock;
 
     uint256 public minStake;        // ATN base units behind each tool
@@ -101,6 +101,7 @@ contract ToolBond {
     uint256 public authorSlashBps;  // share of REP a malicious tool's author loses
     uint256 public unbondDelay;     // seconds a stake stays reviewable after the author asks to leave
     uint256 public auditorShareBps; // share of a vetted tool's mints its auditors split (the daemon applies it)
+    uint256 public appealPeriod;    // seconds to appeal a verdict to the DAO, never below one proposal lifecycle (appealWindow)
 
     mapping(bytes32 => Bond) public bonds;
     mapping(bytes32 => mapping(uint32 => Round)) private _rounds;
@@ -120,6 +121,8 @@ contract ToolBond {
     event Claimed(bytes32 indexed digest, uint32 indexed round, address indexed auditor, uint256 atn, uint256 rep);
     event ParamsSet(uint256 minStake, uint256 thresholdBps, uint256 reviewWindow, uint256 revealWindow,
         uint256 finderBps, uint256 degradeBps, uint256 authorSlashBps, uint256 unbondDelay, uint256 auditorShareBps);
+
+    event AppealPeriodSet(uint256 appealPeriod);
 
     error NotAuthor();
     error NotTimelock();
@@ -146,12 +149,13 @@ contract ToolBond {
         uint256 authorSlashBps;
         uint256 unbondDelay;
         uint256 auditorShareBps;
+        uint256 appealPeriod;
     }
 
-    constructor(address _substrate, address _rep, address _economy, address _timelock, Params memory p) {
+    constructor(address _substrate, address _rep, address _governor, address _timelock, Params memory p) {
         substrate = IToolBondSubstrate(_substrate);
         rep = IToolBondRep(_rep);
-        economy = IGovernedEconomy(_economy);
+        governor = _governor;
         timelock = _timelock;
         _setParams(p);
     }
@@ -173,9 +177,10 @@ contract ToolBond {
         return !((r.stage == Stage.Cooling || r.stage == Stage.Finalizing) && r.verdict == Verdict.Malware);
     }
 
-    /// @notice The appeal window after a verdict: the jurisdiction's, which never undercuts a proposal lifecycle.
+    /// @notice The appeal window after a verdict: appealPeriod, never shorter than one proposal
+    ///         lifecycle plus two days, so the DAO always has time to overrule by proposal.
     function appealWindow() public view returns (uint256) {
-        return economy.effectiveAppealPeriod();
+        return ProposalLifecycle.appealWindow(appealPeriod, governor, timelock);
     }
 
     function getRound(bytes32 digest, uint32 round) external view returns (
@@ -450,6 +455,8 @@ contract ToolBond {
         authorSlashBps = p.authorSlashBps;
         unbondDelay = p.unbondDelay;
         auditorShareBps = p.auditorShareBps;
+        appealPeriod = p.appealPeriod;
+        emit AppealPeriodSet(p.appealPeriod);
         emit ParamsSet(p.minStake, p.thresholdBps, p.reviewWindow, p.revealWindow, p.finderBps, p.degradeBps,
             p.authorSlashBps, p.unbondDelay, p.auditorShareBps);
     }

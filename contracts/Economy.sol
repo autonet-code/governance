@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./IEconomy.sol";
 import "./NativeProject.sol";
 import "./ERC20Project.sol";
+import "./ProposalLifecycle.sol";
 
 // NEW: Interface to check RepToken balance for projectThreshold
 interface IRepToken {
@@ -44,9 +45,6 @@ contract Economy is IEconomy {
     // Platform + author fees stay well below 100% of any payout
     uint public constant MAX_AUTHOR_FEE_BPS = 2500; // 25%
     uint public constant MAX_ARBITRATION_FEE_BPS = 2500; // 25% of the locked value
-    // Court and tool verdicts can't hold for a DAO proposal, so their appeal window fits a full
-    // proposal plus a day to propose and a day to execute. Projects hold instead (DaoProposalHold).
-    uint public constant APPEAL_BUFFER = 2 days;
     // Backers always get this long to withdraw after the author names the contractor and arbiter.
     // Fixed by the deployer before the DAO takes over; the DAO can't lower it.
     uint public minCoolingOffPeriod;
@@ -170,23 +168,8 @@ contract Economy is IEconomy {
     receive() external payable { emit InboundValue(); }
 
     // Voting delay, voting period and timelock delay: the time a DAO proposal takes at least
-    function proposalLifecycle() public view returns (uint total) {
-        total += _readUint(governorAddress, "votingDelay()");
-        total += _readUint(governorAddress, "votingPeriod()");
-        total += _readUint(timelockAddress, "getMinDelay()");
-    }
-
-    // The appeal window of court and tool verdicts: the DAO overrules them by proposal, so it never
-    // drops below one proposal lifecycle. Projects use appealPeriod as is and hold for proposals.
-    function effectiveAppealPeriod() external view returns (uint) {
-        uint floor = proposalLifecycle() + APPEAL_BUFFER;
-        return appealPeriod > floor ? appealPeriod : floor;
-    }
-
-    function _readUint(address target, string memory signature) private view returns (uint) {
-        if (target.code.length == 0) return 0;
-        (bool ok, bytes memory data) = target.staticcall(abi.encodeWithSignature(signature));
-        return ok && data.length >= 32 ? abi.decode(data, (uint)) : 0;
+    function proposalLifecycle() public view returns (uint) {
+        return ProposalLifecycle.total(governorAddress, timelockAddress);
     }
 
     function getNumberOfProjects() public view returns (uint) { return deployedProjects.length; }

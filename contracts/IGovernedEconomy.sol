@@ -10,7 +10,6 @@ interface IGovernedEconomy {
     function authorFeeBps() external view returns (uint);
     function backersVoteQuorumBps() external view returns (uint);
     function appealPeriod() external view returns (uint);
-    function effectiveAppealPeriod() external view returns (uint);
     function governorAddress() external view returns (address);
     function repTokenAddress() external view returns (address);
     function projectThreshold() external view returns (uint);

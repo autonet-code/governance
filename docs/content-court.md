@@ -18,7 +18,7 @@ Anyone contests a pair with `openCase(subject, label, applies)` and exactly `cas
 |-------|--------------|
 | Commit | REP holders `commitVote` a hidden side, weighed at the snapshot one second before opening. Commits close when committed weight reaches `thresholdBps` of the snapshot supply. Below threshold after `reviewWindow`, the case lapses. |
 | Reveal | `revealVote` within `revealWindow`. Then anyone calls `settle`: the heavier side wins, a tie is void. |
-| Cooling | The jurisdiction's appeal window (`Economy.effectiveAppealPeriod`). The timelock can `daoOverrule`, which is final at once. |
+| Cooling | The appeal window, `appealWindow()`: `appealPeriod`, never shorter than one proposal lifecycle (the governor's voting delay and period plus the timelock delay, read live) plus two days. The timelock can `daoOverrule`, which is final at once. |
 | Finalizing | `finalize(caseId, max)` in batches; then winning jurors `claim`. |
 
 Until finalization, anyone can `submitAssertion(caseId, label, sig)`: a member's signed off-chain label on the pair. `issuedAt` is the signer's own claim, so labels can't be ordered; a holder answers for every label they signed on the pair, and a later one never cancels an earlier one. A holder who signed both sides is slashed once.
@@ -33,7 +33,7 @@ Until finalization, anyone can `submitAssertion(caseId, label, sig)`: a member's
 
 ## Governance
 
-The timelock adds and retires labels (`setLabel(name, active)`) and sets `Params { caseDeposit, thresholdBps, reviewWindow, revealWindow, degradeBps, assertionSlashBps }`. The court needs slasher rights on the RepToken. It is the `content_court` [module](modules.md), which depends on `economy` (its appeal window): `ContentCourtSetup.prepareInstallation(core, abi.encode(economy, Params))` deploys a court (treasury = Registry), and attaching it grants the slasher rights and records `jurisdiction.content_court.court`, at origination or by proposal.
+The timelock adds and retires labels (`setLabel(name, active)`) and sets `Params { caseDeposit, thresholdBps, reviewWindow, revealWindow, degradeBps, assertionSlashBps, appealPeriod }` (`ParamsSet`). The court needs slasher rights on the RepToken. It is the `content_court` [module](modules.md), with no dependencies: `ContentCourtSetup.prepareInstallation(core, abi.encode(Params))` deploys `ContentCourt(rep, governor, timelock, treasury, params)` (treasury = Registry), and attaching it grants the slasher rights and records `jurisdiction.content_court.court`, at origination or by proposal.
 
 ## Not yet
 

@@ -16,7 +16,7 @@ async function main() {
 
     const eco = await createJurisdiction(dep, {
         name: "UI Economy", symbol: "UIE", members: [deployer.address, alice.address], amounts: [E(1000), E(500)],
-        modules: { economy: { params: { arbitrationFeeBps: 500, platformFeeBps: 100, authorFeeBps: 100, coolingOffPeriod: 0,
+        modules: { economy: { params: { arbitrationFeeBps: 500, platformFeeBps: 100, authorFeeBps: 100, coolingOffPeriod: 60,
             backersQuorumBps: 7000, projectThreshold: 0, appealPeriod: 86400 } } },
         keys: [`jurisdiction.parity.${NATIVE.toLowerCase()}`], values: [E(1).toString()],
     });

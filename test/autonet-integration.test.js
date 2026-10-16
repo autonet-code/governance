@@ -13,10 +13,10 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 const { autonet, mintLeaf, submitAnchor } = require("./helpers/autonet");
 const { createJurisdiction } = require("./helpers/jurisdiction");
 
-describe("Autonet integration (real Substrate, ServiceMarket, CharterAnchor)", function () {
+describe("Autonet integration (real Substrate and ServiceMarket)", function () {
     let deployer, member, buyer, agent, outsider;
     let registry, repToken, dao, timelockAddr, registryAddr, repTokenAddr;
-    let substrate, vault, repClaim, usdc, channel, charter;
+    let substrate, vault, repClaim, usdc, channel;
 
     const ATN = (n) => ethers.parseUnits(String(n), 6);
     const USDC = (n) => ethers.parseUnits(String(n), 6);
@@ -43,7 +43,7 @@ describe("Autonet integration (real Substrate, ServiceMarket, CharterAnchor)", f
         // Test-network timing: no voting delay, 2 minute vote, no timelock delay
         const j = await createJurisdiction(member, {
             name: "Autonet DAO", symbol: "AREP", members: [member.address], amounts: [ethers.parseEther("1000")],
-            proposalThreshold: ethers.parseEther("10"), modules: ["economy"],
+            proposalThreshold: ethers.parseEther("10"),
         });
         registryAddr = j.core.registry;
         timelockAddr = j.core.timelock;
@@ -163,16 +163,12 @@ describe("Autonet integration (real Substrate, ServiceMarket, CharterAnchor)", f
         expect(await substrate.balanceOf(buyer.address)).to.equal(buyerBefore + ATN(20));
     });
 
-    it("anchors the genesis charter at deploy and later versions only through a DAO proposal", async function () {
-        const v1 = ethers.id("charter v1");
-        charter = await autonet("CharterAnchor", deployer).deploy(timelockAddr, v1, "ipfs://charter-v1");
-        expect((await charter.currentCharter()).hash).to.equal(v1);
+    it("changes the charter the daemons follow only through a DAO proposal", async function () {
         const v2 = ethers.id("charter v2");
-        await expect(charter.connect(member).anchorCharter(v2, "ipfs://charter-v2")).to.be.revertedWithCustomError(charter, "NotGovernor");
-        await govern([await charter.getAddress()], [charter.interface.encodeFunctionData("anchorCharter", [v2, "ipfs://charter-v2"])], "Anchor charter v2");
-        const current = await charter.currentCharter();
-        expect(current.version).to.equal(2n);
-        expect(current.hash).to.equal(v2);
+        const edit = registry.interface.encodeFunctionData("editRegistry", ["jurisdiction.autonet.charter", v2]);
+        await expect(registry.connect(member).editRegistry("jurisdiction.autonet.charter", v2)).to.be.reverted;
+        await govern([registryAddr], [edit], "Charter v2");
+        expect(await registry.getRegistryValue("jurisdiction.autonet.charter")).to.equal(v2);
     });
 
     it("lets the DAO pause the vault", async function () {

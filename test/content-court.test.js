@@ -3,21 +3,21 @@ const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
 // ContentCourt against a real RepToken. The deployer is the RepToken's admin (to grant the court slasher
-// rights); a plain signer stands in for the timelock and another for the treasury; a standalone Economy
-// supplies the appeal window (7 days).
+// rights); a plain signer stands in for the governor, another for the timelock and another for the treasury,
+// so the appeal window is the 7-day appealPeriod.
 //
 // REP: j1 300, j2 200, j3 100, member 400 (total 1000). Threshold 55% = 550, so all three jurors fit in
 // a case and the third commit closes it. `member` labels off-chain through an extension key.
 describe("ContentCourt", function () {
     let deployer, timelock, treasury, j1, j2, j3, member, outsider;
-    let rep, economy, court, key, domain;
+    let rep, court, key, domain;
 
     const REP = (n) => ethers.parseEther(String(n));
     const DAY = 86400;
     const DEPOSIT = ethers.parseEther("1");
     const PARAMS = {
         caseDeposit: DEPOSIT, thresholdBps: 5500, reviewWindow: 3 * DAY, revealWindow: DAY,
-        degradeBps: 1000, assertionSlashBps: 2000,
+        degradeBps: 1000, assertionSlashBps: 2000, appealPeriod: 7 * DAY,
     };
     const SUBJECT = ethers.id("yt:dQw4w9WgXcQ");
     const SPAM = ethers.id("spam");
@@ -74,9 +74,9 @@ describe("ContentCourt", function () {
         [deployer, timelock, treasury, j1, j2, j3, member, outsider] = await ethers.getSigners();
         rep = await (await ethers.getContractFactory("RepToken")).deploy("Rep", "REP", deployer.address, timelock.address,
             [j1.address, j2.address, j3.address, member.address], [REP(300), REP(200), REP(100), REP(400)], false);
-        economy = await (await ethers.getContractFactory("Economy")).deploy(250);
+        // Signers stand in for the governor and timelock, so the lifecycle floor is just the 2-day buffer
         court = await (await ethers.getContractFactory("ContentCourt")).deploy(
-            await rep.getAddress(), await economy.getAddress(), timelock.address, treasury.address, PARAMS);
+            await rep.getAddress(), deployer.address, timelock.address, treasury.address, PARAMS);
         await rep.setSlasher(await court.getAddress(), true);
         await court.connect(timelock).setLabel("spam", true);
 
