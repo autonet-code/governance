@@ -1,10 +1,12 @@
-// End-to-end smoke run against a live node: deploys the factory suite, creates an
-// economy DAO through the 3-step TrustlessFactory flow, runs native and 6-decimal
-// ERC20 projects (with immediate release), and checks REP claims and treasury fees.
+// End-to-end smoke run against a live node: deploys the jurisdiction suite, creates an
+// economy DAO through the JurisdictionFactory (economy module attached at origination),
+// runs native and 6-decimal ERC20 projects (with immediate release), and checks REP
+// claims and treasury fees.
 //
 //   npx hardhat node
 //   npx hardhat run scripts/e2eLocal.js --network localhost
 const { ethers, network } = require("hardhat");
+const { deployJurisdictionSuite, encodeInstallData } = require("./lib/modules");
 
 const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 const PLATFORM_FEE_BPS = 100n;
@@ -33,41 +35,41 @@ async function passCoolingOff(economy) {
 }
 
 const eventArgs = (receipt, name) => receipt.logs.find(l => l.eventName === name).args;
+const wait = async (txPromise) => (await txPromise).wait();
 
 async function main() {
     const [deployer, backer, contractor, arbiter] = await ethers.getSigners();
 
-    const nativeImpl = await deploy("NativeProject");
-    const erc20Impl = await deploy("ERC20Project");
-    const factory = await deploy("TrustlessFactory",
-        await (await deploy("InfrastructureFactory")).getAddress(),
-        await (await deploy("DAOFactory")).getAddress(),
-        await (await deploy("EconomyFactory")).getAddress(),
-        await (await deploy("RepTokenFactory")).getAddress());
+    const suite = await deployJurisdictionSuite(ethers, deployer);
     const usdc = await deploy("TestERC20", "Test USDC", "USDC", 6, 10n ** 12n);
     const usdcAddr = await usdc.getAddress();
 
-    // --- Economy DAO via the 3-step flow ---
-    const infra = eventArgs(await (await factory.deployInfrastructure(1, ARB_FEE_BPS)).wait(), "InfrastructureDeployed");
-    const daoTok = eventArgs(await (await factory.deployDAOToken(infra.registry, infra.timelock,
-        { name: "E2E", symbol: "E2E", initialMembers: [deployer.address], initialAmounts: [ethers.parseEther("100")] },
-        { name: "E2E DAO", votingDelay: 1, votingPeriod: 5, proposalThreshold: 0, quorumFraction: 4 })).wait(), "DAOTokenDeployed");
-    await (await factory.configureAndFinalize(
-        {
-            implAddresses: [await nativeImpl.getAddress(), await erc20Impl.getAddress()],
-            contractAddresses: [infra.economy, infra.registry, infra.timelock, daoTok.repToken, daoTok.dao],
-        },
-        {
-            arbitrationFeeBps: ARB_FEE_BPS, initialPlatformFeeBps: PLATFORM_FEE_BPS, initialAuthorFeeBps: AUTHOR_FEE_BPS,
-            initialCoolingOffPeriod: 0, initialBackersQuorumBps: 7000, initialProjectThreshold: 0, initialAppealPeriod: 120,
-        },
+    // --- Economy DAO: deployCore, prepare the economy module, finalize ---
+    const factory = suite.jurisdictionFactory;
+    const params = {
+        name: "E2E", symbol: "E2E", description: "", tokenKind: 0, underlying: ethers.ZeroAddress,
+        initialMembers: [deployer.address], initialAmounts: [ethers.parseEther("100")],
+        votingDelay: 1, votingPeriod: 5, proposalThreshold: 0, quorumFraction: 4, executionDelay: 60,
+    };
+    const c = await factory.deployCore.staticCall(params);
+    const core = { registry: c.registry, timelock: c.timelock, token: c.token, governor: c.governor };
+    await wait(factory.deployCore(params));
+    const setup = suite.setups.economy;
+    await wait(setup.prepareInstallation(core, encodeInstallData(ethers, "economy", { params: {
+        arbitrationFeeBps: ARB_FEE_BPS, platformFeeBps: PLATFORM_FEE_BPS, authorFeeBps: AUTHOR_FEE_BPS,
+        coolingOffPeriod: 0, backersQuorumBps: 7000, projectThreshold: 0, appealPeriod: 120,
+    } })));
+    const id = await setup.lastPreparedBy(deployer.address);
+    const [, prepared] = await setup.installationOf(id);
+    await wait(factory.finalize(core, [{ setup: await setup.getAddress(), id }],
         [`jurisdiction.parity.${NATIVE.toLowerCase()}`, `jurisdiction.parity.${usdcAddr.toLowerCase()}`],
-        [parityValue(1, 18).toString(), parityValue(2, 6).toString()],
-    )).wait();
+        [parityValue(1, 18).toString(), parityValue(2, 6).toString()]));
+    const infra = { economy: prepared.module, registry: core.registry, timelock: core.timelock };
     console.log(`Economy ${infra.economy}, registry ${infra.registry}`);
 
     const economy = await ethers.getContractAt("Economy", infra.economy);
-    const repToken = await ethers.getContractAt("RepToken", daoTok.repToken);
+    const repToken = await ethers.getContractAt("RepToken", core.token);
+    const repClaim = await ethers.getContractAt("EconomyRepClaim", prepared.helpers[0]);
     check("economy admin can no longer configure", await economy.timelockAddress(), infra.timelock);
     check("cooling-off covers the proposal lifecycle plus the buffer", await economy.effectiveCoolingOffPeriod(), (await economy.proposalLifecycle()) + (await economy.COOLING_OFF_BUFFER()));
 
@@ -114,8 +116,8 @@ async function main() {
     check("treasury native fees", await ethers.provider.getBalance(infra.registry), nImm.platform + nRel.platform);
     check("treasury USDC fees", await usdc.balanceOf(infra.registry), uImm.platform + uRel.platform);
 
-    await (await repToken.connect(contractor).claimReputationFromEconomy()).wait();
-    await (await repToken.connect(backer).claimReputationFromEconomy()).wait();
+    await (await repClaim.connect(contractor).claim()).wait();
+    await (await repClaim.connect(backer).claim()).wait();
     // ETH at 1:1, USDC (6 decimals) at 2:1, both scaled to 18-decimal REP
     const contractorRep = (nImm.net + nRel.net) + (uImm.net + uRel.net) * 2n * 10n ** 12n;
     const backerRep = nAmount + uAmount * 2n * 10n ** 12n;

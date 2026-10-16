@@ -1,33 +1,26 @@
-// Indexer end-to-end, phase A: deploy the factory suite to a local node and record addresses.
+// Indexer end-to-end, phase A: deploy the jurisdiction suite to a local node and record addresses.
 //   npx hardhat run scripts/indexer-e2e/deploy.js --network localhost
 const { ethers } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
-
-async function deploy(name, ...args) {
-    const c = await (await ethers.getContractFactory(name)).deploy(...args);
-    await c.waitForDeployment();
-    return c.getAddress();
-}
+const { deployJurisdictionSuite, MODULES } = require("../lib/modules");
 
 async function main() {
-    const infra = await deploy("InfrastructureFactory");
-    const daoFactory = await deploy("DAOFactory");
-    const repTokenFactory = await deploy("RepTokenFactory");
-    const economyFactory = await deploy("EconomyFactory");
-    const wrappedRepTokenFactory = await deploy("WrappedRepTokenFactory");
+    const [deployer] = await ethers.getSigners();
+    const s = await deployJurisdictionSuite(ethers, deployer);
+    const addr = (c) => c.getAddress();
+    // Everything here is seeded into contracts/Localhost; the indexer watches jurisdictionFactory
     const out = {
         rpc: "http://127.0.0.1:8545",
         chainId: 31337,
-        wrapper: await deploy("StandardFactory", infra, daoFactory, repTokenFactory),
-        wrapper_t: await deploy("StandardFactoryTransferable", infra, daoFactory, repTokenFactory),
-        wrapper_w: await deploy("StandardFactoryWrapped", infra, daoFactory, wrappedRepTokenFactory),
-        wrapper_trustless: await deploy("TrustlessFactory", infra, daoFactory, economyFactory, repTokenFactory),
-        nativeProjectImpl: await deploy("NativeProject"),
-        erc20ProjectImpl: await deploy("ERC20Project"),
-        infrastructureFactory: infra, daoFactory, repTokenFactory, economyFactory, wrappedRepTokenFactory,
+        jurisdictionFactory: await addr(s.jurisdictionFactory),
+        moduleCatalog: await addr(s.catalog),
+        moduleProcessor: await addr(s.processor),
+        nativeProject: await addr(s.nativeProject),
+        erc20Project: await addr(s.erc20Project),
         nativeCurrency: "ETH", symbol: "ETH", blockExplorer: "",
     };
+    for (const name of MODULES) out[`${name}Setup`] = await addr(s.setups[name]);
     const file = path.join(__dirname, "out", "deployment.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(out, null, 2));

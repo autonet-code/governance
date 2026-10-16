@@ -4,11 +4,11 @@
 const { ethers, network } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
+const { wait, prepare, createJurisdiction } = require("./jurisdiction");
 
 const dep = require("./out/deployment.json");
 const manifest = { daos: {}, projects: {} };
 
-const wait = async (txPromise) => (await txPromise).wait();
 const eventArgs = (receipt, name) => receipt.logs.find(l => l.eventName === name)?.args;
 async function advance(seconds) {
     await network.provider.send("evm_increaseTime", [Number(seconds)]);
@@ -17,6 +17,7 @@ async function advance(seconds) {
 
 // propose -> vote -> queue -> execute through a HomebaseDAO governor
 async function govern(governor, voters, targets, calldatas, description) {
+    [targets, calldatas] = [[...targets], [...calldatas]];
     const receipt = await wait(governor.propose(targets, targets.map(() => 0), calldatas, description));
     const proposalId = eventArgs(receipt, "ProposalCreated").proposalId;
     await advance(Number(await governor.votingDelay()) + 1);
@@ -30,91 +31,94 @@ async function govern(governor, voters, targets, calldatas, description) {
     return proposalId;
 }
 
+const ECONOMY = { params: { arbitrationFeeBps: 500, platformFeeBps: 100, authorFeeBps: 100, coolingOffPeriod: 0,
+    backersQuorumBps: 7000, projectThreshold: 0, appealPeriod: 86400 } };
+
 async function main() {
     const [deployer, alice, bob, carol, contractor, arbiter] = await ethers.getSigners();
     const E = (n) => ethers.parseEther(String(n));
+    const processor = await ethers.getContractAt("ModuleProcessor", dep.moduleProcessor);
 
     // ---------------- DAO side ----------------
-    // 1. Standard (non-transferable) DAO: delegation, a full proposal that edits the registry
-    const std = await ethers.getContractAt("StandardFactory", dep.wrapper);
-    let r = await wait(std.deployDAOwithToken({
-        name: "E2E Standard", symbol: "STD", description: "standard dao", decimals: 18, executionDelay: 60,
-        initialMembers: [alice.address, bob.address], initialAmounts: [E(600), E(400), 0, 1, 0, 4],
+    // 1. Standard (soulbound) DAO: delegation, a full proposal that edits the registry, then the
+    //    economy module attached by proposal and detached again
+    let j = await createJurisdiction(dep, {
+        name: "E2E Standard", symbol: "STD", description: "standard dao",
+        members: [alice.address, bob.address], amounts: [E(600), E(400)],
         keys: ["e2e.key"], values: ["v1"],
-    }));
-    let created = eventArgs(r, "NewDaoCreated");
-    const stdGov = await ethers.getContractAt("HomebaseDAO", created.dao);
-    const stdToken = await ethers.getContractAt("RepToken", created.token);
-    const stdRegistry = await ethers.getContractAt("Registry", created.registry);
+    });
+    const stdGov = j.governor;
+    const stdToken = await ethers.getContractAt("RepToken", j.core.token);
+    const stdRegistry = await ethers.getContractAt("Registry", j.core.registry);
     await wait(stdToken.connect(alice).delegate(alice.address));
     await wait(stdToken.connect(bob).delegate(alice.address));
-    const stdProposal = await govern(stdGov.connect(alice), [alice], [created.registry],
+    const stdProposal = await govern(stdGov.connect(alice), [alice], [j.core.registry],
         [stdRegistry.interface.encodeFunctionData("editRegistry", ["e2e.key", "v2"])], "E2E: edit registry");
-    manifest.daos.standard = { dao: created.dao, token: created.token, registryAddress: created.registry,
+    const stdEconomy = await prepare(dep, j.core, "economy", ECONOMY);
+    const stdSetup = await stdEconomy.setup.getAddress();
+    const [attachTargets, , attachCalls] = await processor.installCalls(stdSetup, stdEconomy.id);
+    await govern(stdGov.connect(alice), [alice], attachTargets, attachCalls, "E2E: attach the economy");
+    const [detachTargets, , detachCalls] = await processor.uninstallCalls(stdSetup, stdEconomy.id);
+    await govern(stdGov.connect(alice), [alice], detachTargets, detachCalls, "E2E: detach the economy");
+    manifest.daos.standard = { dao: j.core.governor, token: j.core.token, registryAddress: j.core.registry,
         members: { [alice.address]: E(600).toString(), [bob.address]: E(400).toString() },
         delegates: { [alice.address]: alice.address, [bob.address]: alice.address },
         votingWeights: { [alice.address]: E(1000).toString() },
         proposals: { [stdProposal.toString()]: { state: "Executed", forVotes: E(1000).toString() } },
-        registryValues: { "e2e.key": "v2" } };
+        registryValues: { "e2e.key": "v2", "jurisdiction.economy": "", "modules.economy": "" },
+        economyDetached: stdEconomy.module };
 
-    // 2. Transferable DAO: a token transfer between members
-    const stdT = await ethers.getContractAt("StandardFactoryTransferable", dep.wrapper_t);
-    r = await wait(stdT.deployDAOwithToken({
-        name: "E2E Transferable", symbol: "TRF", description: "transferable dao", decimals: 18, executionDelay: 60,
-        initialMembers: [alice.address, bob.address], initialAmounts: [E(100), E(100), 0, 1, 0, 4],
-        keys: [], values: [],
-    }));
-    created = eventArgs(r, "NewDaoCreated");
-    const trfToken = await ethers.getContractAt("RepToken", created.token);
+    // 2. Transferable DAO: a token transfer between members, and the economy attached by proposal
+    j = await createJurisdiction(dep, {
+        name: "E2E Transferable", symbol: "TRF", description: "transferable dao", tokenKind: 1,
+        members: [alice.address, bob.address], amounts: [E(100), E(100)],
+    });
+    const trfToken = await ethers.getContractAt("RepToken", j.core.token);
     await wait(trfToken.connect(alice).transfer(carol.address, E(30)));
-    manifest.daos.transferable = { dao: created.dao, token: created.token,
-        members: { [alice.address]: E(70).toString(), [bob.address]: E(100).toString(), [carol.address]: E(30).toString() } };
+    await wait(trfToken.connect(alice).delegate(alice.address));
+    const trfEconomy = await prepare(dep, j.core, "economy", ECONOMY);
+    const [trfTargets, , trfCalls] = await processor.installCalls(await trfEconomy.setup.getAddress(), trfEconomy.id);
+    await govern(j.governor.connect(alice), [alice], trfTargets, trfCalls, "E2E: add the economy");
+    manifest.daos.transferable = { dao: j.core.governor, token: j.core.token, economy: trfEconomy.module,
+        members: { [alice.address]: E(70).toString(), [bob.address]: E(100).toString(), [carol.address]: E(30).toString() },
+        registryValues: { "jurisdiction.economy": trfEconomy.module.toLowerCase() } };
 
     // 3. Wrapped-token DAO: wrap an existing ERC20
     const underlying = await (await ethers.getContractFactory("TestERC20")).deploy("Underlying", "UND", 18, E(1000));
     await underlying.waitForDeployment();
-    const stdW = await ethers.getContractAt("StandardFactoryWrapped", dep.wrapper_w);
-    r = await wait(stdW.deployDAOwithWrappedToken({
-        name: "E2E Wrapped", symbol: "wUND", description: "wrapped dao", executionDelay: 60,
-        underlyingTokenAddress: await underlying.getAddress(), governanceSettings: [0, 1, 0, 4],
-        keys: [], values: [], transferrableStr: "false",
-    }));
-    created = eventArgs(r, "NewDaoCreated") ?? {};
-    const wrappedInfo = eventArgs(r, "DaoWrappedDeploymentInfo");
-    const wrappedToken = created.token ?? wrappedInfo?.wrappedTokenAddress;
-    if (wrappedToken) {
-        const wTok = await ethers.getContractAt("WrappedRepToken", wrappedToken);
-        await wait(underlying.approve(wrappedToken, E(50)));
-        await wait(wTok.depositFor(deployer.address, E(50)));
-    }
-    manifest.daos.wrapped = { dao: created.dao ?? wrappedInfo?.daoAddress, token: wrappedToken,
-        members: { [deployer.address]: E(50).toString() } };
+    j = await createJurisdiction(dep, {
+        name: "E2E Wrapped", symbol: "wUND", description: "wrapped dao", tokenKind: 2,
+        underlying: await underlying.getAddress(),
+    });
+    const wTok = await ethers.getContractAt("WrappedRepToken", j.core.token);
+    await wait(underlying.approve(j.core.token, E(50)));
+    await wait(wTok.depositFor(deployer.address, E(50)));
+    manifest.daos.wrapped = { dao: j.core.governor, token: j.core.token,
+        members: { [deployer.address]: E(50).toString() },
+        fields: { underlyingToken: await underlying.getAddress() } };
 
-    // 4. Economy DAO through the 3-step TrustlessFactory flow
-    const tf = await ethers.getContractAt("TrustlessFactory", dep.wrapper_trustless);
-    const infraEv = eventArgs(await wait(tf.deployInfrastructure(1, 500)), "InfrastructureDeployed");
-    const tokEv = eventArgs(await wait(tf.deployDAOToken(infraEv.registry, infraEv.timelock,
-        { name: "E2E Economy", symbol: "ECO", initialMembers: [deployer.address, alice.address], initialAmounts: [E(1000), E(500)] },
-        { name: "E2E Economy DAO", votingDelay: 0, votingPeriod: 1, proposalThreshold: 0, quorumFraction: 4 })), "DAOTokenDeployed");
+    // 4. Economy DAO: the economy module attached at origination, parities recorded by finalize
     const usdc = await (await ethers.getContractFactory("TestERC20")).deploy("Test USDC", "USDC", 6, 10n ** 15n);
     await usdc.waitForDeployment();
     const usdcAddr = await usdc.getAddress();
     const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
-    await wait(tf.configureAndFinalize(
-        { implAddresses: [dep.nativeProjectImpl, dep.erc20ProjectImpl],
-          contractAddresses: [infraEv.economy, infraEv.registry, infraEv.timelock, tokEv.repToken, tokEv.dao] },
-        { arbitrationFeeBps: 500, initialPlatformFeeBps: 100, initialAuthorFeeBps: 100, initialCoolingOffPeriod: 0,
-          initialBackersQuorumBps: 7000, initialProjectThreshold: 0, initialAppealPeriod: 86400 },
-        [`jurisdiction.parity.${NATIVE.toLowerCase()}`, `jurisdiction.parity.${usdcAddr.toLowerCase()}`],
-        [E(1).toString(), (10n ** 30n).toString()]));
-    const economy = await ethers.getContractAt("Economy", infraEv.economy);
-    const ecoGov = await ethers.getContractAt("HomebaseDAO", tokEv.dao);
-    const ecoToken = await ethers.getContractAt("RepToken", tokEv.repToken);
+    j = await createJurisdiction(dep, {
+        name: "E2E Economy", symbol: "ECO", members: [deployer.address, alice.address], amounts: [E(1000), E(500)],
+        modules: { economy: ECONOMY },
+        keys: [`jurisdiction.parity.${NATIVE.toLowerCase()}`, `jurisdiction.parity.${usdcAddr.toLowerCase()}`],
+        values: [E(1).toString(), (10n ** 30n).toString()],
+    });
+    const economy = await ethers.getContractAt("Economy", j.installs.economy.module);
+    const repClaim = await ethers.getContractAt("EconomyRepClaim", j.installs.economy.helpers[0]);
+    const ecoGov = j.governor;
+    const ecoToken = await ethers.getContractAt("RepToken", j.core.token);
     await wait(ecoToken.connect(deployer).delegate(deployer.address));
     await wait(ecoToken.connect(alice).delegate(alice.address));
-    manifest.daos.economy = { dao: tokEv.dao, token: tokEv.repToken, registryAddress: infraEv.registry, economy: infraEv.economy,
+    manifest.daos.economy = { dao: j.core.governor, token: j.core.token, registryAddress: j.core.registry,
+        economy: await economy.getAddress(),
         members: { [deployer.address]: E(1000).toString(), [alice.address]: E(500).toString() },
-        votingWeights: { [deployer.address]: E(1000).toString(), [alice.address]: E(500).toString() } };
+        votingWeights: { [deployer.address]: E(1000).toString(), [alice.address]: E(500).toString() },
+        registryValues: { "jurisdiction.economy.rep_claim": (await repClaim.getAddress()).toLowerCase() } };
 
     // ---------------- Trustless side ----------------
     const coolingOff = async () => advance(Number(await economy.effectiveCoolingOffPeriod()) + 1);
@@ -206,7 +210,7 @@ async function main() {
         events: ["NewProject", "SendFunds", "VetoedByDao"] };
 
     // REP from economy activity (outside any proposal)
-    await wait(ecoToken.connect(bob).claimReputationFromEconomy());
+    await wait(repClaim.connect(bob).claim());
     manifest.daos.economy.members[bob.address] = (await ecoToken.balanceOf(bob.address)).toString();
 
     manifest.finalBlock = await ethers.provider.getBlockNumber();

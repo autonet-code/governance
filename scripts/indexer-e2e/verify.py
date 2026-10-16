@@ -72,11 +72,24 @@ for kind, d in manifest["daos"].items():
     for key, value in d.get("registryValues", {}).items():
         got = (snap.to_dict().get("registry") or {}).get(key)
         check(f"[{kind}] registry {key}", got == value, f"got {got!r}, expected {value!r}")
-    if kind == "economy":
+    for field, value in d.get("fields", {}).items():
+        got = snap.to_dict().get(field)
+        check(f"[{kind}] {field}", str(got).lower() == str(value).lower(), f"got {got!r}, expected {value!r}")
+    # Economy module: attached at origination or by proposal (jurisdiction.economy), or detached
+    if d.get("economy"):
         econ = find_doc(tl.collection("Localhost"), d["economy"])
-        check("[economy] trustless economy doc exists", econ is not None, d["economy"])
-        check("[economy] DAO doc links economy", (snap.to_dict().get("economy") or "").lower() == d["economy"].lower(),
+        check(f"[{kind}] trustless economy doc exists", econ is not None, d["economy"])
+        if econ:
+            data = econ.to_dict()
+            check(f"[{kind}] trustless economy doc daoAddress", (data.get("daoAddress") or "").lower() == d["dao"].lower(),
+                  f"got {data.get('daoAddress')!r}")
+        check(f"[{kind}] DAO doc links economy", (snap.to_dict().get("economy") or "").lower() == d["economy"].lower(),
               f"got {snap.to_dict().get('economy')!r}")
+    if d.get("economyDetached"):
+        check(f"[{kind}] DAO doc economy unlinked", not snap.to_dict().get("economy"), f"got {snap.to_dict().get('economy')!r}")
+        econ = find_doc(tl.collection("Localhost"), d["economyDetached"])
+        check(f"[{kind}] detached economy doc kept and marked", econ is not None and econ.to_dict().get("detached") is True,
+              "missing" if econ is None else f"detached={econ.to_dict().get('detached')!r}")
 
 # ---------------- Trustless side ----------------
 economy = manifest["daos"]["economy"]["economy"]

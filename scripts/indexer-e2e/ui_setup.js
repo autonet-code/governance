@@ -4,9 +4,9 @@
 const { ethers } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
+const { wait, createJurisdiction } = require("./jurisdiction");
 const dep = require("./out/deployment.json");
 
-const wait = async (p) => (await p).wait();
 const eventArgs = (r, name) => r.logs.find(l => l.eventName === name)?.args;
 const E = (n) => ethers.parseEther(String(n));
 
@@ -14,37 +14,29 @@ async function main() {
     const [deployer, alice] = await ethers.getSigners();
     const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
-    const tf = await ethers.getContractAt("TrustlessFactory", dep.wrapper_trustless);
-    const infra = eventArgs(await wait(tf.deployInfrastructure(1, 500)), "InfrastructureDeployed");
-    const tok = eventArgs(await wait(tf.deployDAOToken(infra.registry, infra.timelock,
-        { name: "UI Economy", symbol: "UIE", initialMembers: [deployer.address, alice.address], initialAmounts: [E(1000), E(500)] },
-        { name: "UI Economy DAO", votingDelay: 0, votingPeriod: 1, proposalThreshold: 0, quorumFraction: 4 })), "DAOTokenDeployed");
-    await wait(tf.configureAndFinalize(
-        { implAddresses: [dep.nativeProjectImpl, dep.erc20ProjectImpl],
-          contractAddresses: [infra.economy, infra.registry, infra.timelock, tok.repToken, tok.dao] },
-        { arbitrationFeeBps: 500, initialPlatformFeeBps: 100, initialAuthorFeeBps: 100, initialCoolingOffPeriod: 0,
-          initialBackersQuorumBps: 7000, initialProjectThreshold: 0, initialAppealPeriod: 86400 },
-        [`jurisdiction.parity.${NATIVE.toLowerCase()}`], [E(1).toString()]));
-    const ecoToken = await ethers.getContractAt("RepToken", tok.repToken);
+    const eco = await createJurisdiction(dep, {
+        name: "UI Economy", symbol: "UIE", members: [deployer.address, alice.address], amounts: [E(1000), E(500)],
+        modules: { economy: { params: { arbitrationFeeBps: 500, platformFeeBps: 100, authorFeeBps: 100, coolingOffPeriod: 0,
+            backersQuorumBps: 7000, projectThreshold: 0, appealPeriod: 86400 } } },
+        keys: [`jurisdiction.parity.${NATIVE.toLowerCase()}`], values: [E(1).toString()],
+    });
+    const ecoToken = await ethers.getContractAt("RepToken", eco.core.token);
     await wait(ecoToken.connect(deployer).delegate(deployer.address));
 
-    const std = await ethers.getContractAt("StandardFactory", dep.wrapper);
-    const created = eventArgs(await wait(std.deployDAOwithToken({
-        name: "UI Standard", symbol: "UIS", description: "ui standard dao", decimals: 18, executionDelay: 60,
-        initialMembers: [deployer.address, alice.address], initialAmounts: [E(600), E(400), 0, 30, 0, 4],
-        keys: [], values: [],
-    })), "NewDaoCreated");
-    const stdToken = await ethers.getContractAt("RepToken", created.token);
+    const std = await createJurisdiction(dep, {
+        name: "UI Standard", symbol: "UIS", description: "ui standard dao", votingPeriod: 30,
+        members: [deployer.address, alice.address], amounts: [E(600), E(400)],
+    });
+    const stdToken = await ethers.getContractAt("RepToken", std.core.token);
     await wait(stdToken.connect(deployer).delegate(deployer.address));
     await wait(stdToken.connect(alice).delegate(alice.address));
-    const gov = await ethers.getContractAt("HomebaseDAO", created.dao);
-    const registry = await ethers.getContractAt("Registry", created.registry);
+    const registry = await ethers.getContractAt("Registry", std.core.registry);
     await ethers.provider.send("evm_mine", []);
-    const pr = await wait(gov.connect(alice).propose([created.registry], [0],
+    const pr = await wait(std.governor.connect(alice).propose([std.core.registry], [0],
         [registry.interface.encodeFunctionData("editRegistry", ["ui.key", "voted"])], "UI: vote on me"));
     const proposalId = eventArgs(pr, "ProposalCreated").proposalId.toString();
 
-    const out = { economy: infra.economy, economyDao: tok.dao, standardDao: created.dao, proposalId };
+    const out = { economy: eco.installs.economy.module, economyDao: eco.core.governor, standardDao: std.core.governor, proposalId };
     fs.writeFileSync(path.join(__dirname, "out", "ui.json"), JSON.stringify(out, null, 2));
     console.log(JSON.stringify(out));
 }
