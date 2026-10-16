@@ -12,40 +12,16 @@ function mintLeaf(agent, amount) {
     return ethers.keccak256(inner);
 }
 
-const ANCHOR_TYPES = {
-    AnchorApproval: [
-        { name: "epochId", type: "string" },
-        { name: "epochRoot", type: "bytes32" },
-        { name: "prevEpochRoot", type: "bytes32" },
-        { name: "prevAnchorHash", type: "bytes32" },
-        { name: "agentMintCid", type: "string" },
-        { name: "payloadHash", type: "bytes32" },
-        { name: "agentMintRoot", type: "bytes32" },
-    ],
-};
-
-// Submit the next anchor in the chain, signed by `signers` (sorted ascending, as the Substrate requires).
-// `from` relays it; the relayer has no authority of its own.
-async function submitAnchor(substrate, signers, epochId, agentMintRoot = ethers.ZeroHash, from = undefined) {
-    const anchor = {
-        epochId,
-        epochRoot: ethers.id(`root:${epochId}`),
-        prevEpochRoot: await substrate.latestEpochRoot(),
-        prevAnchorHash: await substrate.latestAnchorHash(),
-        agentMintCid: `cid:${epochId}`,
-        payloadHash: ethers.ZeroHash,
-        agentMintRoot,
-    };
-    const domain = {
-        name: "AutonetSubstrate", version: "1",
-        chainId: (await ethers.provider.getNetwork()).chainId,
-        verifyingContract: await substrate.getAddress(),
-    };
-    const sorted = [...signers].sort((a, b) => (BigInt(a.address) < BigInt(b.address) ? -1 : 1));
-    const signatures = await Promise.all(sorted.map((s) => s.signTypedData(domain, ANCHOR_TYPES, anchor)));
-    const c = from ? substrate.connect(from) : substrate;
-    return c.submitAnchor(anchor.epochId, anchor.epochRoot, anchor.prevEpochRoot, anchor.prevAnchorHash,
-        anchor.agentMintCid, anchor.payloadHash, anchor.agentMintRoot, signatures);
+// The arguments of the next anchor in the chain
+async function anchorArgs(substrate, epochId, agentMintRoot = ethers.ZeroHash) {
+    return [epochId, ethers.id(`root:${epochId}`), await substrate.latestEpochRoot(), await substrate.latestAnchorHash(),
+        `cid:${epochId}`, ethers.ZeroHash, agentMintRoot];
 }
 
-module.exports = { autonet, mintLeaf, submitAnchor };
+// Anchors the next epoch as `governor`, the only address the Substrate accepts anchors from (the DAO
+// timelock in production, so an anchor is a DAO proposal)
+async function submitAnchor(substrate, governor, epochId, agentMintRoot = ethers.ZeroHash) {
+    return substrate.connect(governor).anchor(...(await anchorArgs(substrate, epochId, agentMintRoot)));
+}
+
+module.exports = { autonet, mintLeaf, anchorArgs, submitAnchor };

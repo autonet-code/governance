@@ -10,7 +10,7 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 // that anchors need (and the agent votes the member's weight in governance). The tests share state
 // and run in order.
 
-const { autonet, mintLeaf, submitAnchor } = require("./helpers/autonet");
+const { autonet, mintLeaf, anchorArgs } = require("./helpers/autonet");
 const { createJurisdiction } = require("./helpers/jurisdiction");
 
 describe("Autonet integration (real Substrate and ServiceMarket)", function () {
@@ -34,6 +34,12 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
         await dao.queue(targets, values, calldatas, descriptionHash);
         await dao.execute(targets, values, calldatas, descriptionHash);
         expect(await dao.state(id)).to.equal(7n); // Executed
+    }
+
+    // An epoch anchor is a DAO proposal: the agent, holding the member's delegated REP, decides it alone
+    async function anchorByProposal(epochId, agentMintRoot = ethers.ZeroHash) {
+        const call = substrate.interface.encodeFunctionData("anchor", await anchorArgs(substrate, epochId, agentMintRoot));
+        await govern([await substrate.getAddress()], [call], `Anchor epoch ${epochId}`);
     }
 
     before(async function () {
@@ -60,8 +66,8 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
     it("deploys the Substrate against the predicted vault address and the jurisdiction's treasury and timelock", async function () {
         const nonce = await ethers.provider.getTransactionCount(deployer.address);
         const predictedVault = ethers.getCreateAddress({ from: deployer.address, nonce: nonce + 1 });
-        // Anchors need signatures carrying more than half of the REP votes; no genesis set (REP exists)
-        substrate = await autonet("Substrate", deployer).deploy(registryAddr, predictedVault, timelockAddr, repTokenAddr, 5000, [], 0);
+        // Only the timelock anchors, so every anchor is a DAO proposal
+        substrate = await autonet("Substrate", deployer).deploy(registryAddr, predictedVault, timelockAddr);
         vault = await (await ethers.getContractFactory("AutonetVault")).deploy(await substrate.getAddress(), registryAddr, timelockAddr);
 
         expect(await vault.getAddress()).to.equal(predictedVault);
@@ -113,17 +119,15 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
         expect(await repToken.getVotes(agent.address)).to.equal(ethers.parseEther("1097.5"));
     });
 
-    it("rejects anchors that lack a REP majority, whoever signs or relays them", async function () {
-        // An outsider registers and signs: no REP behind it
-        await substrate.connect(outsider).registerAgent(ethers.id("outsider"), "0x99");
-        await expect(submitAnchor(substrate, [outsider], "fake", mintLeaf(outsider.address, ATN(1_000_000)), outsider))
-            .to.be.revertedWithCustomError(substrate, "AnchorQuorumNotMet");
+    it("takes anchors only from the DAO timelock", async function () {
+        await expect(substrate.connect(outsider).anchor(...(await anchorArgs(substrate, "fake", mintLeaf(outsider.address, ATN(1_000_000))))))
+            .to.be.revertedWithCustomError(substrate, "NotGovernor");
     });
 
     it("turns anchored tool-pool earnings into REP, capped at the fees burned in the previous window", async function () {
         // The 1.25 ATN burned by the service payment is the first window; the next anchor's pool
-        await submitAnchor(substrate, [agent], "epoch-0", ethers.ZeroHash, outsider);
-        await submitAnchor(substrate, [agent], "epoch-1", mintLeaf(agent.address, ATN(1)), outsider);
+        await anchorByProposal("epoch-0");
+        await anchorByProposal("epoch-1", mintLeaf(agent.address, ATN(1)));
         await substrate.connect(agent).recordTrainingForEpoch(ATN(1), ethers.id("epoch-1"), []);
         expect(await substrate.agentMintTotal(agent.address)).to.equal(ATN(1));
 
@@ -133,7 +137,7 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
 
     it("refuses to mint more than the epoch's pool even when the signed root allows it", async function () {
         // No fees burned since epoch-1, so epoch-2's pool is empty
-        await submitAnchor(substrate, [agent], "epoch-2", mintLeaf(agent.address, ATN(1)), outsider);
+        await anchorByProposal("epoch-2", mintLeaf(agent.address, ATN(1)));
         await expect(substrate.connect(agent).recordTrainingForEpoch(ATN(1), ethers.id("epoch-2"), []))
             .to.be.revertedWithCustomError(substrate, "EpochPoolExceeded");
     });

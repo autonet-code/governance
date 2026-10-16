@@ -24,7 +24,6 @@
  *   VOTING_DELAY_SECS (60) VOTING_PERIOD_SECS (604800): whole minutes. TIMELOCK_DELAY_SECS (60).
  *     Test networks: 0 / 120 / 0.
  *   PARITY_TOKENS=0x..,0x..  PARITY_VALUES=<18dp>,<18dp>: vault payment tokens (1 USDC(6d) = 1e30)
- *   ANCHOR_QUORUM_BPS (5000), GENESIS_SIGNERS (none; comma list), GENESIS_QUORUM (0)
  *   CHALLENGE_WINDOW_SECS (3600), CHARTER_HASH CHARTER_URI (the current charter, from the module metadata)
  *   TOOLBOND_MIN_STAKE (100 ATN) TOOLBOND_THRESHOLD_BPS (500) TOOLBOND_REVIEW_WINDOW_SECS (14d)
  *   TOOLBOND_REVEAL_WINDOW_SECS (2d) TOOLBOND_FINDER_BPS (5000) TOOLBOND_DEGRADE_BPS (1000)
@@ -126,11 +125,7 @@ async function main() {
   // The current charter, as the module metadata records it
   const charterFixed = (name) => metadata("autonet", "build").pluginSetup.prepareInstallation.inputs
     .find((i) => i.name === "substrate").components.find((c) => c.name === name)["x-ui"].fixed;
-  const signers = env("GENESIS_SIGNERS", "").split(",").map((s) => s.trim()).filter(Boolean);
   const autonetParams = {
-    anchorQuorumBps: Number(env("ANCHOR_QUORUM_BPS", 5000)),
-    genesisSigners: signers,
-    genesisQuorum: Number(env("GENESIS_QUORUM", 0)),
     challengeWindow: envBig("CHALLENGE_WINDOW_SECS", 3600),
     charterHash: env("CHARTER_HASH", charterFixed("charterHash")),
     charterUri: env("CHARTER_URI", charterFixed("charterUri")),

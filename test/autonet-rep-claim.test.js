@@ -9,9 +9,9 @@ const { autonet, mintLeaf, submitAnchor } = require("./helpers/autonet");
 // serviceEarnings), mints the watermarked delta to the AGENT 1:1 in whole-token
 // terms (ATN base 1e6 -> REP 1e18, so x1e12). Hardcoded rate, no knob, no admin.
 // Runs against the real Substrate (test/fixtures/autonet). The deployer is its vault
-// minter so tests can fund payers. Tool-pool earnings come from single-leaf anchors signed
-// by agentA (the genesis signer while no REP exists, its own votes afterwards); each mint
-// is backed by fees burned in the window before.
+// minter so tests can fund payers. Tool-pool earnings come from single-leaf anchors made by
+// agentA, standing in for the DAO timelock (the Substrate's governor); each mint is backed by
+// fees burned in the window before.
 describe("AutonetRepClaim", function () {
     let claim, substrate, repToken, registry;
     let deployer, timelock, agentA, agentB, stranger, gen1, gen2;
@@ -26,9 +26,9 @@ describe("AutonetRepClaim", function () {
     async function earnPool(agent, amount) {
         await substrate.mintFromVault(deployer.address, amount * 40n);
         await substrate.payForService(stranger.address, amount * 40n, ethers.id(`burn-${epoch}`)); // 2.5% fee, all burned
-        await submitAnchor(substrate, [agentA], `window-${++epoch}`);
+        await submitAnchor(substrate, agentA, `window-${++epoch}`);
         const id = `epoch-${epoch}`;
-        await submitAnchor(substrate, [agentA], id, mintLeaf(agent.address, amount));
+        await submitAnchor(substrate, agentA, id, mintLeaf(agent.address, amount));
         await substrate.connect(agent).recordTrainingForEpoch(amount, ethers.id(id), []);
     }
     // Service earnings: the deployer pays the agent; the agent's earnings grow by the net
@@ -74,9 +74,8 @@ describe("AutonetRepClaim", function () {
             await ethers.getSigners();
 
         repToken = await deployRepToken();
-        // No treasury, deployer as vault minter, no governor (fee frozen at 2.5%), agentA the genesis signer
-        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, ethers.ZeroAddress,
-            await repToken.getAddress(), 5000, [agentA.address], 1);
+        // No treasury, deployer as vault minter, agentA as the governor that anchors
+        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, agentA.address);
         await substrate.connect(agentA).registerAgent(ethers.id("a"), "0x01");
         await substrate.connect(agentB).registerAgent(ethers.id("b"), "0x02");
 

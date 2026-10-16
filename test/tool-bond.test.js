@@ -60,7 +60,7 @@ describe("ToolBond", function () {
 
     beforeEach(async function () {
         [deployer, timelock, author, a1, a2, a3, outsider] = await ethers.getSigners();
-        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, ethers.ZeroAddress, ethers.ZeroAddress, 5000, [deployer.address], 1);
+        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, timelock.address);
         rep = await (await ethers.getContractFactory("RepToken")).deploy("Rep", "REP", deployer.address, timelock.address,
             [a1.address, a2.address, a3.address, author.address], [REP(300), REP(200), REP(100), REP(400)], false);
         // Signers stand in for the governor and timelock, so the lifecycle floor is just the 2-day buffer

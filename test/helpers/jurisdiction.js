@@ -16,7 +16,7 @@ const DEFAULTS = {
             degradeBps: 1000, assertionSlashBps: 2000, appealPeriod: 120 },
     },
     autonet: {
-        substrate: { anchorQuorumBps: 5000, genesisSigners: [], genesisQuorum: 0, challengeWindow: 3600,
+        substrate: { challengeWindow: 3600,
             charterHash: ethers.ZeroHash, charterUri: "" },
         toolBond: { minStake: 100_000_000n, thresholdBps: 500, reviewWindow: 14 * DAY, revealWindow: 2 * DAY,
             finderBps: 5000, degradeBps: 1000, authorSlashBps: 10000, unbondDelay: 30 * DAY, auditorShareBps: 4000,

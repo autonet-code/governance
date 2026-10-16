@@ -22,9 +22,6 @@ import "./ModuleSetup.sol";
 ///         Substrate is created with CREATE2 at an address computed first.
 contract AutonetSetup is ModuleSetup {
     struct AutonetParams {
-        uint16 anchorQuorumBps;    // Substrate: REP share whose signatures accept an anchor
-        address[] genesisSigners;  // Substrate: anchor signers until REP exists
-        uint256 genesisQuorum;     // Substrate: genesis signatures an anchor needs
         uint256 challengeWindow;   // PaymentChannel
         bytes32 charterHash;       // sha256 of the canonical charter the daemons follow (0 = none recorded)
         string charterUri;
@@ -82,11 +79,11 @@ contract AutonetSetup is ModuleSetup {
         Deployment memory d;
         (d.charterHash, d.charterUri) = (s.charterHash, s.charterUri);
 
-        // Substrate(treasury, vaultMinter, governor, repToken, anchorQuorumBps, genesisSigners, genesisQuorum)
+        // Substrate(treasury, vaultMinter, governor): the timelock anchors epochs, by DAO proposal
         // needs the vault, and the vault needs the Substrate: compute the Substrate's address first.
         address vaultAddr = _createAddress(1 + (id - 1) * CREATES_PER_LAUNCH);
         bytes memory substrateInit = abi.encodePacked(_read(substrateCode), abi.encode(
-            core.registry, vaultAddr, core.timelock, core.token, s.anchorQuorumBps, s.genesisSigners, s.genesisQuorum));
+            core.registry, vaultAddr, core.timelock));
         address substrateAddr = address(uint160(uint256(keccak256(
             abi.encodePacked(bytes1(0xff), address(this), salt, keccak256(substrateInit))))));
 

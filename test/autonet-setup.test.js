@@ -21,8 +21,7 @@ describe("AutonetSetup", function () {
         const parityKey = `jurisdiction.parity.${(await usdc.getAddress()).toLowerCase()}`;
         const j = await createJurisdiction(from, {
             members: [member.address], amounts: [REP(1000)],
-            modules: [["autonet", { substrate: { anchorQuorumBps: 5000, genesisSigners: [from.address],
-                genesisQuorum: 1, challengeWindow: 3600, charterHash: CHARTER, charterUri: "ipfs://charter" } }]],
+            modules: [["autonet", { substrate: { challengeWindow: 3600, charterHash: CHARTER, charterUri: "ipfs://charter" } }]],
             keys: [parityKey], values: [(10n ** 30n).toString()],
         });
         return { j, d: await s.setups.autonet.deploymentOf(j.installs.autonet.id) };
@@ -36,8 +35,6 @@ describe("AutonetSetup", function () {
         expect(await substrate.vaultMinter()).to.equal(d.vault);
         expect(await substrate.treasury()).to.equal(j.core.registry);
         expect(await substrate.governor()).to.equal(j.core.timelock);
-        expect(await substrate.repToken()).to.equal(j.core.token);
-        expect(await substrate.isGenesisSigner(launcher.address)).to.equal(true);
 
         expect(await j.rep.minters(d.repClaim)).to.equal(true);
         expect(await j.rep.slashers(d.toolBond)).to.equal(true);

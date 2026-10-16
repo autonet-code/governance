@@ -1,5 +1,5 @@
 // Copies the compiled autonet core contracts (ABI + bytecode) into test/fixtures/autonet so the
-// jurisdiction tests run against the real Substrate, ServiceMarket, VentureVault and CharterAnchor
+// jurisdiction tests run against the real Substrate, ServiceMarket and VentureVault
 // instead of local mocks. Compile the autonet repo first (npx hardhat compile there).
 //
 // Usage: node scripts/sync-autonet-artifacts.js [path to autonet repo, default ../../autonet]
@@ -15,7 +15,6 @@ const contracts = [
   ["ServiceMarket.sol", "PaymentChannel"],
   ["VentureVault.sol", "VentureVault"],
   ["VentureVault.sol", "VentureVaultFactory"],
-  ["CharterAnchor.sol", "CharterAnchor"],
 ];
 
 fs.mkdirSync(out, { recursive: true });

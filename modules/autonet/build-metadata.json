@@ -12,11 +12,8 @@
           "internalType": "struct AutonetSetup.AutonetParams",
           "name": "substrate",
           "type": "tuple",
-          "description": "Substrate and payment channels",
+          "description": "Payment channels and charter",
           "components": [
-            { "internalType": "uint16", "name": "anchorQuorumBps", "type": "uint16", "description": "Share of all REP whose holders (through their delegates) must sign an epoch anchor.", "x-ui": { "immutable": true, "label": "Anchor quorum (%)", "unit": "bps-percent", "default": "50", "min": 1, "max": 99, "section": "Substrate" } },
-            { "internalType": "address[]", "name": "genesisSigners", "type": "address[]", "description": "Anchor signers until REP exists. Members hold REP from the start, so none are needed.", "x-ui": { "fixed": [] } },
-            { "internalType": "uint256", "name": "genesisQuorum", "type": "uint256", "description": "Genesis signatures an anchor needs.", "x-ui": { "fixed": "0" } },
             { "internalType": "uint256", "name": "challengeWindow", "type": "uint256", "description": "How long a counterparty has to challenge a payment channel close.", "x-ui": { "immutable": true, "label": "Payment channel challenge window (hours)", "unit": "seconds-hours", "default": "1", "min": 1, "max": 720, "section": "Substrate" } },
             { "internalType": "bytes32", "name": "charterHash", "type": "bytes32", "description": "sha256 of the canonical charter the daemons follow, recorded as jurisdiction.autonet.charter. The DAO changes it by proposal.", "x-ui": { "fixed": "0x5756ed3aa1831533c6ae7a1728cd6af73241c787049080ac3469d5b40f841cd5" } },
             { "internalType": "string", "name": "charterUri", "type": "string", "description": "Where the charter text lives, recorded as jurisdiction.autonet.charter_uri.", "x-ui": { "fixed": "https://github.com/autonet-code/node/blob/8badfda36fe81731b75aae0fe1222b00eef5dc3c/nodes/common/world_model_substrate/adapter.py" } }
