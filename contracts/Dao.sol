@@ -7,8 +7,13 @@ import "@openzeppelin/contracts/governance/extensions/GovernorCountingSimple.sol
 import "@openzeppelin/contracts/governance/extensions/GovernorVotes.sol";
 import "@openzeppelin/contracts/governance/extensions/GovernorVotesQuorumFraction.sol";
 import "@openzeppelin/contracts/governance/extensions/GovernorTimelockControl.sol";
+import "@openzeppelin/contracts/governance/extensions/GovernorSuperQuorum.sol";
 
-contract HomebaseDAO is Governor, GovernorSettings, GovernorCountingSimple, GovernorVotes, GovernorVotesQuorumFraction, GovernorTimelockControl {
+/// A proposal is decided as soon as its outcome can't change: it succeeds early once For holds more
+/// than half of all REP at the snapshot and meets the quorum, and is defeated early once Against holds
+/// half. Otherwise it resolves at the deadline as usual. With liquid delegation a few delegates can
+/// settle a proposal in one block, and only the timelock delay remains.
+contract HomebaseDAO is Governor, GovernorSettings, GovernorCountingSimple, GovernorVotes, GovernorVotesQuorumFraction, GovernorTimelockControl, GovernorSuperQuorum {
 constructor(
         IVotes _token,
         TimelockController _timelock,
@@ -52,13 +57,35 @@ constructor(
         return super.quorum(blockNumber);
     }
 
+    /// More than half of all REP, and never less than the quorum, so an early pass is final
+    function superQuorum(uint256 timepoint) public view override returns (uint256) {
+        uint256 majority = token().getPastTotalSupply(timepoint) / 2 + 1;
+        uint256 q = quorum(timepoint);
+        return q > majority ? q : majority;
+    }
+
+    function proposalVotes(uint256 proposalId)
+        public
+        view
+        override(GovernorCountingSimple, GovernorSuperQuorum)
+        returns (uint256 againstVotes, uint256 forVotes, uint256 abstainVotes)
+    {
+        return super.proposalVotes(proposalId);
+    }
+
     function state(uint256 proposalId)
         public
         view
-        override(Governor, GovernorTimelockControl)
+        override(Governor, GovernorTimelockControl, GovernorSuperQuorum)
         returns (ProposalState)
     {
-        return super.state(proposalId);
+        ProposalState s = super.state(proposalId);
+        if (s != ProposalState.Active) return s;
+        // Against holds half of all REP: For can never get ahead
+        (uint256 againstVotes, , ) = proposalVotes(proposalId);
+        uint256 supply = token().getPastTotalSupply(proposalSnapshot(proposalId));
+        if (supply > 0 && againstVotes * 2 >= supply) return ProposalState.Defeated;
+        return s;
     }
 
     function proposalNeedsQueuing(uint256 proposalId)

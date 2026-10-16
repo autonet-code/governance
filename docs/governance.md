@@ -18,7 +18,7 @@ Every governance action follows the same path: **propose, vote, queue, execute**
 
 ## The Governor (`HomebaseDAO`)
 
-`HomebaseDAO` composes these OpenZeppelin extensions with no custom logic beyond the required overrides:
+`HomebaseDAO` composes these OpenZeppelin extensions. Its only custom logic is early decision (step 5 below):
 
 | Extension | Effect |
 |---|---|
@@ -27,6 +27,7 @@ Every governance action follows the same path: **propose, vote, queue, execute**
 | `GovernorVotes` | Voting power from the token's `IVotes` checkpoints |
 | `GovernorVotesQuorumFraction` | Quorum as a percentage of total supply at the snapshot |
 | `GovernorTimelockControl` | Passed proposals are queued in and executed by the Timelock |
+| `GovernorSuperQuorum` | Early success once For reaches `max(quorum, half of supply + 1)`; early defeat (custom) once Against reaches half |
 
 Constructor:
 
@@ -72,6 +73,7 @@ There is no `Expired` state in practice: the OZ `TimelockController` has no grac
 3. **Voting delay.** The snapshot timepoint is `proposal time + votingDelay`. Delegations made during the delay still count.
 4. **Vote.** `castVote`, `castVoteWithReason`, `castVoteWithReasonAndParams`, or `castVoteBySig`. Weight is the voter's votes at the snapshot. Delegation is one hop: a delegate cannot pass received votes on.
 5. **Outcome.** Succeeded if `For > Against` (ties fail) and `For + Abstain >= quorum`, where `quorum = totalSupplyAtSnapshot * qvrm / 100`.
+   **Early decision.** A proposal is decided as soon as its outcome can't change. It is Succeeded before the deadline once For reaches `superQuorum = max(quorum, totalSupplyAtSnapshot / 2 + 1)` (OpenZeppelin `GovernorSuperQuorum`), and Defeated before the deadline once Against reaches half of `totalSupplyAtSnapshot`. Votes cast after that revert. With liquid delegation a few delegates can settle a proposal in one block, leaving only the Timelock delay.
 6. **Queue.** Anyone calls `queue(targets, values, calldatas, keccak256(bytes(description)))`.
 7. **Execute.** After the Timelock's `minDelay`, anyone calls `execute(...)` with the same arguments.
 

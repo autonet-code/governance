@@ -168,8 +168,9 @@ describe("Standard DAO Governance", function () {
         });
 
         it("should count votes correctly", async function () {
-            await dao.connect(member1).castVote(proposalId, 1); // For: 100 tokens
+            // Against first: member1's 100 of 150 For decides the proposal, closing the vote
             await dao.connect(member2).castVote(proposalId, 0); // Against: 50 tokens
+            await dao.connect(member1).castVote(proposalId, 1); // For: 100 tokens
 
             const proposal = await dao.proposalVotes(proposalId);
             expect(proposal.forVotes).to.equal(ethers.parseEther("100"));
