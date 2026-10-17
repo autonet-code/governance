@@ -24,7 +24,7 @@ async function updateFirestoreLocalhost() {
 
   const db = admin.firestore();
 
-  // Localhost configuration for DAO app (werule_new)
+  // Localhost configuration for DAO app (werule)
   const localhostConfig = {
     rpc: 'http://127.0.0.1:8545',
     chainId: deployment.chainId,
