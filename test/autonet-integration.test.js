@@ -10,7 +10,7 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 // that anchors need (and the agent votes the member's weight in governance). The tests share state
 // and run in order.
 
-const { autonet, mintLeaf, anchorArgs } = require("./helpers/autonet");
+const { autonet, mintLeaf, anchorArgs, registerAgent } = require("./helpers/autonet");
 const { createJurisdiction } = require("./helpers/jurisdiction");
 
 describe("Autonet integration (real Substrate and ServiceMarket)", function () {
@@ -100,7 +100,7 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
     });
 
     it("splits the service fee: half to the Registry, half burned, net to the provider", async function () {
-        await substrate.connect(agent).registerAgent(ethers.id("agent-lineage"), "0x1234");
+        await registerAgent(substrate, agent, "0x1234");
         const supplyBefore = await substrate.atnTotalSupply();
         await substrate.connect(buyer).payForService(agent.address, ATN(100), ethers.id("req-1"));
 

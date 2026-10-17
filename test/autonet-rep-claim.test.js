@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-const { autonet, mintLeaf, submitAnchor } = require("./helpers/autonet");
+const { autonet, mintLeaf, submitAnchor, registerAgent } = require("./helpers/autonet");
 
 // AutonetRepClaim: REP as pull claims on autonet earnings (docs/tool_substrate.md
 // "Decision (2026-07-10): fees-only emission + REP-from-earnings"). Reads the two
@@ -76,8 +76,8 @@ describe("AutonetRepClaim", function () {
         repToken = await deployRepToken();
         // No treasury, deployer as vault minter, agentA as the governor that anchors
         substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, agentA.address);
-        await substrate.connect(agentA).registerAgent(ethers.id("a"), "0x01");
-        await substrate.connect(agentB).registerAgent(ethers.id("b"), "0x02");
+        await registerAgent(substrate, agentA, "0x01");
+        await registerAgent(substrate, agentB, "0x02");
 
         // Default: no genesis seed. setMinter happens inside deployClaim.
         claim = await deployClaim([], []);

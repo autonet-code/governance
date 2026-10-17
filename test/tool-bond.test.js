@@ -2,7 +2,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
-const { autonet } = require("./helpers/autonet");
+const { autonet, registerAgent } = require("./helpers/autonet");
 
 // ToolBond against the real Substrate and a RepToken. The deployer is the Substrate's vault minter
 // (to fund accounts with ATN) and the RepToken's admin (to grant the bond slasher rights); a plain
@@ -68,7 +68,7 @@ describe("ToolBond", function () {
             await substrate.getAddress(), await rep.getAddress(), deployer.address, timelock.address, PARAMS);
         await rep.setSlasher(await bond.getAddress(), true);
 
-        await substrate.connect(author).registerAgent(ethers.id("author"), "0x01");
+        await registerAgent(substrate, author, "0x01");
         await substrate.connect(author).registerTool(DIGEST);
         await fund(author, ATN(1000));
         await bond.connect(author).bond(DIGEST, MIN_STAKE);
