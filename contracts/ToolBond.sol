@@ -183,10 +183,12 @@ contract ToolBond {
     event Bonded(bytes32 indexed digest, address indexed author, uint256 amount, uint256 stake);
     event UnbondRequested(bytes32 indexed digest, uint256 availableAt);
     event Unbonded(bytes32 indexed digest, address indexed author, uint256 amount);
-    event EpochStarted(uint256 indexed epoch, bytes32 charterHash, uint256 axes, uint48 snapshot, uint256 supply);
+    event EpochStarted(uint256 indexed epoch, bytes32 charterHash, bytes32[] axisIds, uint48 snapshot, uint256 supply);
     event Committed(uint256 indexed epoch, address indexed agent, uint256 stake, uint256 weight);
     event Reviewed(bytes32 indexed digest, uint256 indexed epoch, address indexed reviewer, bytes scores, uint8 harm,
         uint256 stake, uint256 weight, bytes32 evidenceHash);
+    event ReviewSettled(bytes32 indexed digest, uint256 indexed epoch, address indexed reviewer, uint256 accuracy,
+        uint256 harmAccuracy);
     event Revealed(uint256 indexed epoch, address indexed agent, uint256 reviews, uint256 refunded);
     event Forfeited(uint256 indexed epoch, address indexed agent, uint256 stake, uint256 rep);
     event HarmSettled(bytes32 indexed digest, uint256 indexed epoch, uint256 harm, uint48 appealEnds);
@@ -288,7 +290,8 @@ contract ToolBond {
         return (a.sum, a.mass);
     }
 
-    /// @notice A tool's harm over every finalized round: sum of REP x harm (0..100) and the REP mass.
+    /// @notice A tool's harm over every finalized round: sum of REP x harm (0..100) and the REP mass. A
+    ///         round the DAO overruled counts at the DAO's harm.
     function toolHarm(bytes32 digest) external view returns (uint256 sum, uint256 mass) {
         Axis storage a = _toolHarm[digest];
         return (uint256(int256(a.sum)), a.mass);
@@ -464,8 +467,10 @@ contract ToolBond {
             Axis storage t = _toolAxes[digest][e.axisIds[i]];
             (t.sum, t.mass) = (t.sum + a.sum, t.mass + a.mass);
         }
+        // Harm joins at the settled value, so a DAO overrule is what the tool's harm keeps
         Axis storage h = _toolHarm[digest];
-        (h.sum, h.mass) = (h.sum + int128(int256(r.harmSum)), h.mass + uint128(r.harmMass));
+        uint256 harmSum = r.overruled ? r.settledHarm * 100 * r.harmMass / 1e18 : r.harmSum;
+        (h.sum, h.mass) = (h.sum + int128(int256(harmSum)), h.mass + uint128(r.harmMass));
 
         // Harm slashes the author's bond and REP in proportion
         uint256 slashed;
@@ -534,7 +539,7 @@ contract ToolBond {
             e.axisIds = _axisIds(charter);
             e.axes = uint8(e.axisIds.length);
         }
-        emit EpochStarted(epoch, e.charterHash, e.axes, e.snapshot, e.supply);
+        emit EpochStarted(epoch, e.charterHash, e.axisIds, e.snapshot, e.supply);
     }
 
     /// @dev The charter's axis ids, in order, from its compact JSON: every "id": must be followed by a
@@ -631,9 +636,11 @@ contract ToolBond {
         }
         if (den == 0) {
             v.accuracy = UNINFORMATIVE; // nothing to measure it against: refunded, no gain or loss
+            emit ReviewSettled(digest, epoch, v.reviewer, UNINFORMATIVE, 0);
             return;
         }
         v.accuracy = uint64(num / den);
+        emit ReviewSettled(digest, epoch, v.reviewer, v.accuracy, v.harmAccuracy);
         uint256 keep = _keep(v.stake, v.accuracy);
         r.lossPool += v.stake - keep;
         r.keepSum += keep;

@@ -287,6 +287,10 @@ describe("ToolBond", function () {
             expect(await rep.balanceOf(author.address)).to.equal(REP(400));
             // a1 was wrong on harm by the DAO's ruling
             expect((await bond.reviewOf(DIGEST, epoch, a1.address)).harmAccuracy).to.equal(0);
+            // The tool's harm keeps the DAO's ruling, not the reviewers'
+            const h = await bond.toolHarm(DIGEST);
+            expect(h.mass).to.equal(REP(300));
+            expect(h.sum).to.equal(0);
         });
 
         it("too late to overrule once the appeal window has passed", async function () {
