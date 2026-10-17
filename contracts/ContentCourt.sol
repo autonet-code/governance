@@ -25,7 +25,7 @@ interface IContentCourtRep {
 ///         only labels whose key was bound at `issuedAt`, so every counted label is attributable here.
 ///
 ///         Anyone can contest a (subject, label) pair by opening a case with a deposit. REP holders vote
-///         by commit-reveal, as in ToolBond: the round closes once committed weight reaches `thresholdBps`
+///         by commit-reveal: the round closes once committed weight reaches `thresholdBps`
 ///         of the snapshot supply, the heavier side wins, and payouts wait out the jurisdiction's appeal
 ///         window, during which the DAO can overrule by proposal. While the case is open, anyone can
 ///         submit signed off-chain labels on the pair as evidence. Then:

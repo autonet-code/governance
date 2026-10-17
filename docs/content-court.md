@@ -12,7 +12,7 @@ Labels never touch the chain unless contested.
 
 ## Cases
 
-Anyone contests a pair with `openCase(subject, label, applies)` and exactly `caseDeposit` in native currency. Voting follows [ToolBond](autonet.md#toolbond):
+Anyone contests a pair with `openCase(subject, label, applies)` and exactly `caseDeposit` in native currency. REP holders vote by commit-reveal on a REP snapshot:
 
 | Stage | What happens |
 |-------|--------------|

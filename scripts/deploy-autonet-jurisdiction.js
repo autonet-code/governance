@@ -25,9 +25,9 @@
  *     Test networks: 0 / 120 / 0.
  *   PARITY_TOKENS=0x..,0x..  PARITY_VALUES=<18dp>,<18dp>: vault payment tokens (1 USDC(6d) = 1e30)
  *   CHALLENGE_WINDOW_SECS (3600), CHARTER (JSON text; default the v1 charter from the module metadata), EPOCH_RULES (the metadata's fixed version)
- *   TOOLBOND_MIN_STAKE (100 ATN) TOOLBOND_THRESHOLD_BPS (500) TOOLBOND_REVIEW_WINDOW_SECS (14d)
- *   TOOLBOND_REVEAL_WINDOW_SECS (2d) TOOLBOND_FINDER_BPS (5000) TOOLBOND_DEGRADE_BPS (1000)
- *   TOOLBOND_AUTHOR_SLASH_BPS (10000) TOOLBOND_AUDITOR_SHARE_BPS (4000) TOOLBOND_UNBOND_DELAY_SECS (30d)
+ *   TOOLBOND_MIN_STAKE (100 ATN) TOOLBOND_REVEAL_WINDOW_SECS (1d) TOOLBOND_DEGRADE_BPS (1000)
+ *   TOOLBOND_AUTHOR_SLASH_BPS (10000) TOOLBOND_REVIEWER_SHARE_BPS (4000) TOOLBOND_UNBOND_DELAY_SECS (30d)
+ *   TOOLBOND_HARM_WEIGHT_BPS (20000: harm counts twice a charter axis in a review's accuracy)
  *   TOOLBOND_APPEAL_PERIOD_SECS (10d; never less than one proposal lifecycle plus 2 days)
  */
 
@@ -107,19 +107,14 @@ async function main() {
   console.log(`2. Economy ${economy.module} (installation ${economy.id})`);
 
   // 3. Autonet layer
-  const reviewWindow = envBig("TOOLBOND_REVIEW_WINDOW_SECS", 14 * 86400);
-  const revealWindow = envBig("TOOLBOND_REVEAL_WINDOW_SECS", 2 * 86400);
   const bondParams = {
     minStake: envBig("TOOLBOND_MIN_STAKE", 100_000_000n),
-    thresholdBps: envBig("TOOLBOND_THRESHOLD_BPS", 500),
-    reviewWindow,
-    revealWindow,
-    finderBps: envBig("TOOLBOND_FINDER_BPS", 5000),
+    revealWindow: envBig("TOOLBOND_REVEAL_WINDOW_SECS", 86400),
     degradeBps: envBig("TOOLBOND_DEGRADE_BPS", 1000),
     authorSlashBps: envBig("TOOLBOND_AUTHOR_SLASH_BPS", 10000),
-    // Long enough for a review, a reveal and an appeal
     unbondDelay: envBig("TOOLBOND_UNBOND_DELAY_SECS", 30 * 86400),
-    auditorShareBps: envBig("TOOLBOND_AUDITOR_SHARE_BPS", 4000),
+    reviewerShareBps: envBig("TOOLBOND_REVIEWER_SHARE_BPS", 4000),
+    harmWeightBps: envBig("TOOLBOND_HARM_WEIGHT_BPS", 20000),
     appealPeriod: envBig("TOOLBOND_APPEAL_PERIOD_SECS", 10 * 86400),
   };
   // The current charter, as the module metadata records it

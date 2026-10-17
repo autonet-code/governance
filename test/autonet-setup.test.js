@@ -45,7 +45,8 @@ describe("AutonetSetup", function () {
         expect(await j.registry.getRegistryValue("jurisdiction.autonet.epoch_rules")).to.equal("1");
 
         const bond = await ethers.getContractAt("ToolBond", d.toolBond);
-        expect(await bond.auditorShareBps()).to.equal(4000n);
+        expect(await bond.reviewerShareBps()).to.equal(4000n);
+        expect(await bond.registry()).to.equal(j.core.registry);
         expect(await bond.timelock()).to.equal(j.core.timelock);
         expect(await bond.governor()).to.equal(j.core.governor);
         // Never shorter than one proposal lifecycle plus two days

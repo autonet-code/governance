@@ -17,9 +17,8 @@ const DEFAULTS = {
     },
     autonet: {
         substrate: { challengeWindow: 3600, charter: "", epochRules: "" },
-        toolBond: { minStake: 100_000_000n, thresholdBps: 500, reviewWindow: 14 * DAY, revealWindow: 2 * DAY,
-            finderBps: 5000, degradeBps: 1000, authorSlashBps: 10000, unbondDelay: 30 * DAY, auditorShareBps: 4000,
-            appealPeriod: 120 },
+        toolBond: { minStake: 100_000_000n, revealWindow: DAY, degradeBps: 1000, authorSlashBps: 10000,
+            unbondDelay: 30 * DAY, reviewerShareBps: 4000, appealPeriod: 120, harmWeightBps: 20000 },
     },
 };
 
