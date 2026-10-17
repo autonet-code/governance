@@ -168,7 +168,7 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
     });
 
     it("changes the charter the daemons follow only through a DAO proposal", async function () {
-        const v2 = ethers.id("charter v2");
+        const v2 = '{"axes":[{"id":"correctness","thesis":"v2"},{"id":"simplicity","thesis":"v2"}]}';
         const edit = registry.interface.encodeFunctionData("editRegistry", ["jurisdiction.autonet.charter", v2]);
         await expect(registry.connect(member).editRegistry("jurisdiction.autonet.charter", v2)).to.be.reverted;
         await govern([registryAddr], [edit], "Charter v2");

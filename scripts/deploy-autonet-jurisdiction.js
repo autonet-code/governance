@@ -24,7 +24,7 @@
  *   VOTING_DELAY_SECS (60) VOTING_PERIOD_SECS (604800): whole minutes. TIMELOCK_DELAY_SECS (60).
  *     Test networks: 0 / 120 / 0.
  *   PARITY_TOKENS=0x..,0x..  PARITY_VALUES=<18dp>,<18dp>: vault payment tokens (1 USDC(6d) = 1e30)
- *   CHALLENGE_WINDOW_SECS (3600), CHARTER_HASH CHARTER_URI (the current charter, from the module metadata)
+ *   CHALLENGE_WINDOW_SECS (3600), CHARTER (JSON text; default the v1 charter from the module metadata), EPOCH_RULES (the metadata's fixed version)
  *   TOOLBOND_MIN_STAKE (100 ATN) TOOLBOND_THRESHOLD_BPS (500) TOOLBOND_REVIEW_WINDOW_SECS (14d)
  *   TOOLBOND_REVEAL_WINDOW_SECS (2d) TOOLBOND_FINDER_BPS (5000) TOOLBOND_DEGRADE_BPS (1000)
  *   TOOLBOND_AUTHOR_SLASH_BPS (10000) TOOLBOND_AUDITOR_SHARE_BPS (4000) TOOLBOND_UNBOND_DELAY_SECS (30d)
@@ -123,12 +123,12 @@ async function main() {
     appealPeriod: envBig("TOOLBOND_APPEAL_PERIOD_SECS", 10 * 86400),
   };
   // The current charter, as the module metadata records it
-  const charterFixed = (name) => metadata("autonet", "build").pluginSetup.prepareInstallation.inputs
-    .find((i) => i.name === "substrate").components.find((c) => c.name === name)["x-ui"].fixed;
+  const charterUi = (name) => metadata("autonet", "build").pluginSetup.prepareInstallation.inputs
+    .find((i) => i.name === "substrate").components.find((c) => c.name === name)["x-ui"];
   const autonetParams = {
     challengeWindow: envBig("CHALLENGE_WINDOW_SECS", 3600),
-    charterHash: env("CHARTER_HASH", charterFixed("charterHash")),
-    charterUri: env("CHARTER_URI", charterFixed("charterUri")),
+    charter: env("CHARTER", charterUi("charter").default),
+    epochRules: env("EPOCH_RULES", charterUi("epochRules").fixed),
   };
   const autonet = await prepare(autonetSetup, deployer, core, "autonet",
     { substrate: autonetParams, toolBond: bondParams });
@@ -163,7 +163,7 @@ async function main() {
       installation: Number(autonet.id),
       substrate: d.substrate, vault: d.vault, repClaim: d.repClaim, toolBond: d.toolBond,
       serviceRegistry: d.serviceRegistry, paymentChannel: d.paymentChannel,
-      ventureVaultFactory: d.ventureVaultFactory, charter: d.charterHash, charterUri: d.charterUri,
+      ventureVaultFactory: d.ventureVaultFactory, charter: d.charter, epochRules: d.epochRules,
     },
   };
   const outPath = path.join(__dirname, "..", "deployments", `autonet-jurisdiction-${network.name}.json`);

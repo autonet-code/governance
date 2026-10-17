@@ -12,8 +12,9 @@ import "./ModuleSetup.sol";
 ///         VentureVaultFactory, wired to the jurisdiction's timelock (governor), Registry (treasury)
 ///         and RepToken. Attaching it grants the REP claim minter rights and the bond slasher rights,
 ///         and records the jurisdiction.autonet.* entries the daemon joins a jurisdiction from,
-///         including the charter (jurisdiction.autonet.charter and .charter_uri), which the DAO
-///         changes by proposal like any registry entry.
+///         including the charter (jurisdiction.autonet.charter, its full JSON text) and the epoch
+///         rules version (jurisdiction.autonet.epoch_rules), which the DAO changes by proposal like any
+///         registry entry.
 ///
 ///         The autonet contracts' creation code is stored on-chain as code blobs fixed when this
 ///         contract is deployed, so a preparer chooses parameters but never the code.
@@ -23,8 +24,8 @@ import "./ModuleSetup.sol";
 contract AutonetSetup is ModuleSetup {
     struct AutonetParams {
         uint256 challengeWindow;   // PaymentChannel
-        bytes32 charterHash;       // sha256 of the canonical charter the daemons follow (0 = none recorded)
-        string charterUri;
+        string charter;            // the charter's JSON text the daemons follow ('' = none recorded)
+        string epochRules;         // the epoch math version the daemons must support ('' = none recorded)
     }
 
     struct Deployment {
@@ -35,8 +36,8 @@ contract AutonetSetup is ModuleSetup {
         address serviceRegistry;
         address paymentChannel;
         address ventureVaultFactory;
-        bytes32 charterHash;
-        string charterUri;
+        string charter;
+        string epochRules;
     }
 
     // Code blobs: contracts whose runtime code is 0x00 followed by the creation code
@@ -77,7 +78,7 @@ contract AutonetSetup is ModuleSetup {
         (AutonetParams memory s, ToolBond.Params memory b) = abi.decode(data, (AutonetParams, ToolBond.Params));
         bytes32 salt = bytes32(id);
         Deployment memory d;
-        (d.charterHash, d.charterUri) = (s.charterHash, s.charterUri);
+        (d.charter, d.epochRules) = (s.charter, s.epochRules);
 
         // Substrate(treasury, vaultMinter, governor): the timelock anchors epochs, by DAO proposal
         // needs the vault, and the vault needs the Substrate: compute the Substrate's address first.
@@ -113,18 +114,20 @@ contract AutonetSetup is ModuleSetup {
             "payment_channel", "venture_vault_factory", "rep_token", "dao", "timelock", "registry"];
         address[11] memory a = [d.substrate, d.vault, d.repClaim, d.toolBond, d.serviceRegistry,
             d.paymentChannel, d.ventureVaultFactory, core.token, core.governor, core.timelock, address(core.registry)];
-        bool charter = d.charterHash != bytes32(0);
         string[] memory names = new string[](11);
         address[] memory addrs = new address[](11);
         for (uint256 i = 0; i < 11; i++) (names[i], addrs[i]) = (n[i], a[i]);
         _entries(p, "jurisdiction.autonet.", names, addrs);
-        if (!charter) return;
-        // The charter: hash as 0x + 64 lowercase hex, like the address entries
-        string[] memory keys = new string[](13);
-        string[] memory values = new string[](13);
+        // The charter and the epoch rules version, each recorded only when given
+        bool charter = bytes(d.charter).length > 0;
+        bool rules = bytes(d.epochRules).length > 0;
+        if (!charter && !rules) return;
+        uint256 n2 = 11 + (charter ? 1 : 0) + (rules ? 1 : 0);
+        string[] memory keys = new string[](n2);
+        string[] memory values = new string[](n2);
         for (uint256 i = 0; i < 11; i++) (keys[i], values[i]) = (p.registryKeys[i], p.registryValues[i]);
-        (keys[11], values[11]) = ("jurisdiction.autonet.charter", Strings.toHexString(uint256(d.charterHash), 32));
-        (keys[12], values[12]) = ("jurisdiction.autonet.charter_uri", d.charterUri);
+        if (charter) (keys[11], values[11]) = ("jurisdiction.autonet.charter", d.charter);
+        if (rules) (keys[n2 - 1], values[n2 - 1]) = ("jurisdiction.autonet.epoch_rules", d.epochRules);
         (p.registryKeys, p.registryValues) = (keys, values);
     }
 
