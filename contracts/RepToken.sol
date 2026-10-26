@@ -188,8 +188,8 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     }
 
     function _getPastBalance(address account, uint256 timepoint) internal view returns (uint256) {
-        require(timepoint < block.timestamp, "ERC20: snapshot query for future block");
-        require(timepoint <= type(uint48).max, "RepToken: timepoint exceeds uint48 range");
+        uint48 now_ = clock();
+        if (timepoint >= now_) revert ERC5805FutureLookup(timepoint, now_);
         return _balanceHistory[account].upperLookup(uint48(timepoint));
     }
 
