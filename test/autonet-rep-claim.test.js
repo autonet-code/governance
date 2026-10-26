@@ -203,6 +203,14 @@ describe("AutonetRepClaim", function () {
         await expect(claim.claim(stranger.address)).to.be.revertedWithCustomError(claim, "NotAgent");
     });
 
+    it("a revoked agent can no longer claim, even for earnings made before its revocation", async function () {
+        await earnPool(agentA, 5n * ONE_ATN);
+        await substrate.connect(agentA).revokeAgent(agentA.address, "0x");
+        expect(await substrate.isRegistered(agentA.address)).to.equal(true);
+        expect(await claim.claimable(agentA.address)).to.equal(0);
+        await expect(claim.claim(agentA.address)).to.be.revertedWithCustomError(claim, "NotAgent");
+    });
+
     it("reverts a claim for the zero agent", async function () {
         await expect(claim.claim(ethers.ZeroAddress))
             .to.be.revertedWithCustomError(claim, "ZeroAddress");

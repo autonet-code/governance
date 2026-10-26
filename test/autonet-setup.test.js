@@ -21,7 +21,7 @@ describe("AutonetSetup", function () {
         const parityKey = `jurisdiction.parity.${(await usdc.getAddress()).toLowerCase()}`;
         const j = await createJurisdiction(from, {
             members: [member.address], amounts: [REP(1000)],
-            modules: [["autonet", { substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "1" } }]],
+            modules: [["autonet", { substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "2" } }]],
             keys: [parityKey], values: [(10n ** 30n).toString()],
         });
         return { j, d: await s.setups.autonet.deploymentOf(j.installs.autonet.id) };
@@ -50,7 +50,7 @@ describe("AutonetSetup", function () {
 
         // The charter is a registry entry the DAO changes by proposal
         expect(await j.registry.getRegistryValue("jurisdiction.autonet.charter")).to.equal(CHARTER);
-        expect(await j.registry.getRegistryValue("jurisdiction.autonet.epoch_rules")).to.equal("1");
+        expect(await j.registry.getRegistryValue("jurisdiction.autonet.epoch_rules")).to.equal("2");
 
         const bond = await ethers.getContractAt("ToolBond", d.toolBond);
         expect(await bond.reviewerShareBps()).to.equal(4000n);
