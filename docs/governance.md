@@ -18,7 +18,7 @@ Every governance action follows the same path: **propose, vote, queue, execute**
 
 ## The Governor (`HomebaseDAO`)
 
-`HomebaseDAO` composes these OpenZeppelin extensions. Its only custom logic is early decision (step 5 below):
+`HomebaseDAO` composes these OpenZeppelin extensions. Its custom logic is early decision (step 5 below) and options mode (below):
 
 | Extension | Effect |
 |---|---|
@@ -76,6 +76,10 @@ There is no `Expired` state in practice: the OZ `TimelockController` has no grac
    **Early decision.** A proposal is decided as soon as its outcome can't change. It is Succeeded before the deadline once For reaches `superQuorum = max(quorum, totalSupplyAtSnapshot / 2 + 1)` (OpenZeppelin `GovernorSuperQuorum`), and Defeated before the deadline once Against reaches half of `totalSupplyAtSnapshot`. Votes cast after that revert. With liquid delegation a few delegates can settle a proposal in one block, leaving only the Timelock delay.
 6. **Queue.** Anyone calls `queue(targets, values, calldatas, keccak256(bytes(description)))`.
 7. **Execute.** After the Timelock's `minDelay`, anyone calls `execute(...)` with the same arguments.
+
+### Options mode (single-choice elections)
+
+A proposal whose only target is an approved option source (`IOptionSource`, for example an Autonet AnchorElection) is an election among options the source registers while the proposal is Pending. `castVote(id, i)` votes for option `i` (at most 256 options), one vote per account; the quorum counts every vote cast; the option with the most votes wins and a tie goes to the lowest `optionHash`. `proposalVotes` reports `(0, leading tally, 0)`, so early success needs one option alone at the super quorum, which no other option can then catch. Views: `optionVotes(id, i)`, `winningOption(id)` (decided once Succeeded, Queued or Executed), `optionSourceOf(id)`. Sources are approved by `setOptionSource(source, allowed)`: governance only, except that the factory that launched the DAO may call it until the Timelock makes the governor its proposer, so a module attached at launch can approve its source.
 
 ### Timelock roles
 

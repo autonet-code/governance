@@ -12,10 +12,10 @@ function mintLeaf(agent, amount) {
     return ethers.keccak256(inner);
 }
 
-// The arguments of the next anchor in the chain
+// The arguments of the next anchor in the chain, cut off at the anchoring block
 async function anchorArgs(substrate, epochId, agentMintRoot = ethers.ZeroHash) {
     return [epochId, ethers.id(`root:${epochId}`), await substrate.latestEpochRoot(), await substrate.latestAnchorHash(),
-        `cid:${epochId}`, ethers.ZeroHash, agentMintRoot];
+        `cid:${epochId}`, ethers.ZeroHash, agentMintRoot, (await ethers.provider.getBlock("latest")).timestamp + 1];
 }
 
 // Anchors the next epoch as `governor`, the only address the Substrate accepts anchors from (the DAO

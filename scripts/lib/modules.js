@@ -12,7 +12,7 @@ const ROOT = path.join(__dirname, "..", "..");
 
 // Autonet contracts come from test/fixtures/autonet (synced by scripts/sync-autonet-artifacts.js);
 // ToolBond from this repo's artifacts.
-const AUTONET_BLOBS = ["Substrate", "ServiceRegistry", "PaymentChannel", "VentureVaultFactory"];
+const AUTONET_BLOBS = ["Substrate", "ServiceRegistry", "PaymentChannel", "VentureVaultFactory", "AnchorElection"];
 
 // Creation code that returns everything after its own 10 bytes as the runtime code, behind a 0x00
 // STOP byte so the blob can't be called

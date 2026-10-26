@@ -39,7 +39,7 @@ Detaching is refused while an attached module depends on the one being removed (
 |---|---|---|---|---|---|
 | `economy` | `EconomySetup` | `EconomySetup.Params` | `EconomyRepClaim` (minter) | none | `jurisdiction.economy`, `jurisdiction.economy.rep_claim` |
 | `content_court` | `ContentCourtSetup` | `ContentCourt.Params` | court (slasher) | none | `jurisdiction.content_court.court` ([content-court.md](content-court.md)) |
-| `autonet` | `AutonetSetup` | `(AutonetParams, ToolBond.Params)` | REP claim (minter), ToolBond (slasher) | none | `jurisdiction.autonet.*` ([autonet.md](autonet.md#genesis-autonetsetup)) |
+| `autonet` | `AutonetSetup` | `(AutonetParams, ToolBond.Params)` | REP claim (minter), ToolBond (slasher), AnchorElection (governor option source) | none | `jurisdiction.autonet.*` ([autonet.md](autonet.md#genesis-autonetsetup)) |
 
 The Economy module deploys an `Economy`, configures it, and hands it to the timelock in the same transaction. Its `EconomyRepClaim` mints REP for what members earn and spend in it, at the jurisdiction's parities. RepToken knows nothing about any Economy: reputation comes only from minters the DAO grants and revokes.
 

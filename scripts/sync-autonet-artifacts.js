@@ -15,6 +15,7 @@ const contracts = [
   ["ServiceMarket.sol", "PaymentChannel"],
   ["VentureVault.sol", "VentureVault"],
   ["VentureVault.sol", "VentureVaultFactory"],
+  ["AnchorElection.sol", "AnchorElection"],
 ];
 
 fs.mkdirSync(out, { recursive: true });

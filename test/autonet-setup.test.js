@@ -35,6 +35,14 @@ describe("AutonetSetup", function () {
         expect(await substrate.vaultMinter()).to.equal(d.vault);
         expect(await substrate.treasury()).to.equal(j.core.registry);
         expect(await substrate.governor()).to.equal(j.core.timelock);
+        // Epoch anchors are single-choice elections: the election anchors, and the governor counts its options
+        expect(await substrate.anchorer()).to.equal(d.anchorElection);
+        expect(await j.dao.optionSources(d.anchorElection)).to.equal(true);
+        const election = autonet("AnchorElection", deployer).attach(d.anchorElection);
+        expect(await election.substrate()).to.equal(d.substrate);
+        expect(await election.governor()).to.equal(j.core.governor);
+        expect(await election.repToken()).to.equal(j.core.token);
+        expect(await j.registry.getRegistryValue("jurisdiction.autonet.anchor_election")).to.equal(d.anchorElection.toLowerCase());
 
         expect(await j.rep.minters(d.repClaim)).to.equal(true);
         expect(await j.rep.slashers(d.toolBond)).to.equal(true);
@@ -69,6 +77,7 @@ describe("AutonetSetup", function () {
         const usdc = await (await ethers.getContractFactory("TestERC20")).deploy("USD Coin", "USDC", 6, 0);
         const { d } = await launch(deployer, usdc);
         expect(await autonet("Substrate", deployer).attach(d.substrate).vaultMinter()).to.equal(d.vault);
+        expect(await autonet("Substrate", deployer).attach(d.substrate).anchorer()).to.equal(d.anchorElection);
         expect(await s.setups.autonet.installations()).to.be.greaterThan(1n);
     });
 
