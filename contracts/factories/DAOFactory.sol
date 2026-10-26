@@ -29,7 +29,8 @@ contract DAOFactory {
             minsDelay,
             minsVoting,
             pThreshold,
-            qvrm
+            qvrm,
+            msg.sender
         );
         address daoAddress = address(dao);
         deployedDAOs.push(daoAddress);

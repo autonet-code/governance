@@ -28,14 +28,21 @@ constructor(
         uint48 minsDelay,
         uint32 minsVoting,
         uint256 pThreshold,
-        uint8 qvrm
+        uint8 qvrm,
+        address _launcher
     )
         Governor(name)
         GovernorSettings(minsDelay * 1 minutes, minsVoting * 1 minutes, pThreshold) 
         GovernorVotes(_token)
         GovernorVotesQuorumFraction(qvrm)
         GovernorTimelockControl(_timelock)
-    {}
+    {
+        launcher = _launcher;
+    }
+
+    /// The factory that launched this DAO: it may approve option sources (modules attached at launch)
+    /// until the timelock takes this governor as proposer, and never after
+    address public immutable launcher;
 
     mapping(address => bool) public optionSources;
     mapping(uint256 => address) private _sourceOf;
@@ -46,7 +53,9 @@ constructor(
 
     event OptionSourceSet(address indexed source, bool allowed);
 
-    function setOptionSource(address source, bool allowed) external onlyGovernance {
+    function setOptionSource(address source, bool allowed) external {
+        TimelockController t = TimelockController(payable(timelock()));
+        if (msg.sender != launcher || t.hasRole(t.PROPOSER_ROLE(), address(this))) _checkGovernance();
         optionSources[source] = allowed;
         emit OptionSourceSet(source, allowed);
     }

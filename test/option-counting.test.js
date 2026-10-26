@@ -51,6 +51,21 @@ describe("Option counting", function () {
             .to.be.revertedWithCustomError(gov, "GovernorOnlyExecutor");
     });
 
+    it("the launcher may approve a source only until the governor becomes the timelock's proposer", async function () {
+        const [launcher, other] = await ethers.getSigners();
+        const timelock = await (await ethers.getContractFactory("TimelockController")).deploy(0, [], [], launcher.address);
+        const registry = await (await ethers.getContractFactory("Registry")).deploy(await timelock.getAddress(), launcher.address);
+        const token = await (await ethers.getContractFactory("RepToken")).deploy(
+            "Rep", "REP", await registry.getAddress(), await timelock.getAddress(), [], [], false);
+        const gov = await (await ethers.getContractFactory("HomebaseDAO")).deploy(
+            await token.getAddress(), await timelock.getAddress(), "D", 1, 60, 0, 4, launcher.address);
+        await expect(gov.connect(other).setOptionSource(other.address, true)).to.be.revertedWithCustomError(gov, "GovernorOnlyExecutor");
+        await gov.connect(launcher).setOptionSource(other.address, true);
+        expect(await gov.optionSources(other.address)).to.equal(true);
+        await timelock.grantRole(await timelock.PROPOSER_ROLE(), await gov.getAddress());
+        await expect(gov.connect(launcher).setOptionSource(other.address, false)).to.be.revertedWithCustomError(gov, "GovernorOnlyExecutor");
+    });
+
     it("an unapproved source's proposal counts as For/Against/Abstain", async function () {
         const { gov, id } = await setup({ allow: false });
         expect(await gov.optionSourceOf(id)).to.equal(ethers.ZeroAddress);

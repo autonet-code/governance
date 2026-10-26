@@ -143,7 +143,7 @@ contract JurisdictionFactory {
             if (!_same(c, core)) revert WrongCore();
             for (uint256 k = 0; k < p.install.length; k++) {
                 address target = p.install[k].target;
-                if (target != core.token && target != core.registry) revert ForeignTarget(target);
+                if (target != core.token && target != core.registry && target != core.governor) revert ForeignTarget(target);
                 (bool ok,) = target.call(p.install[k].data);
                 if (!ok) revert ActionFailed(k);
             }
