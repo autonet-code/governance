@@ -29,7 +29,8 @@ describe("AutonetRepClaim", function () {
         await submitAnchor(substrate, agentA, `window-${++epoch}`);
         const id = `epoch-${epoch}`;
         await submitAnchor(substrate, agentA, id, mintLeaf(agent.address, amount));
-        await substrate.connect(agent).recordTrainingForEpoch(amount, ethers.id(id), []);
+        // Anyone submits the claim (the daemon's operator key); the ATN and the earnings go to the leaf's claimant
+        await substrate.connect(stranger).claimFor(agent.address, amount, ethers.id(id), []);
     }
     // Service earnings: the deployer pays the agent; the agent's earnings grow by the net
     async function earnService(agent, gross) {
@@ -99,7 +100,7 @@ describe("AutonetRepClaim", function () {
 
         await expect(claim.claim(agentA.address))
             .to.emit(claim, "RepClaimed")
-            .withArgs(agentA.address, 5n * ONE_ATN, expectedRep);
+            .withArgs(agentA.address, agentA.address, 5n * ONE_ATN, expectedRep);
 
         expect(await repToken.balanceOf(agentA.address)).to.equal(expectedRep);
         expect(await repToken.balanceOf(agentA.address)).to.equal(ethers.parseEther("5"));
@@ -147,7 +148,7 @@ describe("AutonetRepClaim", function () {
 
         await expect(claim.claim(agentA.address))
             .to.emit(claim, "RepClaimed")
-            .withArgs(agentA.address, 4n * ONE_ATN, 4n * ONE_ATN * REP_PER_ATN_BASE);
+            .withArgs(agentA.address, agentA.address, 4n * ONE_ATN, 4n * ONE_ATN * REP_PER_ATN_BASE);
         // Total REP now 2 + 4 = 6.
         expect(await repToken.balanceOf(agentA.address)).to.equal(ethers.parseEther("6"));
         expect(await claim.claimedEarnings(agentA.address)).to.equal(6n * ONE_ATN);
@@ -195,20 +196,46 @@ describe("AutonetRepClaim", function () {
             .to.be.revertedWith("RepToken: Not authorized to mint");
     });
 
-    it("earnings paid to an address that is not a registered agent never become REP", async function () {
-        // e.g. revenue paid to a VentureVault or any other contract
+    it("service revenue paid to an address that is not a registered agent never becomes REP", async function () {
+        // e.g. revenue paid to a contract or a plain wallet
         await earnService(stranger, 10n * ONE_ATN);
         expect(await substrate.serviceEarnings(stranger.address)).to.be.gt(0);
         expect(await claim.claimable(stranger.address)).to.equal(0);
-        await expect(claim.claim(stranger.address)).to.be.revertedWithCustomError(claim, "NotAgent");
+        await expect(claim.claim(stranger.address)).to.be.revertedWithCustomError(claim, "NothingToClaim");
     });
 
-    it("a revoked agent can no longer claim, even for earnings made before its revocation", async function () {
-        await earnPool(agentA, 5n * ONE_ATN);
-        await substrate.connect(agentA).revokeAgent(agentA.address, "0x");
-        expect(await substrate.isRegistered(agentA.address)).to.equal(true);
-        expect(await claim.claimable(agentA.address)).to.equal(0);
-        await expect(claim.claim(agentA.address)).to.be.revertedWithCustomError(claim, "NotAgent");
+    it("a household owner wallet, not an agent, claims the tool-pool earnings a close names it for", async function () {
+        expect(await substrate.isRegistered(gen1.address)).to.equal(false);
+        await earnPool(gen1, 6n * ONE_ATN);
+        expect(await claim.recipientOf(gen1.address)).to.equal(gen1.address);
+        await expect(claim.claim(gen1.address))
+            .to.emit(claim, "RepClaimed")
+            .withArgs(gen1.address, gen1.address, 6n * ONE_ATN, ethers.parseEther("6"));
+        expect(await repToken.getVotes(gen1.address)).to.equal(ethers.parseEther("6"));
+        // The owner hands its votes to its daemon's operator key, and later claims keep that choice
+        await repToken.connect(gen1).delegate(agentA.address);
+        await earnPool(gen1, 1n * ONE_ATN);
+        await claim.claim(gen1.address);
+        expect(await repToken.getVotes(agentA.address)).to.equal(ethers.parseEther("7"));
+    });
+
+    it("an agent's service revenue mints to its owner wallet, also after the agent is revoked", async function () {
+        const [, , , , , , , serving] = await ethers.getSigners();
+        await registerAgent(substrate, serving, "0x03", gen2);
+        await earnService(serving, 4n * ONE_ATN); // 3.9 ATN net
+        expect(await claim.recipientOf(serving.address)).to.equal(gen2.address);
+        await claim.claim(serving.address);
+        expect(await repToken.balanceOf(gen2.address)).to.equal(ethers.parseEther("3.9"));
+
+        // Revoked: the key gets no governance weight, the household still gets the work's REP
+        await substrate.connect(gen2).revokeAgent(serving.address, "0x");
+        expect(await substrate.isLive(serving.address)).to.equal(false);
+        await earnService(serving, 2n * ONE_ATN); // already paid before the revocation reached the payer
+        await expect(claim.claim(serving.address))
+            .to.emit(claim, "RepClaimed")
+            .withArgs(serving.address, gen2.address, 1_950_000n, ethers.parseEther("1.95"));
+        expect(await repToken.balanceOf(serving.address)).to.equal(0);
+        expect(await repToken.balanceOf(gen2.address)).to.equal(ethers.parseEther("5.85"));
     });
 
     it("reverts a claim for the zero agent", async function () {

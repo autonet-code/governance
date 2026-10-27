@@ -7,16 +7,18 @@ pragma solidity ^0.8.20;
 ///         longer mints reputation; instead it exposes two CUMULATIVE, MONOTONIC
 ///         per-recipient earnings ledgers, both denominated in ATN base units
 ///         (ATN * 1e6 — Substrate deliberately has NO decimals()):
-///           - agentMintTotal(agent)  : tool-pool distributions (merkle-ratified
-///                                       via recordTrainingForEpoch; only `+=`).
-///           - serviceEarnings(agent) : net service revenue counter, bumped by
-///                                       payForService; only `+=`.
+///           - agentMintTotal(claimant) : tool-pool distributions to household
+///                                       owner wallets (merkle-ratified via
+///                                       claimFor; only `+=`).
+///           - serviceEarnings(agent)   : net service revenue counter of a serving
+///                                       agent, bumped by payForService; only `+=`.
 ///         REP is a pull claim on the SUM of these — "voice is always work-backed".
 ///         Pure spenders/buyers appear in neither ledger and claim NOTHING.
 interface ISubstrateEarnings {
     function agentMintTotal(address agent) external view returns (uint256);
     function serviceEarnings(address agent) external view returns (uint256);
-    function isLive(address agent) external view returns (bool);
+    function isRegistered(address agent) external view returns (bool);
+    function getAgentOwner(address agent) external view returns (address);
 }
 
 /// @notice Minimal mint surface of RepToken this rail needs. RepToken.mint is
@@ -49,11 +51,21 @@ interface IMintableRepToken {
 ///         governance ships a forward-only change. NO admin, NO pause, NO rate.
 ///
 ///         Flow:
-///           claim(agent) — permissionless trigger; reads the agent's cumulative
-///                          earnings base (agentMintTotal + serviceEarnings),
-///                          subtracts the stored per-agent watermark, mints the
-///                          delta 1:1 (whole-token) as REP TO THE AGENT, advances
+///           claim(x)     — permissionless trigger; reads x's cumulative earnings
+///                          base, subtracts x's stored watermark, mints the delta
+///                          1:1 (whole-token) as REP to recipientOf(x), advances
 ///                          the watermark. Zero delta reverts (NothingToClaim).
+///
+///         Who receives (Decision 2026-10-27, "the owner wallet claims, the daemon
+///         operates"): REP goes to households, never to agent keys. A registered
+///         agent's earnings (its service revenue, and any tool-pool leaf naming
+///         it) mint to its owner wallet, revoked or not: revocation means the key
+///         is lost or misbehaving, so it gets no governance weight, while the work
+///         it did still counts for its household. Any other address is a
+///         household owner wallet and claims its own tool-pool earnings, which
+///         only a ratified close can name. Service revenue paid to an address
+///         that is not an agent earns no REP: it would otherwise become REP that
+///         nobody can use but that still counts toward the supply and quorum.
 ///
 ///         Anti-double-count: the watermark is the cursor over a MONOTONIC base.
 ///         Pending grows only by newly-earned ATN, never re-counting old; any
@@ -95,20 +107,18 @@ contract AutonetRepClaim {
     uint256 public constant REP_DECIMALS = 1e18;
     uint256 public constant REP_PER_ATN_BASE = REP_DECIMALS / ATN_BASE; // == 1e12
 
-    /// @dev agent => cumulative earnings base (ATN base units) already claimed.
-    ///      The per-agent watermark over the monotonic (agentMintTotal +
-    ///      serviceEarnings) base. Double-count is impossible: each claim mints
+    /// @dev earner => cumulative earnings base (ATN base units) already claimed.
+    ///      The per-earner watermark over its monotonic earnings base. Double-count is impossible: each claim mints
     ///      only (base - watermark) and advances the watermark to base.
     mapping(address => uint256) public claimedEarnings;
 
     /// @notice Emitted per successful claim. `earningsDelta` is in ATN base units;
     ///         `repMinted` is in 18-decimal REP (earningsDelta * 1e12).
-    event RepClaimed(address indexed agent, uint256 earningsDelta, uint256 repMinted);
+    event RepClaimed(address indexed earner, address indexed to, uint256 earningsDelta, uint256 repMinted);
 
     error ZeroAddress();
     error LengthMismatch();
     error NothingToClaim();
-    error NotAgent();
 
     /// @param _substrate       autonet Substrate.sol address (earnings source).
     /// @param _repToken        RepToken address (mint target). This contract must
@@ -151,49 +161,53 @@ contract AutonetRepClaim {
         }
     }
 
-    /// @notice The cumulative earnings base for an agent, in ATN base units:
-    ///         tool-pool distributions + net service revenue. Both source ledgers
-    ///         are monotonic, so this sum is monotonic.
-    function earningsBase(address agent) public view returns (uint256) {
-        return substrate.agentMintTotal(agent) + substrate.serviceEarnings(agent);
+    /// @notice The cumulative earnings base of `earner`, in ATN base units: its
+    ///         tool-pool distributions, plus its net service revenue when it is a
+    ///         registered agent. Both ledgers are monotonic and registration is
+    ///         permanent, so this sum is monotonic.
+    function earningsBase(address earner) public view returns (uint256) {
+        uint256 base = substrate.agentMintTotal(earner);
+        if (substrate.isRegistered(earner)) base += substrate.serviceEarnings(earner);
+        return base;
     }
 
-    /// @notice The REP an agent could mint right now (18-decimal), = the unclaimed
-    ///         ATN-base delta scaled by 1e12. Zero if nothing new was earned.
-    function claimable(address agent) external view returns (uint256) {
-        if (!substrate.isLive(agent)) return 0;
-        uint256 base = earningsBase(agent);
-        uint256 watermark = claimedEarnings[agent];
+    /// @notice Where `earner`'s REP mints: a registered agent's owner wallet, else
+    ///         the earner itself (a household owner wallet).
+    function recipientOf(address earner) public view returns (address) {
+        if (!substrate.isRegistered(earner)) return earner;
+        address owner = substrate.getAgentOwner(earner);
+        return owner == address(0) ? earner : owner;
+    }
+
+    /// @notice The REP `earner`'s earnings could mint right now (18-decimal), = the
+    ///         unclaimed ATN-base delta scaled by 1e12. Zero if nothing new was earned.
+    function claimable(address earner) external view returns (uint256) {
+        uint256 base = earningsBase(earner);
+        uint256 watermark = claimedEarnings[earner];
         if (base <= watermark) return 0;
         return (base - watermark) * REP_PER_ATN_BASE;
     }
 
-    /// @notice Mint an agent's unclaimed REP 1:1 (whole-token) and advance its
-    ///         watermark. Permissionless trigger — anyone may call claim FOR an
-    ///         agent; REP always mints to the AGENT, never the caller (mirrors the
-    ///         economy pull convention where tokens go to the subject).
-    ///         Reverts NothingToClaim on a zero delta (matches the economy's
-    ///         "no-op" pull convention as an explicit revert, per this repo's
-    ///         ReputationMirror.claim style).
-    ///         Only registered Substrate agents can claim: earnings paid to any
-    ///         other address (a VentureVault, a payment router) would otherwise
-    ///         become REP that nobody can use but that still counts toward the
-    ///         supply and quorum.
-    function claim(address agent) external {
-        if (agent == address(0)) revert ZeroAddress();
-        if (!substrate.isLive(agent)) revert NotAgent();
+    /// @notice Mint `earner`'s unclaimed REP 1:1 (whole-token) to recipientOf(earner)
+    ///         and advance its watermark. Permissionless trigger: anyone may call
+    ///         claim for any earner; REP never mints to the caller.
+    ///         Reverts NothingToClaim on a zero delta.
+    function claim(address earner) external {
+        if (earner == address(0)) revert ZeroAddress();
 
-        uint256 base = earningsBase(agent);
-        uint256 watermark = claimedEarnings[agent];
+        uint256 base = earningsBase(earner);
+        uint256 watermark = claimedEarnings[earner];
         if (base <= watermark) revert NothingToClaim();
 
         uint256 earningsDelta = base - watermark;      // ATN base units
         uint256 repMinted = earningsDelta * REP_PER_ATN_BASE; // 18-decimal REP
+        address to = recipientOf(earner);
 
-        claimedEarnings[agent] = base;
-        // The agent votes its own REP (it signs Substrate anchors with it) unless it already chose a delegate
-        repToken.mintDelegated(agent, repMinted);
+        claimedEarnings[earner] = base;
+        // The household votes its own REP unless it already chose a delegate (typically its
+        // daemon's operator key, which is drawn for and votes in anchor elections)
+        repToken.mintDelegated(to, repMinted);
 
-        emit RepClaimed(agent, earningsDelta, repMinted);
+        emit RepClaimed(earner, to, earningsDelta, repMinted);
     }
 }

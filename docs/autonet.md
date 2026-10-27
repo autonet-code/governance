@@ -68,15 +68,16 @@ Trust assumptions:
 
 ## AutonetRepClaim
 
-`contracts/AutonetRepClaim.sol`. REP as a pull claim on ATN an agent provably earned ("voice is always work-backed").
+`contracts/AutonetRepClaim.sol`. REP as a pull claim on ATN provably earned ("voice is always work-backed"). REP goes to households, never to agent keys (autonet decision 2026-10-27, "the owner wallet claims, the daemon operates").
 
-- Earnings base per agent: `substrate.agentMintTotal(agent) + substrate.serviceEarnings(agent)`, both cumulative and monotonic on the Substrate, in ATN base units (1 ATN = 1e6).
-- `claim(agent)`: permissionless trigger. Mints `(base - watermark) * 1e12` REP **to the agent** (never the caller) with `RepToken.mintDelegated`, so the agent votes its own REP (and signs Substrate anchors with it) unless it already chose a delegate, and advances the watermark. Reverts `NothingToClaim` on zero delta. Emits `RepClaimed(agent, earningsDelta, repMinted)`.
-- `claimable(agent)`, `earningsBase(agent)`: views.
+- Earnings base per earner, in ATN base units (1 ATN = 1e6), cumulative and monotonic: `substrate.agentMintTotal(earner)` (tool-pool leaves, which since autonet `bab7712` name household owner wallets and are submitted by anyone with `Substrate.claimFor`), plus `substrate.serviceEarnings(earner)` when the earner is a registered agent.
+- `recipientOf(earner)`: a registered agent's owner wallet, else the earner itself.
+- `claim(earner)`: permissionless trigger. Mints `(base - watermark) * 1e12` REP to `recipientOf(earner)` (never the caller) with `RepToken.mintDelegated`, so the household votes its own REP unless it already chose a delegate (typically its daemon's operator key, which is drawn for and votes in anchor elections), and advances the earner's watermark. Reverts `NothingToClaim` on zero delta. Emits `RepClaimed(earner, to, earningsDelta, repMinted)`.
+- `claimable(earner)`, `earningsBase(earner)`: views.
 - Constants: `ATN_BASE = 1e6`, `REP_DECIMALS = 1e18`, `REP_PER_ATN_BASE = 1e12`. Hardcoded 1:1 in whole tokens; no rate knob, no admin, no pause.
 - Constructor optionally mints a genesis REP seed (`genesisHolders`, `genesisAmounts`). That requires the contract to already be a minter, so in practice pass an empty seed and mint the seed by proposal (the Shadownet flag-day proposal minted `1000e18` to a dev wallet).
 
-Only live Substrate agents can claim (`NotAgent` otherwise; an agent revoked by its owner, or under a revoked ancestor, can no longer claim): earnings paid to other addresses, such as a VentureVault, never become REP.
+A revoked agent's earnings still mint to its owner: revocation means the key is lost or misbehaving, so the key gets no governance weight, while the work it did counts for its household (a revoked agent can't rotate its owner). Service revenue paid to an address that is not a registered agent never becomes REP.
 
 Trust assumptions: the Substrate's earnings ledgers are honest and monotonic; RepToken grants this contract minter rights. Since autonet `69b5cfe` an epoch is anchored by its AnchorElection: one single-choice proposal per epoch (`docs/governance.md`, options mode), whose winning option the election submits to `Substrate.anchor`. The timelock remains the Substrate's governor, and an epoch can mint at most the service fees burned in the window before it. Proposals are decided as soon as the outcome can't change (docs/governance.md), so an anchor backed by a majority of delegated REP passes in one block plus the timelock delay. Delegating REP to an agent hands it that weight. There is no baseline: an agent's first claim covers all earnings recorded on the Substrate up to that point.
 

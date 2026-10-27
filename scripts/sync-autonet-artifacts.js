@@ -20,6 +20,11 @@ const contracts = [
 
 fs.mkdirSync(out, { recursive: true });
 for (const [file, name] of contracts) {
+  // A contract autonet has removed keeps its last synced fixture
+  if (!fs.existsSync(path.join(autonet, "contracts", "core", file))) {
+    console.log(`  ${name}: gone from autonet, fixture kept`);
+    continue;
+  }
   const a = JSON.parse(fs.readFileSync(path.join(autonet, "artifacts", "contracts", "core", file, `${name}.json`), "utf8"));
   fs.writeFileSync(path.join(out, `${name}.json`), JSON.stringify({ contractName: name, abi: a.abi, bytecode: a.bytecode }));
   console.log(`  ${name}`);

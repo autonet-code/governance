@@ -94,9 +94,9 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
 
         expect(await substrate.balanceOf(buyer.address)).to.equal(ATN(1000));
         expect(await usdc.balanceOf(registryAddr)).to.equal(USDC(500));
-        // Bought ATN is money, not earnings: no REP claim (and the buyer is no agent)
+        // Bought ATN is money, not earnings: no REP claim
         expect(await repClaim.earningsBase(buyer.address)).to.equal(0);
-        await expect(repClaim.claim(buyer.address)).to.be.revertedWithCustomError(repClaim, "NotAgent");
+        await expect(repClaim.claim(buyer.address)).to.be.revertedWithCustomError(repClaim, "NothingToClaim");
     });
 
     it("splits the service fee: half to the Registry, half burned, net to the provider", async function () {
@@ -128,7 +128,7 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
         // The 1.25 ATN burned by the service payment is the first window; the next anchor's pool
         await anchorByProposal("epoch-0");
         await anchorByProposal("epoch-1", mintLeaf(agent.address, ATN(1)));
-        await substrate.connect(agent).recordTrainingForEpoch(ATN(1), ethers.id("epoch-1"), []);
+        await substrate.connect(outsider).claimFor(agent.address, ATN(1), ethers.id("epoch-1"), []);
         expect(await substrate.agentMintTotal(agent.address)).to.equal(ATN(1));
 
         await repClaim.claim(agent.address);
@@ -138,7 +138,7 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
     it("refuses to mint more than the epoch's pool even when the signed root allows it", async function () {
         // No fees burned since epoch-1, so epoch-2's pool is empty
         await anchorByProposal("epoch-2", mintLeaf(agent.address, ATN(1)));
-        await expect(substrate.connect(agent).recordTrainingForEpoch(ATN(1), ethers.id("epoch-2"), []))
+        await expect(substrate.claimFor(agent.address, ATN(1), ethers.id("epoch-2"), []))
             .to.be.revertedWithCustomError(substrate, "EpochPoolExceeded");
     });
 

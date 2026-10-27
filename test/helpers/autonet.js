@@ -24,9 +24,9 @@ async function submitAnchor(substrate, governor, epochId, agentMintRoot = ethers
     return substrate.connect(governor).anchor(...(await anchorArgs(substrate, epochId, agentMintRoot)));
 }
 
-// Registers `agent` on the Substrate, self-owned and without a parent: the owner signs the
-// EIP-712 OwnerBinding{agent, parent, nonce}
-async function registerAgent(substrate, agent, peerId = "0x01") {
+// Registers `agent` on the Substrate without a parent, bound to `owner` (self-owned by default):
+// the owner signs the EIP-712 OwnerBinding{agent, parent, nonce}
+async function registerAgent(substrate, agent, peerId = "0x01", owner = agent) {
     const domain = {
         name: "AutonetSubstrate", version: "1",
         chainId: (await ethers.provider.getNetwork()).chainId,
@@ -35,8 +35,8 @@ async function registerAgent(substrate, agent, peerId = "0x01") {
     const types = { OwnerBinding: [
         { name: "agent", type: "address" }, { name: "parent", type: "address" }, { name: "nonce", type: "uint256" }] };
     const binding = { agent: agent.address, parent: ethers.ZeroAddress, nonce: await substrate.bindingNonce(agent.address) };
-    const sig = await agent.signTypedData(domain, types, binding);
-    return substrate.connect(agent).registerAgentBound(peerId, agent.address, ethers.ZeroAddress, sig);
+    const sig = await owner.signTypedData(domain, types, binding);
+    return substrate.connect(agent).registerAgentBound(peerId, owner.address, ethers.ZeroAddress, sig);
 }
 
 module.exports = { autonet, mintLeaf, anchorArgs, submitAnchor, registerAgent };

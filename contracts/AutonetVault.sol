@@ -17,7 +17,7 @@ import {Registry} from "./Registry.sol";
  * Kept deliberately tiny (one function) so the autonet side has a small,
  * unambiguous surface to add. `mintFromVault` mints `amount` base units of the
  * network ATN token (which is 1e6-scaled — see DECIMALS note below) to `to`.
- * Substrate today has NO admin mint (only `recordTrainingForEpoch`); adding
+ * Substrate today has NO admin mint (only `claimFor`); adding
  * `mintFromVault`, gated to the vault address, is the autonet-side change this
  * interface pins.
  */
