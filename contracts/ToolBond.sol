@@ -29,6 +29,7 @@ interface IToolBondSubstrate {
     function anchorCount() external view returns (uint256);
     function getAnchor(uint256 index) external view returns (Anchor memory);
     function deployedAt() external view returns (uint256);
+    function getAgentOwner(address agent) external view returns (address);
 }
 
 /// @notice The parts of the jurisdiction RepToken the settlements need: snapshots and slashing.
@@ -57,8 +58,12 @@ interface IToolBondRegistry {
 ///         Reviews follow the Substrate's epochs: epoch e runs from anchor e-1 (or the Substrate's
 ///         deployment) to anchor e. During the epoch each agent commits once, with an ATN stake of any
 ///         size, to a hidden batch of reviews; after anchor e the batch is revealed, by the agent or
-///         by anyone holding its plaintext, within `revealWindow`. A review weighs the reviewer's REP
-///         at the epoch's start. Each tool's reviews in an epoch form a round, which settles against
+///         by anyone holding its plaintext, within `revealWindow`. REP sits with households (an agent's
+///         owner wallet, autonet decision 2026-10-27), so a review weighs its household's REP at the
+///         epoch's start, once per tool and epoch: the household's agent that committed first carries
+///         it and later ones review at zero weight. Commits are hidden, so their order says nothing
+///         about the reviews, and the order of reveals can't pick which review counts. REP lost or won
+///         by a review moves on the household's balance. Each tool's reviews in an epoch form a round, which settles against
 ///         its own REP-weighted means:
 ///
 ///         - Accuracy: how close a review lands to the means, harm weighing `harmWeightBps` against a
@@ -179,6 +184,13 @@ contract ToolBond {
     mapping(bytes32 => mapping(uint256 => mapping(address => uint256))) private _reviewIndex; // index + 1
     mapping(bytes32 => mapping(bytes32 => Axis)) private _toolAxes;
     mapping(bytes32 => Axis) private _toolHarm;
+    struct Committer {
+        address household;         // the owner wallet whose REP the batch weighs, read at commit
+        uint32 seq;                // commit order in the epoch, from 1
+    }
+    mapping(uint256 => mapping(address => Committer)) private _committers;
+    mapping(uint256 => uint32) private _commitCount;
+    mapping(bytes32 => mapping(uint256 => mapping(address => uint256))) private _householdReview; // index + 1
 
     event Bonded(bytes32 indexed digest, address indexed author, uint256 amount, uint256 stake);
     event UnbondRequested(bytes32 indexed digest, uint256 availableAt);
@@ -190,6 +202,8 @@ contract ToolBond {
     event ReviewSettled(bytes32 indexed digest, uint256 indexed epoch, address indexed reviewer, uint256 accuracy,
         uint256 harmAccuracy);
     event Revealed(uint256 indexed epoch, address indexed agent, uint256 reviews, uint256 refunded);
+    /// @notice A review lost its household's weight to one from the household's earlier commit.
+    event ReviewUnweighted(bytes32 indexed digest, uint256 indexed epoch, address indexed reviewer);
     event Forfeited(uint256 indexed epoch, address indexed agent, uint256 stake, uint256 rep);
     event HarmSettled(bytes32 indexed digest, uint256 indexed epoch, uint256 harm, uint48 appealEnds);
     event Overruled(bytes32 indexed digest, uint256 indexed epoch, uint256 harm);
@@ -307,6 +321,11 @@ contract ToolBond {
     }
 
     /// @notice The commitment an agent submits for its epoch's batch: hides the reviews until reveal.
+    /// @notice The household an agent's batch in `epoch` weighs (its owner wallet when it committed).
+    function householdOf(uint256 epoch, address agent) public view returns (address) {
+        return _committers[epoch][agent].household;
+    }
+
     function commitmentOf(uint256 epoch, address agent, ReviewInput[] calldata reviews, bytes32 salt)
         public pure returns (bytes32)
     {
@@ -358,7 +377,7 @@ contract ToolBond {
     // ── Reviews ──────────────────────────────────────────────────────────────
 
     /// @notice Commit this epoch's hidden batch of reviews, staking `stake` ATN (approve this contract
-    ///         first). Once per agent per epoch; needs REP at the epoch's start or a stake.
+    ///         first). Once per agent per epoch; needs its household's REP at the epoch's start or a stake.
     function commit(bytes32 commitment, uint256 stake) external {
         uint256 epoch = currentEpoch();
         Epoch storage e = _epochs[epoch];
@@ -366,8 +385,10 @@ contract ToolBond {
         Commit storage c = commits[epoch][msg.sender];
         if (c.commitment != 0) revert AlreadyCommitted();
         if (commitment == 0) revert BadReveal();
-        uint256 weight = rep.getPastBalance(msg.sender, e.snapshot);
+        address household = _household(msg.sender);
+        uint256 weight = rep.getPastBalance(household, e.snapshot);
         if (weight == 0 && stake == 0) revert NoWeight();
+        _committers[epoch][msg.sender] = Committer(household, ++_commitCount[epoch]);
         c.commitment = commitment;
         c.stake = uint128(stake);
         c.weight = uint128(weight);
@@ -403,14 +424,14 @@ contract ToolBond {
     }
 
     /// @notice A batch not revealed in time loses its whole stake to the treasury and degradeBps of
-    ///         the agent's REP at the epoch's start. Anyone can enforce it.
+    ///         its household's REP at the epoch's start. Anyone can enforce it.
     function forfeit(uint256 epoch, address agent) external {
         uint256 ends = revealEnds(epoch);
         if (ends == 0 || block.timestamp <= ends) revert TooEarly();
         Commit storage c = commits[epoch][agent];
         if (c.commitment == 0 || c.revealed || c.forfeited) revert WrongStage();
         c.forfeited = true;
-        uint256 burned = c.weight > 0 ? rep.slash(agent, uint256(c.weight) * degradeBps / BPS) : 0;
+        uint256 burned = c.weight > 0 ? rep.slash(householdOf(epoch, agent), uint256(c.weight) * degradeBps / BPS) : 0;
         if (c.stake > 0) substrate.transfer(address(registry), c.stake);
         emit Forfeited(epoch, agent, c.stake, burned);
     }
@@ -478,7 +499,9 @@ contract ToolBond {
             Bond storage b = bonds[digest];
             slashed = b.stake * r.settledHarm / 1e18;
             b.stake -= slashed;
-            r.repPool += rep.slash(b.author, rep.balanceOf(b.author) * authorSlashBps / BPS * r.settledHarm / 1e18);
+            address authorHousehold = _household(b.author);
+            r.repPool += rep.slash(authorHousehold,
+                rep.balanceOf(authorHousehold) * authorSlashBps / BPS * r.settledHarm / 1e18);
             if (r.harmWin == 0) {
                 if (slashed > 0) substrate.transfer(address(registry), slashed);
             } else {
@@ -520,7 +543,7 @@ contract ToolBond {
         if (refund > 0) substrate.transfer(reviewer, refund);
         // Through the service rail, so the winnings count as the reviewer's earnings
         if (winnings > 0) substrate.payForService(reviewer, winnings, digest);
-        if (repShare > 0) rep.reassign(reviewer, repShare);
+        if (repShare > 0) rep.reassign(householdOf(epoch, reviewer), repShare);
         emit Claimed(digest, epoch, reviewer, refund, winnings, repShare);
     }
 
@@ -575,7 +598,9 @@ contract ToolBond {
         private returns (bool)
     {
         Bond storage b = bonds[ri.digest];
-        if (b.stake == 0 || b.author == agent) return false;
+        address household = householdOf(epoch, agent);
+        // No household reviews its own tool
+        if (b.stake == 0 || b.author == agent || _household(b.author) == household) return false;
         if (_reviewIndex[ri.digest][epoch][agent] != 0) return false;
         if (ri.scores.length != 0 && ri.scores.length != axes) return false;
         if (ri.harm > 100 && ri.harm != NO_HARM) return false;
@@ -589,6 +614,17 @@ contract ToolBond {
             r.stage = Stage.Open;
             b.pending++;
         }
+        // One weight per household: the review from its earliest commit carries it
+        uint256 held = _householdReview[ri.digest][epoch][household];
+        if (weight > 0 && held != 0) {
+            Review storage prior = r.reviews[held - 1];
+            if (_committers[epoch][agent].seq < _committers[epoch][prior.reviewer].seq) {
+                _unweigh(ri.digest, epoch, r, prior, axes);
+            } else {
+                weight = 0;
+            }
+        }
+        if (weight > 0) _householdReview[ri.digest][epoch][household] = r.reviews.length + 1;
         for (uint256 i = 0; i < ri.scores.length; i++) {
             int8 s = int8(uint8(ri.scores[i]));
             if (s == NO_SCORE || weight == 0) continue;
@@ -609,6 +645,30 @@ contract ToolBond {
         _reviewIndex[ri.digest][epoch][agent] = r.reviews.length;
         emit Reviewed(ri.digest, epoch, agent, ri.scores, ri.harm, ri.stake, weight, ri.evidenceHash);
         return true;
+    }
+
+    /// @dev Takes a review's weight back out of its round's means.
+    function _unweigh(bytes32 digest, uint256 epoch, Round storage r, Review storage v, uint8 axes) private {
+        uint256 w = v.weight;
+        for (uint256 i = 0; i < axes; i++) {
+            int8 s = int8(uint8(v.scores[i]));
+            if (s == NO_SCORE) continue;
+            Axis storage a = _roundAxes[digest][epoch][i];
+            (a.sum, a.mass) = (a.sum - int128(int256(w) * s), a.mass - uint128(w));
+        }
+        if (v.harm != NO_HARM) {
+            r.harmSum -= w * v.harm;
+            r.harmMass -= w;
+        }
+        r.weight -= w;
+        v.weight = 0;
+        emit ReviewUnweighted(digest, epoch, v.reviewer);
+    }
+
+    /// @dev An address's household: its owner wallet when it is a bound Substrate agent, else itself.
+    function _household(address a) private view returns (address) {
+        address owner = substrate.getAgentOwner(a);
+        return owner == address(0) ? a : owner;
     }
 
     /// @dev One review's accuracy against the round's means, and its losses into the round's pools.
@@ -645,7 +705,7 @@ contract ToolBond {
         r.lossPool += v.stake - keep;
         r.keepSum += keep;
         if (v.weight > 0) {
-            r.repPool += rep.slash(v.reviewer, uint256(v.weight) * degradeBps / BPS * (1e18 - v.accuracy) / 1e18);
+            r.repPool += rep.slash(householdOf(epoch, v.reviewer), uint256(v.weight) * degradeBps / BPS * (1e18 - v.accuracy) / 1e18);
             r.repWin += uint256(v.weight) * v.accuracy / 1e18;
         }
     }

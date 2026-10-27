@@ -349,6 +349,99 @@ describe("ToolBond", function () {
         });
     });
 
+    // REP sits on owner wallets: a1 (300 REP) is a household whose agents h1 and h2 hold none
+    describe("households", function () {
+        let h1, h2, h3;
+        beforeEach(async function () {
+            [h1, h2, h3] = (await ethers.getSigners()).slice(7, 10);
+            await registerAgent(substrate, h1, "0x11", a1);
+            await registerAgent(substrate, h2, "0x12", a1);
+            for (const s of [h1, h2, h3]) await fund(s, ATN(200));
+        });
+
+        it("an agent's review weighs its owner's REP at the epoch's start", async function () {
+            const epoch = await commit(h1, [review(scores(50, 50), 0, 0)]);
+            expect((await bond.commits(epoch, h1.address)).weight).to.equal(REP(300));
+            expect(await bond.householdOf(epoch, h1.address)).to.equal(a1.address);
+            await anchor();
+            await reveal(h1, epoch);
+            expect((await bond.reviewOf(DIGEST, epoch, h1.address)).weight).to.equal(REP(300));
+            expect((await bond.getRound(DIGEST, epoch)).weight).to.equal(REP(300));
+        });
+
+        it("a household weighs once per tool: its earliest commit carries it, whatever the reveal order", async function () {
+            const epoch = await commit(h1, [review(scores(50, 50), 0, ATN(10))]);
+            await commit(h2, [review(scores(-50, -50), 100, ATN(10))]);
+            await commit(a2, [review(scores(50, 50), 0, ATN(10))]);
+            await anchor();
+            await reveal(h2, epoch); // weighs at first
+            expect((await bond.reviewOf(DIGEST, epoch, h2.address)).weight).to.equal(REP(300));
+            await expect(reveal(h1, epoch)).to.emit(bond, "ReviewUnweighted").withArgs(DIGEST, epoch, h2.address);
+            await reveal(a2, epoch);
+
+            expect((await bond.reviewOf(DIGEST, epoch, h1.address)).weight).to.equal(REP(300));
+            expect((await bond.reviewOf(DIGEST, epoch, h2.address)).weight).to.equal(0);
+            const r = await bond.getRound(DIGEST, epoch);
+            expect(r.weight).to.equal(REP(500));
+            expect(r.harmMass).to.equal(REP(500));
+            expect(r.harmSum).to.equal(0); // h2's harm score left with its weight
+            const axis = await bond.roundAxis(DIGEST, epoch, 0);
+            expect(axis.sum).to.equal(REP(500) * 50n);
+            expect(axis.mass).to.equal(REP(500));
+        });
+
+        it("a later commit of the same household reviews at zero weight", async function () {
+            const epoch = await commit(h1, [review(scores(50, 50), 0, 0)]);
+            await commit(h2, [review(scores(50, 50), 0, ATN(1))]);
+            await anchor();
+            await reveal(h1, epoch);
+            await expect(reveal(h2, epoch)).to.not.emit(bond, "ReviewUnweighted");
+            expect((await bond.reviewOf(DIGEST, epoch, h2.address)).weight).to.equal(0);
+            expect((await bond.getRound(DIGEST, epoch)).weight).to.equal(REP(300));
+        });
+
+        it("REP a review loses or wins moves on its household, never on the agent key", async function () {
+            const epoch = await epochWith([
+                [h1, [review(scores(-100, -100), 0, ATN(10))]],
+                [a2, [review(scores(100, 100), 0, ATN(10))]],
+                [a3, [review(scores(100, 100), 0, ATN(10))]],
+            ]);
+            await bond.finalize(DIGEST, epoch, 10);
+            expect(await rep.balanceOf(a1.address)).to.be.lessThan(REP(300));
+            await claimAll(epoch, [h1, a2, a3]);
+            expect(await rep.balanceOf(h1.address)).to.equal(0);
+            expect(await rep.totalSupply()).to.be.within(REP(1000) - 10n, REP(1000));
+        });
+
+        it("a withheld batch costs its household degradeBps of the REP it weighed", async function () {
+            const epoch = await commit(h1, [review(scores(50, 50), 0, ATN(10))]);
+            await anchor();
+            await time.increase(PARAMS.revealWindow + 1);
+            await bond.forfeit(epoch, h1.address);
+            expect(await rep.balanceOf(a1.address)).to.equal(REP(270));
+        });
+
+        it("no household reviews its own tool, and harm slashes the author's household", async function () {
+            // h3 is a3's agent and authors a tool; a1's and a3's agents review it
+            await registerAgent(substrate, h3, "0x13", a3);
+            const tool = ethers.id("h3 tool");
+            await substrate.connect(h3).registerTool(tool);
+            await bond.connect(h3).bond(tool, MIN_STAKE);
+            const [h4] = (await ethers.getSigners()).slice(10, 11);
+            await registerAgent(substrate, h4, "0x14", a3);
+            const epoch = await epochWith([
+                [h1, [review(scores(0, 0), 100, ATN(10), tool)]],
+                [a2, [review(scores(0, 0), 100, ATN(10), tool)]],
+                [h4, [review(scores(100, 100), 0, 0, tool)]],
+            ]);
+            expect((await bond.reviewOf(tool, epoch, h4.address)).reviewer).to.equal(ethers.ZeroAddress);
+            await bond.finalize(tool, epoch, 10);
+            await time.increase(PARAMS.appealPeriod + 1);
+            await bond.finalize(tool, epoch, 10);
+            expect(await rep.balanceOf(a3.address)).to.equal(0); // harm 100, authorSlashBps 100%
+        });
+    });
+
     describe("governance", function () {
         it("only the timelock sets parameters, within bounds", async function () {
             await expect(bond.connect(outsider).setParams(PARAMS)).to.be.revertedWithCustomError(bond, "NotTimelock");
