@@ -21,7 +21,7 @@ describe("ToolBond", function () {
     const DAY = 86400;
     const PARAMS = {
         minStake: MIN_STAKE, revealWindow: DAY, degradeBps: 1000, authorSlashBps: 10000, unbondDelay: 14 * DAY,
-        reviewerShareBps: 4000, appealPeriod: 7 * DAY, harmWeightBps: 20000,
+        reviewerShareBps: 4000, appealPeriod: 7 * DAY, harmWeightBps: 20000, harmQuorumBps: 200,
     };
     const CHARTER = '{"axes":[{"id":"correctness","thesis":"Works."},{"id":"simplicity","thesis":"Small."}]}';
     const NO = -128;
@@ -45,7 +45,7 @@ describe("ToolBond", function () {
         const salt = ethers.hexlify(ethers.randomBytes(32));
         batches.set(`${epoch}:${signer.address}`, { reviews, salt });
         const stake = reviews.reduce((t, r) => t + BigInt(r.stake), 0n);
-        await bond.connect(signer).commit(await bond.commitmentOf(epoch, signer.address, reviews, salt), stake);
+        await bond.connect(signer).commit(await bond.commitmentOf(epoch, signer.address, reviews, salt), stake, reviews.length);
         return epoch;
     }
 
@@ -226,9 +226,10 @@ describe("ToolBond", function () {
             // Means: (300x50 + 200x50 - 100x100) / 600 = 25 on both axes; harm 0
             const axis = await bond.roundAxis(DIGEST, epoch, 0);
             expect(axis.sum / axis.mass).to.equal(25);
-            // a1: axes 1 - 25/200 = 0.875, harm 1 (weight 2) -> 0.9375. a3: 0.375 -> 0.6875
-            expect((await bond.reviewOf(DIGEST, epoch, a1.address)).accuracy).to.equal(ethers.parseEther("0.9375"));
-            expect((await bond.reviewOf(DIGEST, epoch, a3.address)).accuracy).to.equal(ethers.parseEther("0.6875"));
+            // Each review is measured against the others' means. a1: others (200x50 - 100x100) / 300 = 0, so
+            // axes 1 - 50/200 = 0.75, harm 1 (weight 2) -> 0.875. a3: others 50, axes 0.25 -> 0.625
+            expect((await bond.reviewOf(DIGEST, epoch, a1.address)).accuracy).to.equal(ethers.parseEther("0.875"));
+            expect((await bond.reviewOf(DIGEST, epoch, a3.address)).accuracy).to.equal(ethers.parseEther("0.625"));
 
             const balances = async () => Promise.all([a1, a2, a3].map((s) => substrate.balanceOf(s.address)));
             const before = await balances();
@@ -439,6 +440,97 @@ describe("ToolBond", function () {
             await time.increase(PARAMS.appealPeriod + 1);
             await bond.finalize(tool, epoch, 10);
             expect(await rep.balanceOf(a3.address)).to.equal(0); // harm 100, authorSlashBps 100%
+        });
+    });
+
+    describe("harm without a quorum, lone reviewers, rotations, withheld batches", function () {
+        const UNINFORMATIVE = 2n ** 64n - 1n;
+
+        it("a lone reviewer is measured against no one, so it gains nothing and loses nothing", async function () {
+            const epoch = await epochWith([[a3, [review(scores(100, 100), 100, ATN(10))]]]);
+            await bond.finalize(DIGEST, epoch, 10);
+            await time.increase(PARAMS.appealPeriod + 1);
+            await bond.finalize(DIGEST, epoch, 10);
+            expect((await bond.reviewOf(DIGEST, epoch, a3.address)).accuracy).to.equal(UNINFORMATIVE);
+            const before = await substrate.balanceOf(a3.address);
+            await bond.claim(DIGEST, epoch, a3.address);
+            expect(await substrate.balanceOf(a3.address)).to.equal(before + ATN(10)); // its stake back, no winnings
+            expect(await rep.balanceOf(a3.address)).to.equal(REP(100));
+        });
+
+        it("harm settles only once the weight that scored it reaches the quorum, and still rates the tool below it", async function () {
+            await bond.connect(timelock).setParams({ ...PARAMS, harmQuorumBps: 1500 }); // 150 of 1000 REP
+            const epoch = await epochWith([[a3, [review(scores(0, 0), 100, ATN(10))]]]);
+            await bond.finalize(DIGEST, epoch, 10);
+            const r = await bond.getRound(DIGEST, epoch);
+            expect(r.stage).to.equal(4n); // Done, no appeal window, nothing slashed
+            expect(r.settledHarm).to.equal(0);
+            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
+            expect(await rep.balanceOf(author.address)).to.equal(REP(400));
+            const harm = await bond.toolHarm(DIGEST);
+            expect(harm.mass).to.equal(REP(100));
+            expect(harm.sum).to.equal(REP(100) * 100n);
+        });
+
+        it("a harm slash takes no more REP than the weight that scored harm", async function () {
+            const epoch = await epochWith([[a3, [review(scores(0, 0), 100, ATN(10))]]]);
+            await bond.finalize(DIGEST, epoch, 10);
+            await time.increase(PARAMS.appealPeriod + 1);
+            await bond.finalize(DIGEST, epoch, 10);
+            // H = 1 and authorSlashBps 100% would take all 400, capped at a3's 100
+            expect(await rep.balanceOf(author.address)).to.equal(REP(300));
+        });
+
+        it("the household that bonded a tool stays liable when the author agent changes owner", async function () {
+            const [h3, h4, empty] = (await ethers.getSigners()).slice(9, 12);
+            await registerAgent(substrate, h3, "0x13", a3);
+            await registerAgent(substrate, h4, "0x14", a3);
+            const tool = ethers.id("h3 tool");
+            await substrate.connect(h3).registerTool(tool);
+            await fund(h3, ATN(200));
+            await bond.connect(h3).bond(tool, MIN_STAKE);
+            expect(await bond.bondHousehold(tool)).to.equal(a3.address);
+
+            // The author agent moves to an empty wallet and tops up: the liability doesn't move
+            const domain = { name: "AutonetSubstrate", version: "1",
+                chainId: (await ethers.provider.getNetwork()).chainId, verifyingContract: await substrate.getAddress() };
+            const types = { OwnerBinding: [
+                { name: "agent", type: "address" }, { name: "parent", type: "address" }, { name: "nonce", type: "uint256" }] };
+            const sig = await empty.signTypedData(domain, types,
+                { agent: h3.address, parent: ethers.ZeroAddress, nonce: await substrate.bindingNonce(h3.address) });
+            await substrate.connect(h3).rotateOwner(empty.address, ethers.ZeroAddress, sig);
+            await bond.connect(h3).bond(tool, ATN(1));
+            expect(await bond.bondHousehold(tool)).to.equal(a3.address);
+
+            const epoch = await epochWith([
+                [a1, [review(scores(0, 0), 100, ATN(10), tool)]],
+                [a2, [review(scores(0, 0), 100, ATN(10), tool)]],
+                [h4, [review(scores(100, 100), 0, 0, tool)]], // a3's own household: refused
+            ]);
+            expect((await bond.reviewOf(tool, epoch, h4.address)).reviewer).to.equal(ethers.ZeroAddress);
+            await bond.finalize(tool, epoch, 10);
+            await time.increase(PARAMS.appealPeriod + 1);
+            await bond.finalize(tool, epoch, 10);
+            expect(await rep.balanceOf(a3.address)).to.equal(0);
+        });
+
+        it("a withheld batch forfeits degradeBps of its REP per review it declared", async function () {
+            const epoch = await commit(a1, [
+                review(scores(50, 50), 0, ATN(1)), review(scores(50, 50), 0, ATN(1)), review(scores(50, 50), 0, ATN(1))]);
+            expect(await bond.reviewCountOf(epoch, a1.address)).to.equal(3);
+            await anchor();
+            await time.increase(PARAMS.revealWindow + 1);
+            await bond.forfeit(epoch, a1.address);
+            expect(await rep.balanceOf(a1.address)).to.equal(REP(210)); // 300 - 3 x 10% x 300
+        });
+
+        it("a reveal must hold as many reviews as its commit declared", async function () {
+            const epoch = await bond.currentEpoch();
+            const reviews = [review(scores(50, 50), 0, 0)];
+            const salt = ethers.ZeroHash;
+            await bond.connect(a1).commit(await bond.commitmentOf(epoch, a1.address, reviews, salt), 0, 2);
+            await anchor();
+            await expect(bond.reveal(epoch, a1.address, reviews, salt)).to.be.revertedWithCustomError(bond, "BadReveal");
         });
     });
 
