@@ -111,12 +111,9 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
         expect(await substrate.serviceEarnings(agent.address)).to.equal(ATN(97.5));
     });
 
-    it("turns service earnings into voting REP 1:1 in whole tokens", async function () {
-        await repClaim.claim(agent.address);
-        expect(await repToken.balanceOf(agent.address)).to.equal(ethers.parseEther("97.5"));
-        // Claiming made the agent its own delegate: its own 97.5 plus the member's delegated 1000
-        expect(await repToken.delegates(agent.address)).to.equal(agent.address);
-        expect(await repToken.getVotes(agent.address)).to.equal(ethers.parseEther("1097.5"));
+    it("service revenue earns no REP", async function () {
+        expect(await repClaim.earningsBase(agent.address)).to.equal(0);
+        await expect(repClaim.claim(agent.address)).to.be.revertedWithCustomError(repClaim, "NothingToClaim");
     });
 
     it("takes anchors only from the DAO timelock", async function () {
@@ -132,7 +129,11 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
         expect(await substrate.agentMintTotal(agent.address)).to.equal(ATN(1));
 
         await repClaim.claim(agent.address);
-        expect(await repToken.balanceOf(agent.address)).to.equal(ethers.parseEther("98.5"));
+        expect(await repToken.balanceOf(agent.address)).to.equal(ethers.parseEther("1"));
+        // The agent owns itself, so the REP is its own, and claiming made it its own delegate: its
+        // 1 plus the member's delegated 1000
+        expect(await repToken.delegates(agent.address)).to.equal(agent.address);
+        expect(await repToken.getVotes(agent.address)).to.equal(ethers.parseEther("1001"));
     });
 
     it("refuses to mint more than the epoch's pool even when the signed root allows it", async function () {
@@ -148,7 +149,7 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
         expect(await substrate.serviceFeeBps()).to.equal(500);
     });
 
-    it("settles payment channels through payForService, so channel income also earns REP", async function () {
+    it("settles payment channels through payForService, so channel income counts as service revenue", async function () {
         channel = await autonet("PaymentChannel", deployer).deploy(await substrate.getAddress(), 3600);
         await substrate.connect(buyer).approve(await channel.getAddress(), ATN(40));
         await channel.connect(buyer).openChannel(agent.address, ATN(40));

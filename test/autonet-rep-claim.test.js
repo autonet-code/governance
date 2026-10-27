@@ -107,14 +107,14 @@ describe("AutonetRepClaim", function () {
         expect(await claim.claimedEarnings(agentA.address)).to.equal(5n * ONE_ATN);
     });
 
-    it("sums tool-pool and service earnings as the claim base", async function () {
+    it("service revenue earns no REP, only tool-pool earnings do", async function () {
         await earnPool(agentA, 3n * ONE_ATN);
-        await earnService(agentA, 8n * ONE_ATN); // 7.8 ATN net of the 2.5% fee
-
-        const expectedRep = 10_800_000n * REP_PER_ATN_BASE; // 10.8 ATN -> 10.8 REP
-        expect(await claim.earningsBase(agentA.address)).to.equal(10_800_000n);
+        await earnService(agentA, 8n * ONE_ATN); // money and a record of service, but no voice
+        expect(await claim.earningsBase(agentA.address)).to.equal(3n * ONE_ATN);
         await claim.claim(agentA.address);
-        expect(await repToken.balanceOf(agentA.address)).to.equal(expectedRep);
+        expect(await repToken.balanceOf(agentA.address)).to.equal(ethers.parseEther("3"));
+        await earnService(agentA, 8n * ONE_ATN);
+        await expect(claim.claim(agentA.address)).to.be.revertedWithCustomError(claim, "NothingToClaim");
     });
 
     it("scales sub-ATN earnings exactly (no truncation)", async function () {
@@ -219,23 +219,23 @@ describe("AutonetRepClaim", function () {
         expect(await repToken.getVotes(agentA.address)).to.equal(ethers.parseEther("7"));
     });
 
-    it("an agent's service revenue mints to its owner wallet, also after the agent is revoked", async function () {
+    it("tool-pool earnings of an agent mint to its owner wallet, also after the agent is revoked", async function () {
         const [, , , , , , , serving] = await ethers.getSigners();
         await registerAgent(substrate, serving, "0x03", gen2);
-        await earnService(serving, 4n * ONE_ATN); // 3.9 ATN net
+        await earnPool(serving, 4n * ONE_ATN);
         expect(await claim.recipientOf(serving.address)).to.equal(gen2.address);
         await claim.claim(serving.address);
-        expect(await repToken.balanceOf(gen2.address)).to.equal(ethers.parseEther("3.9"));
+        expect(await repToken.balanceOf(gen2.address)).to.equal(ethers.parseEther("4"));
 
         // Revoked: the key gets no governance weight, the household still gets the work's REP
+        await earnPool(serving, 2n * ONE_ATN);
         await substrate.connect(gen2).revokeAgent(serving.address, "0x");
         expect(await substrate.isLive(serving.address)).to.equal(false);
-        await earnService(serving, 2n * ONE_ATN); // already paid before the revocation reached the payer
         await expect(claim.claim(serving.address))
             .to.emit(claim, "RepClaimed")
-            .withArgs(serving.address, gen2.address, 1_950_000n, ethers.parseEther("1.95"));
+            .withArgs(serving.address, gen2.address, 2n * ONE_ATN, ethers.parseEther("2"));
         expect(await repToken.balanceOf(serving.address)).to.equal(0);
-        expect(await repToken.balanceOf(gen2.address)).to.equal(ethers.parseEther("5.85"));
+        expect(await repToken.balanceOf(gen2.address)).to.equal(ethers.parseEther("6"));
     });
 
     it("reverts a claim for the zero agent", async function () {

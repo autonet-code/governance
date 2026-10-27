@@ -4,19 +4,18 @@ pragma solidity ^0.8.20;
 /// @notice Minimal read surface of the autonet Substrate.sol this claim rail
 ///         depends on. Under the 2026-07-10 decision (fees-only emission +
 ///         REP-from-earnings), Substrate.sol is a PURE MONEY contract that no
-///         longer mints reputation; instead it exposes two CUMULATIVE, MONOTONIC
-///         per-recipient earnings ledgers, both denominated in ATN base units
-///         (ATN * 1e6 — Substrate deliberately has NO decimals()):
+///         longer mints reputation; instead it exposes a CUMULATIVE, MONOTONIC
+///         per-claimant earnings ledger in ATN base units (ATN * 1e6, Substrate
+///         deliberately has NO decimals()):
 ///           - agentMintTotal(claimant) : tool-pool distributions to household
 ///                                       owner wallets (merkle-ratified via
 ///                                       claimFor; only `+=`).
-///           - serviceEarnings(agent)   : net service revenue counter of a serving
-///                                       agent, bumped by payForService; only `+=`.
-///         REP is a pull claim on the SUM of these — "voice is always work-backed".
-///         Pure spenders/buyers appear in neither ledger and claim NOTHING.
+///         REP is a pull claim on it ("voice is always work-backed"). Service
+///         revenue (serviceEarnings) earns no REP: at the fee rate it would buy
+///         REP by washing payments (autonet decision 2026-10-27), while tool-pool
+///         mints are capped by fees actually burned.
 interface ISubstrateEarnings {
     function agentMintTotal(address agent) external view returns (uint256);
-    function serviceEarnings(address agent) external view returns (uint256);
     function isRegistered(address agent) external view returns (bool);
     function getAgentOwner(address agent) external view returns (address);
 }
@@ -38,9 +37,9 @@ interface IMintableRepToken {
 ///         REP-from-earnings".
 ///
 ///         The model in one line: **voice is always work-backed** — an agent may
-///         only mint REP against ATN it PROVABLY EARNED on the substrate (tool-pool
-///         distributions + net service revenue). You cannot lie about REP because
-///         you cannot lie about ATN you were provably paid.
+///         only mint REP against ATN it PROVABLY EARNED from the tool pool. You
+///         cannot lie about REP because you cannot lie about ATN a ratified close
+///         paid you.
 ///
 ///         This rail deliberately echoes the trustless-economy claim pattern
 ///         (RepToken.claimReputationFromEconomy: watermarked, delta-based, pull)
@@ -57,15 +56,12 @@ interface IMintableRepToken {
 ///                          the watermark. Zero delta reverts (NothingToClaim).
 ///
 ///         Who receives (Decision 2026-10-27, "the owner wallet claims, the daemon
-///         operates"): REP goes to households, never to agent keys. A registered
-///         agent's earnings (its service revenue, and any tool-pool leaf naming
-///         it) mint to its owner wallet, revoked or not: revocation means the key
-///         is lost or misbehaving, so it gets no governance weight, while the work
-///         it did still counts for its household. Any other address is a
-///         household owner wallet and claims its own tool-pool earnings, which
-///         only a ratified close can name. Service revenue paid to an address
-///         that is not an agent earns no REP: it would otherwise become REP that
-///         nobody can use but that still counts toward the supply and quorum.
+///         operates"): REP goes to households, never to agent keys. Earnings of a
+///         registered agent (a tool-pool leaf naming it) mint to its owner wallet,
+///         revoked or not: revocation means the key is lost or misbehaving, so it
+///         gets no governance weight, while the work it did still counts for its
+///         household. Any other address is a household owner wallet and claims its
+///         own tool-pool earnings, which only a ratified close can name.
 ///
 ///         Anti-double-count: the watermark is the cursor over a MONOTONIC base.
 ///         Pending grows only by newly-earned ATN, never re-counting old; any
@@ -162,13 +158,11 @@ contract AutonetRepClaim {
     }
 
     /// @notice The cumulative earnings base of `earner`, in ATN base units: its
-    ///         tool-pool distributions, plus its net service revenue when it is a
-    ///         registered agent. Both ledgers are monotonic and registration is
-    ///         permanent, so this sum is monotonic.
+    ///         tool-pool distributions, a monotonic ledger. A watermark set while
+    ///         service revenue still counted can sit above it; nothing is claimable
+    ///         until the base passes it.
     function earningsBase(address earner) public view returns (uint256) {
-        uint256 base = substrate.agentMintTotal(earner);
-        if (substrate.isRegistered(earner)) base += substrate.serviceEarnings(earner);
-        return base;
+        return substrate.agentMintTotal(earner);
     }
 
     /// @notice Where `earner`'s REP mints: a registered agent's owner wallet, else
