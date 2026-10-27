@@ -12,8 +12,8 @@ interface IOptionSourceAdmin {
 
 /// @title AutonetSetup
 /// @notice The `autonet` module: a jurisdiction's whole Autonet layer in one transaction. The
-///         Substrate, AnchorElection, AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry, PaymentChannel and
-///         VentureVaultFactory, wired to the jurisdiction's timelock (governor), Registry (treasury)
+///         Substrate, AnchorElection, AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry and
+///         PaymentChannel, wired to the jurisdiction's timelock (governor), Registry (treasury)
 ///         and RepToken. Attaching it grants the REP claim minter rights and the bond slasher rights,
 ///         approves the AnchorElection as an option source on the governor (each epoch anchor is a
 ///         single-choice election, and the election is the Substrate's anchorer from construction),
@@ -42,7 +42,6 @@ contract AutonetSetup is ModuleSetup {
         address toolBond;
         address serviceRegistry;
         address paymentChannel;
-        address ventureVaultFactory;
         string charter;
         string epochRules;
     }
@@ -51,7 +50,6 @@ contract AutonetSetup is ModuleSetup {
     address public immutable substrateCode;
     address public immutable serviceRegistryCode;
     address public immutable paymentChannelCode;
-    address public immutable ventureVaultFactoryCode;
     address public immutable anchorElectionCode;
     address public immutable toolBondCode;
 
@@ -63,14 +61,12 @@ contract AutonetSetup is ModuleSetup {
         address _substrateCode,
         address _serviceRegistryCode,
         address _paymentChannelCode,
-        address _ventureVaultFactoryCode,
         address _anchorElectionCode,
         address _toolBondCode
     ) {
         substrateCode = _substrateCode;
         serviceRegistryCode = _serviceRegistryCode;
         paymentChannelCode = _paymentChannelCode;
-        ventureVaultFactoryCode = _ventureVaultFactoryCode;
         anchorElectionCode = _anchorElectionCode;
         toolBondCode = _toolBondCode;
     }
@@ -113,7 +109,6 @@ contract AutonetSetup is ModuleSetup {
         d.toolBond = _create(abi.encodePacked(_read(toolBondCode), abi.encode(d.substrate, core.token, core.registry, core.governor, core.timelock, b)));
         d.serviceRegistry = _create(abi.encodePacked(_read(serviceRegistryCode), abi.encode(d.substrate)));
         d.paymentChannel = _create(abi.encodePacked(_read(paymentChannelCode), abi.encode(d.substrate, s.challengeWindow)));
-        d.ventureVaultFactory = _create(abi.encodePacked(_read(ventureVaultFactoryCode), abi.encode(d.substrate)));
 
         _deployments[id] = d;
         return d.substrate;
@@ -121,29 +116,28 @@ contract AutonetSetup is ModuleSetup {
 
     function _describe(uint256 id, Core memory core, Prepared memory p) internal view override {
         Deployment memory d = _deployments[id];
-        p.helpers = new address[](7);
+        p.helpers = new address[](6);
         (p.helpers[0], p.helpers[1], p.helpers[2], p.helpers[3]) = (d.vault, d.repClaim, d.toolBond, d.serviceRegistry);
-        (p.helpers[4], p.helpers[5], p.helpers[6]) = (d.paymentChannel, d.ventureVaultFactory, d.anchorElection);
+        (p.helpers[4], p.helpers[5]) = (d.paymentChannel, d.anchorElection);
         _repGrants(p, core.token, _one(d.repClaim), _one(d.toolBond));
         _optionSource(p, core.governor, d.anchorElection);
-        string[12] memory n = ["substrate", "vault", "rep_claim", "tool_bond", "service_registry",
-            "payment_channel", "venture_vault_factory", "rep_token", "dao", "timelock", "registry", "anchor_election"];
-        address[12] memory a = [d.substrate, d.vault, d.repClaim, d.toolBond, d.serviceRegistry,
-            d.paymentChannel, d.ventureVaultFactory, core.token, core.governor, core.timelock, address(core.registry),
-            d.anchorElection];
-        string[] memory names = new string[](12);
-        address[] memory addrs = new address[](12);
-        for (uint256 i = 0; i < 12; i++) (names[i], addrs[i]) = (n[i], a[i]);
+        string[11] memory n = ["substrate", "vault", "rep_claim", "tool_bond", "service_registry",
+            "payment_channel", "rep_token", "dao", "timelock", "registry", "anchor_election"];
+        address[11] memory a = [d.substrate, d.vault, d.repClaim, d.toolBond, d.serviceRegistry,
+            d.paymentChannel, core.token, core.governor, core.timelock, address(core.registry), d.anchorElection];
+        string[] memory names = new string[](11);
+        address[] memory addrs = new address[](11);
+        for (uint256 i = 0; i < 11; i++) (names[i], addrs[i]) = (n[i], a[i]);
         _entries(p, "jurisdiction.autonet.", names, addrs);
         // The charter and the epoch rules version, each recorded only when given
         bool charter = bytes(d.charter).length > 0;
         bool rules = bytes(d.epochRules).length > 0;
         if (!charter && !rules) return;
-        uint256 n2 = 12 + (charter ? 1 : 0) + (rules ? 1 : 0);
+        uint256 n2 = 11 + (charter ? 1 : 0) + (rules ? 1 : 0);
         string[] memory keys = new string[](n2);
         string[] memory values = new string[](n2);
-        for (uint256 i = 0; i < 12; i++) (keys[i], values[i]) = (p.registryKeys[i], p.registryValues[i]);
-        if (charter) (keys[12], values[12]) = ("jurisdiction.autonet.charter", d.charter);
+        for (uint256 i = 0; i < 11; i++) (keys[i], values[i]) = (p.registryKeys[i], p.registryValues[i]);
+        if (charter) (keys[11], values[11]) = ("jurisdiction.autonet.charter", d.charter);
         if (rules) (keys[n2 - 1], values[n2 - 1]) = ("jurisdiction.autonet.epoch_rules", d.epochRules);
         (p.registryKeys, p.registryValues) = (keys, values);
     }
@@ -151,7 +145,7 @@ contract AutonetSetup is ModuleSetup {
     // Every CREATE and CREATE2 from this contract bumps its nonce, which started at 1. Each launch
     // creates exactly CREATES_PER_LAUNCH contracts (a failed one reverts the launch), so the count of
     // past launches gives the nonce, and from it the address, of this launch's first create: the vault.
-    uint256 private constant CREATES_PER_LAUNCH = 8;
+    uint256 private constant CREATES_PER_LAUNCH = 7;
 
     /// @dev Install approves the election as an option source on the governor; uninstall revokes it
     function _optionSource(Prepared memory p, address governor, address election) private pure {

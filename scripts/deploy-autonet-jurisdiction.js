@@ -5,7 +5,7 @@
  *   1. JurisdictionFactory.deployCore            (Governor, Timelock, Registry, RepToken)
  *   2. EconomySetup.prepareInstallation          (Economy + EconomyRepClaim)
  *   3. AutonetSetup.prepareInstallation          (Substrate, AutonetVault, AutonetRepClaim, ToolBond,
- *                                                 ServiceRegistry, PaymentChannel, VentureVaultFactory;
+ *                                                 ServiceRegistry, PaymentChannel, AnchorElection;
  *                                                 one tx)
  *   4. JurisdictionFactory.finalize              (jurisdiction.name, parities; attaches both modules:
  *                                                 their grants and jurisdiction.* / modules.* entries,
@@ -129,7 +129,7 @@ async function main() {
     { substrate: autonetParams, toolBond: bondParams });
   const d = await autonetSetup.deploymentOf(autonet.id);
   console.log(`3. Autonet layer (installation ${autonet.id}):`);
-  for (const k of ["substrate", "vault", "repClaim", "toolBond", "serviceRegistry", "paymentChannel", "ventureVaultFactory"]) {
+  for (const k of ["substrate", "vault", "repClaim", "toolBond", "serviceRegistry", "paymentChannel", "anchorElection"]) {
     console.log(`     ${k.padEnd(20)} ${d[k]}`);
   }
 
@@ -158,7 +158,7 @@ async function main() {
       installation: Number(autonet.id),
       substrate: d.substrate, vault: d.vault, repClaim: d.repClaim, toolBond: d.toolBond,
       serviceRegistry: d.serviceRegistry, paymentChannel: d.paymentChannel,
-      ventureVaultFactory: d.ventureVaultFactory, charter: d.charter, epochRules: d.epochRules,
+      anchorElection: d.anchorElection, charter: d.charter, epochRules: d.epochRules,
     },
   };
   const outPath = path.join(__dirname, "..", "deployments", `autonet-jurisdiction-${network.name}.json`);

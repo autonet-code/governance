@@ -6,7 +6,7 @@
   "change": "Initial build.",
   "pluginSetup": {
     "prepareInstallation": {
-      "description": "Deploys the Substrate, AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry, PaymentChannel, and VentureVaultFactory, wired to the DAO, and records the charter its daemons follow.",
+      "description": "Deploys the Substrate, AnchorElection, AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry, and PaymentChannel, wired to the DAO, and records the charter its daemons follow.",
       "inputs": [
         {
           "internalType": "struct AutonetSetup.AutonetParams",

@@ -1,5 +1,5 @@
 // Copies the compiled autonet core contracts (ABI + bytecode) into test/fixtures/autonet so the
-// jurisdiction tests run against the real Substrate, ServiceMarket and VentureVault
+// jurisdiction tests run against the real Substrate, ServiceMarket and AnchorElection
 // instead of local mocks. Compile the autonet repo first (npx hardhat compile there).
 //
 // Usage: node scripts/sync-autonet-artifacts.js [path to autonet repo, default ../../autonet]
@@ -13,18 +13,11 @@ const contracts = [
   ["Substrate.sol", "Substrate"],
   ["ServiceMarket.sol", "ServiceRegistry"],
   ["ServiceMarket.sol", "PaymentChannel"],
-  ["VentureVault.sol", "VentureVault"],
-  ["VentureVault.sol", "VentureVaultFactory"],
   ["AnchorElection.sol", "AnchorElection"],
 ];
 
 fs.mkdirSync(out, { recursive: true });
 for (const [file, name] of contracts) {
-  // A contract autonet has removed keeps its last synced fixture
-  if (!fs.existsSync(path.join(autonet, "contracts", "core", file))) {
-    console.log(`  ${name}: gone from autonet, fixture kept`);
-    continue;
-  }
   const a = JSON.parse(fs.readFileSync(path.join(autonet, "artifacts", "contracts", "core", file, `${name}.json`), "utf8"));
   fs.writeFileSync(path.join(out, `${name}.json`), JSON.stringify({ contractName: name, abi: a.abi, bytecode: a.bytecode }));
   console.log(`  ${name}`);
