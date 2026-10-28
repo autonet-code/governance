@@ -31,6 +31,7 @@
  *     Test networks: 0 / 120 / 0.
  *   PARITY_TOKENS=0x..,0x..  PARITY_VALUES=<18dp>,<18dp>: vault payment tokens (1 USDC(6d) = 1e30)
  *   CHALLENGE_WINDOW_SECS (3600), CHARTER (JSON text; default the v1 charter from the module metadata), EPOCH_RULES (the metadata's fixed version)
+ *   GENESIS_ROOT (bytes32): the ATN genesis claim root of a fork or split (autonet scripts/build_atn_genesis.py); default none
  *   TOOLBOND_MIN_STAKE (100 ATN) TOOLBOND_REVEAL_WINDOW_SECS (1d) TOOLBOND_DEGRADE_BPS (1000)
  *   TOOLBOND_AUTHOR_SLASH_BPS (10000) TOOLBOND_REVIEWER_SHARE_BPS (4000) TOOLBOND_UNBOND_DELAY_SECS (30d)
  *   TOOLBOND_HARM_WEIGHT_BPS (20000: harm counts twice a charter axis in a review's accuracy)
@@ -149,6 +150,7 @@ async function main() {
     challengeWindow: envBig("CHALLENGE_WINDOW_SECS", 3600),
     charter: env("CHARTER", charterUi("charter").default),
     epochRules: env("EPOCH_RULES", charterUi("epochRules").fixed),
+    genesisRoot: env("GENESIS_ROOT", ethers.ZeroHash),
   };
   const autonet = await prepare(autonetSetup, deployer, core, "autonet",
     { substrate: autonetParams, toolBond: bondParams });

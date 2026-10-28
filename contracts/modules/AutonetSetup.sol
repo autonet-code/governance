@@ -32,6 +32,7 @@ contract AutonetSetup is ModuleSetup {
         uint256 challengeWindow;   // PaymentChannel
         string charter;            // the charter's JSON text the daemons follow ('' = none recorded)
         string epochRules;         // the epoch math version the daemons must support ('' = none recorded)
+        bytes32 genesisRoot;       // Substrate's ATN genesis claim root, carried over by a fork or split (0 = none)
     }
 
     struct Deployment {
@@ -86,14 +87,14 @@ contract AutonetSetup is ModuleSetup {
         Deployment memory d;
         (d.charter, d.epochRules) = (s.charter, s.epochRules);
 
-        // Substrate(treasury, vaultMinter, governor, anchorer): the timelock governs it and the
+        // Substrate(treasury, vaultMinter, governor, anchorer, genesisRoot): the timelock governs it and the
         // election anchors epochs. It needs the vault and the election, which both need the
         // Substrate: compute the Substrate's address first.
         uint256 nonce = 1 + (id - 1) * CREATES_PER_LAUNCH;
         address vaultAddr = _createAddress(nonce);
         address electionAddr = _createAddress(nonce + 1);
         bytes memory substrateInit = abi.encodePacked(_read(substrateCode), abi.encode(
-            core.registry, vaultAddr, core.timelock, electionAddr));
+            core.registry, vaultAddr, core.timelock, electionAddr, s.genesisRoot));
         address substrateAddr = address(uint160(uint256(keccak256(
             abi.encodePacked(bytes1(0xff), address(this), salt, keccak256(substrateInit))))));
 

@@ -12,6 +12,9 @@ describe("AutonetSetup", function () {
     const ATN = (n) => ethers.parseUnits(String(n), 6);
     const CHARTER = '{"axes":[{"id":"correctness","thesis":"Works."},{"id":"simplicity","thesis":"Small."}]}';
 
+    // A fork's carried-over ATN balances, claimable once with Substrate.claimGenesis
+    const GENESIS = ethers.id("atn genesis");
+
     before(async function () {
         [deployer, launcher, member, buyer] = await ethers.getSigners();
         s = await suite();
@@ -21,7 +24,7 @@ describe("AutonetSetup", function () {
         const parityKey = `jurisdiction.parity.${(await usdc.getAddress()).toLowerCase()}`;
         const j = await createJurisdiction(from, {
             members: [member.address], amounts: [REP(1000)],
-            modules: [["autonet", { substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "2" } }]],
+            modules: [["autonet", { substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "2", genesisRoot: GENESIS } }]],
             keys: [parityKey], values: [(10n ** 30n).toString()],
         });
         return { j, d: await s.setups.autonet.deploymentOf(j.installs.autonet.id) };
@@ -35,6 +38,7 @@ describe("AutonetSetup", function () {
         expect(await substrate.vaultMinter()).to.equal(d.vault);
         expect(await substrate.treasury()).to.equal(j.core.registry);
         expect(await substrate.governor()).to.equal(j.core.timelock);
+        expect(await substrate.genesisRoot()).to.equal(GENESIS);
         // Epoch anchors are single-choice elections: the election anchors, and the governor counts its options
         expect(await substrate.anchorer()).to.equal(d.anchorElection);
         expect(await j.dao.optionSources(d.anchorElection)).to.equal(true);
