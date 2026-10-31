@@ -3,6 +3,10 @@
 # chromedriver (port 4444) running. Restarts the hardhat node a day behind the browser clock (see below).
 # Usage: scripts/indexer-e2e/ui.sh <indexer dir> <app dir> <integration test>
 set -e
+# It kills the node on 8545 and wipes the emulator on 8080: the owner's local stack
+if [ "$E2E_ALLOW_MAIN_STACK" != "1" ]; then
+    echo "ui.sh restarts hardhat on 8545 and wipes the emulator on 8080; set E2E_ALLOW_MAIN_STACK=1 to confirm" >&2; exit 2
+fi
 INDEXER_DIR="${1:?indexer dir}"; APP_DIR="${2:?app dir}"; TEST="${3:?integration test}"
 HERE="$(cd "$(dirname "$0")" && pwd)"; CONTRACTS="$HERE/../.."; LOG="$HERE/out/indexer-ui.log"
 mkdir -p "$HERE/out"

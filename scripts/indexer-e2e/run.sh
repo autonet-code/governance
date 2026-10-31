@@ -1,21 +1,26 @@
 #!/bin/bash
-# Indexer end-to-end against a fully local stack. Needs, already running:
-#   npx hardhat node                                   (port 8545)
-#   firebase emulators:start --only firestore          (port 8080)
-# Usage: scripts/indexer-e2e/run.sh <indexer dir> [--replay]
-#
-# To leave a running local stack alone, point the harness at a second node and emulator:
-#   E2E_RPC_URL=http://127.0.0.1:8546 E2E_EMULATOR_HOST=127.0.0.1:8081 scripts/indexer-e2e/run.sh <indexer dir>
-# It then stops only the indexer it started, not one already running against the usual ports.
+# Indexer end-to-end on its own hardhat node and Firestore emulator. It deploys, wipes the
+# emulator and moves the chain's clock, so it never runs against the owner's local stack:
+#   npx hardhat node --port 8546
+#   firebase emulators:start --only firestore (on 8081)
+#   E2E_RPC_URL=http://127.0.0.1:8546 E2E_EMULATOR_HOST=127.0.0.1:8081 scripts/indexer-e2e/run.sh <indexer dir> [--replay]
+# Both variables are required, and 8545/8080 are refused unless E2E_ALLOW_MAIN_STACK=1.
+# It stops only the indexer it started.
 set -e
 INDEXER_DIR="${1:?indexer dir}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CONTRACTS="$HERE/../.."
 LOG="$HERE/out/indexer.log"
 mkdir -p "$HERE/out"
-export E2E_RPC_URL="${E2E_RPC_URL:-http://127.0.0.1:8545}"
-export E2E_EMULATOR_HOST="${E2E_EMULATOR_HOST:-127.0.0.1:8080}"
+: "${E2E_RPC_URL:?set E2E_RPC_URL to the e2e node, e.g. http://127.0.0.1:8546}"
+: "${E2E_EMULATOR_HOST:?set E2E_EMULATOR_HOST to the e2e emulator, e.g. 127.0.0.1:8081}"
+case "$E2E_RPC_URL $E2E_EMULATOR_HOST" in
+    *:8545*|*:8080*) if [ "$E2E_ALLOW_MAIN_STACK" != "1" ]; then
+        echo "Refusing to run against the main local stack (8545/8080); use other ports" >&2; exit 2; fi ;;
+esac
+export E2E_RPC_URL E2E_EMULATOR_HOST
 export LOCAL_FIRESTORE_EMULATOR_HOST="$E2E_EMULATOR_HOST"
+export LOCAL_RPC_URL="$E2E_RPC_URL"
 if [ "$E2E_EMULATOR_HOST" = "127.0.0.1:8080" ]; then MATCH='*app.py localhost*'; else MATCH='*app.py localhost*indexer-e2e*'; fi
 
 stop_indexer() {
