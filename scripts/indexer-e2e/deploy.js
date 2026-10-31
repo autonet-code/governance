@@ -21,6 +21,10 @@ async function main() {
         nativeCurrency: "ETH", symbol: "ETH", blockExplorer: "",
     };
     for (const name of MODULES) out[`${name}Setup`] = await addr(s.setups[name]);
+    // Debates: werule and the indexer find the factory in contracts/Localhost
+    const debates = await (await ethers.getContractFactory("DebatesFactory")).deploy();
+    await debates.waitForDeployment();
+    out.debatesFactory = await debates.getAddress();
     const file = path.join(__dirname, "out", "deployment.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(out, null, 2));

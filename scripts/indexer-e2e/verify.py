@@ -5,6 +5,7 @@ import json, os, sys
 os.environ["FIRESTORE_EMULATOR_HOST"] = os.environ.get("E2E_EMULATOR_HOST") or "127.0.0.1:8080"  # never touch production
 import firebase_admin
 from firebase_admin import credentials, firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 indexer_dir = sys.argv[1]
 here = os.path.dirname(__file__)
@@ -78,6 +79,26 @@ for kind, d in manifest["daos"].items():
     if d.get("economy"):
         check(f"[{kind}] DAO doc links economy", (snap.to_dict().get("economy") or "").lower() == d["economy"].lower(),
               f"got {snap.to_dict().get('economy')!r}")
+    # Its activity feed: each expected kind of event, every entry complete, links that resolve
+    feed = [a.to_dict() for a in snap.reference.collection("activity").stream()]
+    if d.get("activity"):
+        types = {a.get("type") for a in feed}
+        for t in d["activity"]:
+            check(f"[{kind}] activity {t}", t in types, f"types={sorted(types)}")
+        incomplete = [a for a in feed if not (a.get("summary") and a.get("time") and str(a.get("txHash", "")).startswith("0x"))]
+        check(f"[{kind}] activity entries complete", not incomplete, f"{len(incomplete)} incomplete, e.g. {incomplete[:1]}")
+        proposals = {p.id for p in snap.reference.collection("proposals").stream()}
+        projects = {p.id.lower() for p in snap.reference.collection("projects").stream()}
+        dangling = [a for a in feed if (a.get("targetKind") == "proposal" and a.get("targetId") not in proposals)
+                    or (a.get("targetKind") == "project" and a.get("targetId", "").lower() not in projects)]
+        check(f"[{kind}] activity links resolve", not dangling, f"{len(dangling)} dangling, e.g. {dangling[:1]}")
+    for addr in d.get("debates", []):
+        check(f"[{kind}] debate {addr[:8]} recorded", find_doc(snap.reference.collection("debates"), addr) is not None)
+        check(f"[{kind}] debate {addr[:8]} in the feed",
+              any(a.get("targetKind") == "debate" and a.get("targetId", "").lower() == addr.lower() for a in feed))
+    for addr in d.get("agents", []):
+        check(f"[{kind}] agent {addr[:8]} in the feed",
+              any(a.get("targetKind") == "agent" and a.get("targetId", "").lower() == addr.lower() for a in feed))
     if d.get("economyDetached"):
         check(f"[{kind}] DAO doc economy unlinked", not snap.to_dict().get("economy"), f"got {snap.to_dict().get('economy')!r}")
     # Projects stay under the DAO, also after its economy is detached
@@ -128,6 +149,12 @@ for key, p in manifest["projects"].items():
         check(f"[{key}] veto proposal {pid[:10]} typed veto", pdata.get("type") == "veto", f"got {pdata.get('type')!r}")
         check(f"[{key}] veto proposal {pid[:10]} names the project",
               (pdata.get("vetoProject") or "").lower() == p["address"].lower(), f"got {pdata.get('vetoProject')!r}")
+    for pid in p.get("appealProposals", []) + p.get("vetoProposals", []):
+        entry = [e for e in eco_dao.reference.collection("activity").where(filter=FieldFilter("targetId", "==", pid)).get()
+                 if e.to_dict().get("type") == "proposalCreated"] if eco_dao else []
+        want = "appeal" if pid in p.get("appealProposals", []) else "veto"
+        check(f"[{key}] {want} proposal {pid[:10]} in the feed as {want}",
+              any(e.to_dict().get("proposalType") == want for e in entry), f"{[e.to_dict() for e in entry]}")
     for pid in p.get("appealProposals", []):
         ps = find_doc(proposals_ref, pid)
         pdata = ps.to_dict() if ps else {}

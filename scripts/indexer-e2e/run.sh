@@ -22,7 +22,8 @@ stop_indexer() {
     powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '$MATCH' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" || true
 }
 start_indexer() {
-    (cd "$INDEXER_DIR" && PYTHONUNBUFFERED=1 python -u app.py localhost homebase trustless --no-alerts --instance-id indexer-e2e > "$1" 2>&1 &)
+    # autonet too: a jurisdiction's agent events reach its DAO's activity feed through it
+    (cd "$INDEXER_DIR" && PYTHONUNBUFFERED=1 python -u app.py localhost homebase trustless autonet --no-alerts --instance-id indexer-e2e > "$1" 2>&1 &)
 }
 
 stop_indexer

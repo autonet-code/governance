@@ -293,9 +293,52 @@ async function main() {
         vetoProposalId: null, vetoProposals: [failedVeto.toString()],
         events: ["NewProject", "SendFunds", "ProposalCreated"] };
 
+    // ---------------- Debates ----------------
+    // A debate on the Economy DAO's token: opened (root argument), argued, backed and closed
+    const debatesFactory = await ethers.getContractAt("DebatesFactory", dep.debatesFactory);
+    const debateRc = await wait(debatesFactory.connect(deployer).createDebate(await ecoToken.getAddress(), "E2E debate", "Root thesis", E(10)));
+    const debateAddr = eventArgs(debateRc, "DebateCreated").debateAddress;
+    const debate = await ethers.getContractAt("Debate", debateAddr);
+    await wait(debate.connect(alice).addArgument(1, 1, E(5), "A counterpoint"));
+    await wait(debate.connect(deployer).addWeight(1, E(1)));
+    await wait(debate.connect(deployer).closeDebate());
+
     // REP from economy activity (outside any proposal)
     await wait(repClaim.connect(bob).claim());
     manifest.daos.economy.members[bob.address] = (await ecoToken.balanceOf(bob.address)).toString();
+
+    // Every kind of event the economy DAO went through reaches its activity feed
+    manifest.daos.economy.activity = ["daoCreated", "mint", "delegate", "registryEdit", "proposalCreated", "vote",
+        "proposalQueued", "proposalExecuted", "createProject", "sendFunds", "signContract", "projectDisputed",
+        "arbitrate", "daoOverruled", "vetoedByDao", "debateCreated", "debateArgument", "debateWeight", "debateClosed"];
+    manifest.daos.economy.debates = [debateAddr];
+
+    // ---------------- Autonet ----------------
+    // A jurisdiction with the autonet module, and an agent registering on its Substrate
+    const CHARTER = '{"axes":[{"id":"correctness","thesis":"Works."},{"id":"simplicity","thesis":"Small."}]}';
+    j = await createJurisdiction(dep, {
+        name: "E2E Autonet", symbol: "ATJ", members: [deployer.address], amounts: [E(100)],
+        modules: { autonet: {
+            substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "2", genesisRoot: ethers.ZeroHash },
+            toolBond: { minStake: 100_000_000n, revealWindow: 86400, degradeBps: 1000, authorSlashBps: 10000,
+                unbondDelay: 30 * 86400, reviewerShareBps: 4000, appealPeriod: 120, harmWeightBps: 20000, harmQuorumBps: 10 },
+        } },
+        keys: [`jurisdiction.parity.${usdcAddr.toLowerCase()}`], values: [(10n ** 30n).toString()],
+    });
+    const autonetSetup = await ethers.getContractAt("AutonetSetup", dep.autonetSetup);
+    const substrateAddr = (await autonetSetup.deploymentOf(j.installs.autonet.id)).substrate;
+    const agent = (await ethers.getSigners())[7]; // not #9, the indexer's relayer
+    const owner = new ethers.Wallet(ethers.id("e2e agent owner"));
+    const substrate = new ethers.Contract(substrateAddr, require("../../test/fixtures/autonet/Substrate.json").abi, agent);
+    // The indexer follows the Substrate once it has indexed the jurisdiction's registry
+    await new Promise((r) => setTimeout(r, 8000));
+    const binding = owner.signingKey.sign(await substrate.bindingHash(agent.address, ethers.ZeroAddress, 0)).serialized;
+    await wait(substrate.registerAgentBound(ethers.toUtf8Bytes("e2e-peer"), owner.address, ethers.ZeroAddress, binding));
+    await wait(substrate.updateEndpoint("wss://e2e.example/agent"));
+    manifest.daos.autonet = { dao: j.core.governor, token: j.core.token, registryAddress: j.core.registry,
+        registryValues: { "jurisdiction.autonet.substrate": substrateAddr.toLowerCase() },
+        activity: ["daoCreated", "registryEdit", "agentRegistered", "agentBound", "agentEndpoint"],
+        agents: [agent.address] };
 
     manifest.finalBlock = await ethers.provider.getBlockNumber();
     const file = path.join(__dirname, "out", "manifest.json");
