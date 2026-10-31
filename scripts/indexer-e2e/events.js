@@ -27,6 +27,17 @@ async function untilProject(dao, project, test, what) {
     throw new Error(`indexer never ${what}`);
 }
 
+// The indexer also registers a veto or overrule on the project so it holds; wait for that before
+// voting, or the registration can land after the vote is over and revert
+async function untilHeld(project, proposalId, what) {
+    for (let i = 0; i < 60; i++) {
+        if ((await project.heldProposals()).includes(proposalId)) return;
+        await network.provider.send("evm_mine");
+        await new Promise((r) => setTimeout(r, 1000));
+    }
+    throw new Error(`indexer never registered ${what} on the project`);
+}
+
 async function advance(seconds) {
     await network.provider.send("evm_increaseTime", [Number(seconds)]);
     await network.provider.send("evm_mine");
@@ -235,7 +246,7 @@ async function main() {
     const vetoId = await govern(ecoGov.connect(deployer), [deployer], [await p5.getAddress()],
         [p5.interface.encodeFunctionData("daoVeto")], "E2E: veto P5");
     manifest.projects.p5 = { address: await p5.getAddress(), stage: "closed", backers: [carol.address],
-        vetoProposals: [vetoId.toString()],
+        vetoProposals: [vetoId.toString()], vetoProposalId: vetoId.toString(),
         events: ["NewProject", "SendFunds", "VetoedByDao"] };
 
     // P6 native: an appeal made the way werule makes it (type "appeal") that the DAO votes down;
@@ -252,6 +263,7 @@ async function main() {
     const failedAppeal = eventArgs(await wait(ecoGov.connect(deployer).propose([p6Addr], [0], [overrule6], desc6)), "ProposalCreated").proposalId;
     const ecoDao = await ecoGov.getAddress();
     await untilProject(ecoDao, p6Addr, (f) => f?.appealProposalId?.stringValue === failedAppeal.toString(), "linked the P6 appeal");
+    await untilHeld(p6, failedAppeal, "the P6 appeal");
     await advance(Number(await ecoGov.votingDelay()) + 1);
     await wait(ecoGov.connect(deployer).castVote(failedAppeal, 0));
     await advance(Number(await ecoGov.votingPeriod()) + 1);
@@ -260,6 +272,26 @@ async function main() {
     manifest.projects.p6 = { address: p6Addr, stage: "appealable", backers: [bob.address],
         appealProposalId: null, appealProposals: [failedAppeal.toString()],
         events: ["NewProject", "SendFunds", "ContractSigned", "ProjectDisputed", "ArbitrationDecision", "ProposalCreated"] };
+
+    // P7 native: a veto made the way werule makes it (type "veto") that the DAO votes down; the
+    // indexer links it on the project while it runs, then unlinks it so a new veto can be proposed
+    const p7 = await newProject("P7 failed veto", false);
+    const p7Addr = await p7.getAddress();
+    await wait(p7.connect(carol).sendFunds({ value: E(1) }));
+    const veto7 = p7.interface.encodeFunctionData("daoVeto");
+    const desc7 = "Veto: P7 failed veto0|||0veto0|||0Close P70|||0https://github.com/e2e/repo";
+    const failedVeto = eventArgs(await wait(ecoGov.connect(deployer).propose([p7Addr], [0], [veto7], desc7)), "ProposalCreated").proposalId;
+    await untilProject(ecoDao, p7Addr, (f) => f?.vetoProposalId?.stringValue === failedVeto.toString(), "linked the P7 veto");
+    await untilHeld(p7, failedVeto, "the P7 veto");
+    console.log("indexer linked the P7 veto and registered it on the project");
+    await advance(Number(await ecoGov.votingDelay()) + 1);
+    await wait(ecoGov.connect(deployer).castVote(failedVeto, 0));
+    await advance(Number(await ecoGov.votingPeriod()) + 1);
+    await untilProject(ecoDao, p7Addr, (f) => f && !f.vetoProposalId?.stringValue, "cleared the defeated P7 veto");
+    console.log("indexer cleared the defeated P7 veto");
+    manifest.projects.p7 = { address: p7Addr, stage: "open", backers: [carol.address],
+        vetoProposalId: null, vetoProposals: [failedVeto.toString()],
+        events: ["NewProject", "SendFunds", "ProposalCreated"] };
 
     // REP from economy activity (outside any proposal)
     await wait(repClaim.connect(bob).claim());

@@ -115,6 +115,13 @@ for key, p in manifest["projects"].items():
         else:
             check(f"[{key}] appeal proposal linked", str(data.get("appealProposalId")) == expected,
                   f"got {data.get('appealProposalId')!r}")
+    if "vetoProposalId" in p:
+        expected = p["vetoProposalId"]
+        if expected is None:
+            check(f"[{key}] failed veto unlinked", data.get("vetoProposalId") is None, f"got {data.get('vetoProposalId')!r}")
+        else:
+            check(f"[{key}] veto proposal linked", str(data.get("vetoProposalId")) == expected,
+                  f"got {data.get('vetoProposalId')!r}")
     for pid in p.get("vetoProposals", []):
         ps = find_doc(proposals_ref, pid)
         pdata = ps.to_dict() if ps else {}
