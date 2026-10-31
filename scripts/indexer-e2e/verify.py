@@ -80,6 +80,15 @@ for kind, d in manifest["daos"].items():
               f"got {snap.to_dict().get('economy')!r}")
     if d.get("economyDetached"):
         check(f"[{kind}] DAO doc economy unlinked", not snap.to_dict().get("economy"), f"got {snap.to_dict().get('economy')!r}")
+    # Projects stay under the DAO, also after its economy is detached
+    for addr, expected in d.get("projects", {}).items():
+        ps = find_doc(snap.reference.collection("projects"), addr)
+        check(f"[{kind}] project {addr[:8]} under the DAO", ps is not None, addr)
+        if ps:
+            pdata = ps.to_dict()
+            check(f"[{kind}] project {addr[:8]} stage", pdata.get("stage") == expected["stage"], f"got {pdata.get('stage')!r}")
+            check(f"[{kind}] project {addr[:8]} economyAddress", (pdata.get("economyAddress") or "").lower() == expected["economy"].lower(),
+                  f"got {pdata.get('economyAddress')!r}")
 
 # ---------------- Economy projects ----------------
 # Under the Economy's DAO in homebase: idaosLocalhost/{dao}/projects/{project}, with backers/ and activity/
@@ -106,6 +115,12 @@ for key, p in manifest["projects"].items():
         else:
             check(f"[{key}] appeal proposal linked", str(data.get("appealProposalId")) == expected,
                   f"got {data.get('appealProposalId')!r}")
+    for pid in p.get("vetoProposals", []):
+        ps = find_doc(proposals_ref, pid)
+        pdata = ps.to_dict() if ps else {}
+        check(f"[{key}] veto proposal {pid[:10]} typed veto", pdata.get("type") == "veto", f"got {pdata.get('type')!r}")
+        check(f"[{key}] veto proposal {pid[:10]} names the project",
+              (pdata.get("vetoProject") or "").lower() == p["address"].lower(), f"got {pdata.get('vetoProject')!r}")
     for pid in p.get("appealProposals", []):
         ps = find_doc(proposals_ref, pid)
         pdata = ps.to_dict() if ps else {}

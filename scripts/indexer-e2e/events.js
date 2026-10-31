@@ -75,6 +75,10 @@ async function main() {
     const stdSetup = await stdEconomy.setup.getAddress();
     const [attachTargets, , attachCalls] = await processor.installCalls(stdSetup, stdEconomy.id);
     await govern(stdGov.connect(alice), [alice], attachTargets, attachCalls, "E2E: attach the economy");
+    // A project made while the economy is attached stays under the DAO after the detach
+    const stdEco = await ethers.getContractAt("Economy", stdEconomy.module);
+    const p0 = eventArgs(await wait(stdEco.connect(alice).createProject("P0 before detach", ethers.ZeroAddress, ethers.ZeroAddress,
+        "terms", "https://github.com/e2e/repo", "desc")), "NewProject").contractAddress;
     const [detachTargets, , detachCalls] = await processor.uninstallCalls(stdSetup, stdEconomy.id);
     await govern(stdGov.connect(alice), [alice], detachTargets, detachCalls, "E2E: detach the economy");
     manifest.daos.standard = { dao: j.core.governor, token: j.core.token, registryAddress: j.core.registry,
@@ -83,7 +87,7 @@ async function main() {
         votingWeights: { [alice.address]: E(1000).toString() },
         proposals: { [stdProposal.toString()]: { state: "Executed", forVotes: E(1000).toString() } },
         registryValues: { "e2e.key": "v2", "jurisdiction.economy": "", "modules.economy": "" },
-        economyDetached: stdEconomy.module };
+        economyDetached: stdEconomy.module, projects: { [p0]: { stage: "open", economy: stdEconomy.module } } };
 
     // 2. Transferable DAO: a token transfer between members, and the economy attached by proposal
     j = await createJurisdiction(dep, {
@@ -228,9 +232,10 @@ async function main() {
     // P5 native: vetoed by the DAO while pending
     const p5 = await newProject("P5 veto", true);
     await wait(p5.connect(carol).sendFunds({ value: E(1) }));
-    await govern(ecoGov.connect(deployer), [deployer], [await p5.getAddress()],
+    const vetoId = await govern(ecoGov.connect(deployer), [deployer], [await p5.getAddress()],
         [p5.interface.encodeFunctionData("daoVeto")], "E2E: veto P5");
     manifest.projects.p5 = { address: await p5.getAddress(), stage: "closed", backers: [carol.address],
+        vetoProposals: [vetoId.toString()],
         events: ["NewProject", "SendFunds", "VetoedByDao"] };
 
     // P6 native: an appeal made the way werule makes it (type "appeal") that the DAO votes down;

@@ -18,9 +18,8 @@ stop_indexer; kill_port 8545
 INITIAL_DATE=$(python -c "import datetime as d;print((d.datetime.now(d.timezone.utc)-d.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
 (cd "$CONTRACTS" && HARDHAT_INITIAL_DATE="$INITIAL_DATE" npx hardhat node > "$HERE/out/node.log" 2>&1 &)
 until curl -s -X POST -H "content-type: application/json" --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' http://127.0.0.1:8545 > /dev/null; do sleep 1; done
-for project in homebase-6907d trustless-58262; do
-    curl -s -X DELETE "http://127.0.0.1:8080/emulator/v1/projects/$project/databases/(default)/documents" > /dev/null
-done
+# DAOs and their Economy projects all live in homebase-6907d
+curl -s -X DELETE "http://127.0.0.1:8080/emulator/v1/projects/homebase-6907d/databases/(default)/documents" > /dev/null
 
 cd "$CONTRACTS"
 npx hardhat run scripts/indexer-e2e/deploy.js --network localhost > /dev/null
