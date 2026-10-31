@@ -111,10 +111,12 @@ async function main() {
     await wait(trfToken.connect(alice).delegate(alice.address));
     const trfEconomy = await prepare(dep, j.core, "economy", ECONOMY);
     const [trfTargets, , trfCalls] = await processor.installCalls(await trfEconomy.setup.getAddress(), trfEconomy.id);
-    await govern(j.governor.connect(alice), [alice], trfTargets, trfCalls, "E2E: add the economy");
+    // Attaching a module to a live DAO grants token rights, so it is constitutional
+    const trfAttach = await govern(j.governor.connect(alice), [alice], trfTargets, trfCalls, "E2E: add the economy");
     manifest.daos.transferable = { dao: j.core.governor, token: j.core.token, economy: trfEconomy.module,
         members: { [alice.address]: E(70).toString(), [bob.address]: E(100).toString(), [carol.address]: E(30).toString() },
-        registryValues: { "jurisdiction.economy": trfEconomy.module.toLowerCase() } };
+        registryValues: { "jurisdiction.economy": trfEconomy.module.toLowerCase() },
+        proposals: { [trfAttach.toString()]: { state: "Executed", forVotes: E(70).toString(), supermajorityBps: "6667" } } };
 
     // 3. Wrapped-token DAO: wrap an existing ERC20
     const underlying = await (await ethers.getContractFactory("TestERC20")).deploy("Underlying", "UND", 18, E(1000));
