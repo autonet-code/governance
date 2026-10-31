@@ -40,6 +40,7 @@ contract JurisdictionFactory {
         uint256 proposalThreshold;
         uint8 quorumFraction;      // percent of supply
         uint256 executionDelay;    // seconds
+        uint256 supermajorityBps;  // share of For+Against a constitutional proposal needs (5001..10000; 0: 6667)
     }
 
     struct ModuleRef {
@@ -115,8 +116,9 @@ contract JurisdictionFactory {
             core.token = repTokenFactory.deployRepToken(p.name, p.symbol, core.registry, core.timelock,
                 p.initialMembers, p.initialAmounts, p.tokenKind == TokenKind.Transferable);
         }
-        uint256[] memory settings = new uint256[](4);
-        (settings[0], settings[1], settings[2], settings[3]) = (p.votingDelay, p.votingPeriod, p.proposalThreshold, p.quorumFraction);
+        uint256[] memory settings = new uint256[](5);
+        (settings[0], settings[1], settings[2], settings[3], settings[4]) =
+            (p.votingDelay, p.votingPeriod, p.proposalThreshold, p.quorumFraction, p.supermajorityBps);
         core.governor = daoFactory.deployDAO(core.token, core.timelock, p.name, settings);
         Registry(core.registry).setJurisdictionAddress(core.token);
 

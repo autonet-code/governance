@@ -58,7 +58,7 @@ describe("Option counting", function () {
         const token = await (await ethers.getContractFactory("RepToken")).deploy(
             "Rep", "REP", await registry.getAddress(), await timelock.getAddress(), [], [], false);
         const gov = await (await ethers.getContractFactory("HomebaseDAO")).deploy(
-            await token.getAddress(), await timelock.getAddress(), "D", 1, 60, 0, 4, launcher.address);
+            await token.getAddress(), await timelock.getAddress(), "D", 1, 60, 0, 4, launcher.address, 6667);
         await expect(gov.connect(other).setOptionSource(other.address, true)).to.be.revertedWithCustomError(gov, "GovernorOnlyExecutor");
         await gov.connect(launcher).setOptionSource(other.address, true);
         expect(await gov.optionSources(other.address)).to.equal(true);

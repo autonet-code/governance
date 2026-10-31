@@ -21,12 +21,16 @@ Per-contract API for the production suite: key functions, parameters, constants,
 
 ## HomebaseDAO
 
-`contracts/Dao.sol`. OpenZeppelin Governor with `GovernorSettings`, `GovernorCountingSimple`, `GovernorVotes`, `GovernorVotesQuorumFraction`, `GovernorTimelockControl`. No custom logic beyond the required overrides.
+`contracts/Dao.sol`. OpenZeppelin Governor with `GovernorSettings`, `GovernorCountingSimple`, `GovernorVotes`, `GovernorVotesQuorumFraction`, `GovernorTimelockControl`, `GovernorSuperQuorum`, plus early decision, options mode and constitutional proposals ([governance.md](governance.md)).
 
 ```solidity
 constructor(IVotes _token, TimelockController _timelock, string memory name,
-            uint48 minsDelay, uint32 minsVoting, uint256 pThreshold, uint8 qvrm)
+            uint48 minsDelay, uint32 minsVoting, uint256 pThreshold, uint8 qvrm,
+            address _launcher, uint256 _supermajorityBps)
 ```
+
+- `supermajorityBps()` (5001..10000): the share of For+Against a protected proposal needs. `setSupermajority(bps)`: governance only, and itself protected. Emits `SupermajoritySet(oldBps, newBps)`.
+- `proposalSupermajority(proposalId)`: the threshold fixed for a protected proposal at `propose`, 0 for an ordinary one. `propose` emits `ProposalSupermajority(proposalId, bps)` for each protected proposal.
 
 - `minsDelay`, `minsVoting` are **minutes**, multiplied by 60 into `GovernorSettings`. RepToken uses `CLOCK_MODE() == "mode=timestamp"`, so the governor's delay and period are seconds on-chain.
 - `pThreshold`: votes needed to propose (18-decimal token units). `qvrm`: quorum percent of past total supply.
@@ -98,7 +102,7 @@ constructor(address _owner, address _wrapper)
 | `batchEditRegistry(string[] keys, string[] values)` | `owner` or `wrapper` | `RegistryUpdated` per key |
 | `getRegistryValue(string)`, `getAllKeys()`, `getAllValues()` | anyone | |
 | `setJurisdictionAddress(address)` | `owner` or `wrapper` | |
-| `transferOwnership(address)` | `owner` | |
+| `transferOwnership(address)` | `owner` | Once: the factory's handover to the Timelock; reverts afterwards |
 | `transferETH(address payable to, uint256 amount)` | `owner` | `nonReentrant`, unreserved balance only, metered |
 | `transferERC20(address token, address to, uint256 amount)` | `owner` | `nonReentrant`, unreserved, metered |
 | `transferERC721(address token, address to, uint256 tokenId)` | `owner` | Unmetered |

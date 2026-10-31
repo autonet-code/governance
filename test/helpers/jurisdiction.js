@@ -36,6 +36,7 @@ function coreParams(o = {}) {
         votingDelay: o.votingDelay ?? 0, votingPeriod: o.votingPeriod ?? 2,
         proposalThreshold: o.proposalThreshold ?? 0, quorumFraction: o.quorumFraction ?? 4,
         executionDelay: o.executionDelay ?? 0,
+        supermajorityBps: o.supermajorityBps ?? 0,   // 0: the factory's default, 6667
     };
 }
 

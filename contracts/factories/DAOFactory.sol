@@ -10,6 +10,11 @@ contract DAOFactory {
     address[] public deployedDAOs;
     event Deployed(address dao); // Event to capture the new DAO address
 
+    /// Default share of the For and Against votes a constitutional proposal needs (two thirds)
+    uint256 public constant DEFAULT_SUPERMAJORITY_BPS = 6667;
+
+    /// daoSettings: voting delay (minutes), voting period (minutes), proposal threshold, quorum
+    /// (percent), and optionally the supermajority in basis points (absent or 0: the default)
     function deployDAO(
         address tokenAddress,
         address timelockAddress,
@@ -17,6 +22,7 @@ contract DAOFactory {
         uint[] memory daoSettings
     ) external returns (address) {
         require(daoSettings.length >= 4, "DAO settings requires 4 elements");
+        uint256 supermajority = daoSettings.length > 4 && daoSettings[4] != 0 ? daoSettings[4] : DEFAULT_SUPERMAJORITY_BPS;
         uint48 minsDelay = uint48(daoSettings[0]);
         uint32 minsVoting = uint32(daoSettings[1]);
         uint256 pThreshold = daoSettings[2];
@@ -30,7 +36,8 @@ contract DAOFactory {
             minsVoting,
             pThreshold,
             qvrm,
-            msg.sender
+            msg.sender,
+            supermajority
         );
         address daoAddress = address(dao);
         deployedDAOs.push(daoAddress);

@@ -50,6 +50,7 @@ async function main() {
         name: "E2E", symbol: "E2E", description: "", tokenKind: 0, underlying: ethers.ZeroAddress,
         initialMembers: [deployer.address], initialAmounts: [ethers.parseEther("100")],
         votingDelay: 1, votingPeriod: 5, proposalThreshold: 0, quorumFraction: 4, executionDelay: 60,
+        supermajorityBps: 0,
     };
     const c = await factory.deployCore.staticCall(params);
     const core = { registry: c.registry, timelock: c.timelock, token: c.token, governor: c.governor };

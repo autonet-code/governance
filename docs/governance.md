@@ -18,7 +18,7 @@ Every governance action follows the same path: **propose, vote, queue, execute**
 
 ## The Governor (`HomebaseDAO`)
 
-`HomebaseDAO` composes these OpenZeppelin extensions. Its custom logic is early decision (step 5 below) and options mode (below):
+`HomebaseDAO` composes these OpenZeppelin extensions. Its custom logic is early decision (step 5 below), options mode and constitutional proposals (below):
 
 | Extension | Effect |
 |---|---|
@@ -39,7 +39,9 @@ HomebaseDAO(
     uint48 minsDelay,              // voting delay, MINUTES (converted to seconds)
     uint32 minsVoting,             // voting period, MINUTES (converted to seconds)
     uint256 pThreshold,            // votes needed to propose (token base units)
-    uint8 qvrm                     // quorum numerator, out of 100
+    uint8 qvrm,                    // quorum numerator, out of 100
+    address _launcher,             // the factory, which may approve option sources until the handover
+    uint256 _supermajorityBps      // share of For+Against a constitutional proposal needs, 5001..10000
 )
 ```
 
@@ -72,7 +74,7 @@ There is no `Expired` state in practice: the OZ `TimelockController` has no grac
 2. **Propose.** `propose(targets, values, calldatas, description)`. The proposer needs `getVotes(proposer, now - 1) >= proposalThreshold`. Multiple actions in one proposal execute atomically.
 3. **Voting delay.** The snapshot timepoint is `proposal time + votingDelay`. Delegations made during the delay still count.
 4. **Vote.** `castVote`, `castVoteWithReason`, `castVoteWithReasonAndParams`, or `castVoteBySig`. Weight is the voter's votes at the snapshot. Delegation is one hop: a delegate cannot pass received votes on.
-5. **Outcome.** Succeeded if `For > Against` (ties fail) and `For + Abstain >= quorum`, where `quorum = totalSupplyAtSnapshot * qvrm / 100`.
+5. **Outcome.** Succeeded if `For > Against` (ties fail) and `For + Abstain >= quorum`, where `quorum = totalSupplyAtSnapshot * qvrm / 100`. A constitutional proposal needs `For * 10000 >= supermajorityBps * (For + Against)` instead of `For > Against` (below).
    **Early decision.** A proposal is decided as soon as its outcome can't change. It is Succeeded before the deadline once For reaches `superQuorum = max(quorum, totalSupplyAtSnapshot / 2 + 1)` (OpenZeppelin `GovernorSuperQuorum`), and Defeated before the deadline once Against reaches half of `totalSupplyAtSnapshot`. Votes cast after that revert. With liquid delegation a few delegates can settle a proposal in one block, leaving only the Timelock delay.
 6. **Queue.** Anyone calls `queue(targets, values, calldatas, keccak256(bytes(description)))`.
 7. **Execute.** After the Timelock's `minDelay`, anyone calls `execute(...)` with the same arguments.
@@ -80,6 +82,23 @@ There is no `Expired` state in practice: the OZ `TimelockController` has no grac
 ### Options mode (single-choice elections)
 
 A proposal whose only target is an approved option source (`IOptionSource`, for example an Autonet AnchorElection) is an election among options the source registers while the proposal is Pending. `castVote(id, i)` votes for option `i` (at most 256 options), one vote per account; the quorum counts every vote cast; the option with the most votes wins and a tie goes to the lowest `optionHash`. `proposalVotes` reports `(0, leading tally, 0)`, so early success needs one option alone at the super quorum, which no other option can then catch. Views: `optionVotes(id, i)`, `winningOption(id)` (decided once Succeeded, Queued or Executed), `optionSourceOf(id)`. Sources are approved by `setOptionSource(source, allowed)`: governance only, except that the factory that launched the DAO may call it until the Timelock makes the governor its proposer, so a module attached at launch can approve its source.
+
+### Constitutional proposals (supermajority)
+
+Some proposals change what makes the DAO's votes binding, or the charter its Autonet agents are judged by. These are **protected**: they pass only if For holds `supermajorityBps` of the For and Against votes (abstain is left out), `For * 10000 >= supermajorityBps * (For + Against)` with at least one For vote, and the quorum is met as usual. Each DAO sets `supermajorityBps` at creation (`CoreParams.supermajorityBps`, 5001 to 10000, 0 for the default 6667); only a protected proposal can change it (`setSupermajority`, governance only).
+
+Protection is decided once, in `propose`, from the proposal's targets and calldata, and fixed for that proposal (a later change of the threshold doesn't affect it). `proposalSupermajority(id)` returns its threshold in basis points, 0 for an ordinary proposal, and `propose` emits `ProposalSupermajority(proposalId, bps)` for each protected one. A proposal is protected if **any** of its actions:
+
+| Action | Why |
+|---|---|
+| `editRegistry` or `batchEditRegistry` writing `jurisdiction.autonet.charter` or `jurisdiction.autonet.epoch_rules`, on any target | The charter and epoch rules are the Autonet constitution. Module attach and detach proposals write these keys in their own `batchEditRegistry` action (`ModuleProcessor`), so attaching an Autonet with a charter, or detaching one, is protected too. Only the DAO's own Registry obeys its timelock, so matching any target costs nothing and needs no address |
+| Any call to the DAO's Timelock | Its roles (`grantRole` would let a contract schedule calls without a vote), delay and admin are what make votes binding |
+| `relay`, `updateTimelock`, `setSupermajority`, `setVotingPeriod` or `updateQuorumNumerator` on the governor | `relay` makes the governor, the Timelock's proposer, call anything; the others change the timelock, the threshold, or the voting period and quorum protected votes are decided under |
+| `setAdmin` on the governance token | Handing the token over hands over minting |
+
+**Early decision** respects the threshold. A protected proposal passes before the deadline only once `For * 10000 >= supermajorityBps * totalSupplyAtSnapshot`, so that even if every remaining vote went Against it would still pass, and is defeated early once `(totalSupplyAtSnapshot - Against) * 10000 < supermajorityBps * totalSupplyAtSnapshot`, when For can no longer reach it.
+
+**Options mode never applies to a protected proposal**, even if its target is an approved option source: it is counted For/Against/Abstain under the supermajority.
 
 ### Timelock roles
 
@@ -96,7 +115,7 @@ Consequences: role changes are possible, but only through a proposal executed by
 
 ### Parameters
 
-`JurisdictionFactory.CoreParams` carries `votingDelay` and `votingPeriod` in **minutes** (the Governor converts), `proposalThreshold`, `quorumFraction` (percent of supply) and `executionDelay`, the Timelock delay, in **seconds**.
+`JurisdictionFactory.CoreParams` carries `votingDelay` and `votingPeriod` in **minutes** (the Governor converts), `proposalThreshold`, `quorumFraction` (percent of supply), `executionDelay`, the Timelock delay, in **seconds**, and `supermajorityBps` for constitutional proposals (0 for 6667).
 
 ## RepToken
 
@@ -202,7 +221,7 @@ One contract per jurisdiction. `owner` is the Timelock after deployment.
 | `_regedit` | `owner` or `wrapper` | `editRegistry`, `batchEditRegistry`, `setJurisdictionAddress` |
 | owner or `jurisdictionAddress` | | `earmarkFunds` |
 | `jurisdictionAddress` only | | `disburseEarmarked` |
-| `owner` | | `transferOwnership` |
+| `owner`, once | | `transferOwnership`: the factory's handover to the Timelock at creation; afterwards it always reverts (`ownershipHandedOver`), so no vote can take the Registry out of the DAO |
 
 `wrapper` is fixed at construction: `address(0)` for DAOs from `JurisdictionFactory` (DAOs from the old standard factories have the factory). `jurisdictionAddress` is the governance token.
 
@@ -255,6 +274,8 @@ All are `dao.propose([target], [0], [calldata], description)`.
 An appeal is just this proposal: nothing is registered on the project. The appeal window always fits a full proposal lifecycle plus two days; see [economy.md](economy.md).
 
 ## Known caveats
+
+- **A simple majority still controls voting power.** Minting, burning, `setMinter` and `setSlasher` are ordinary proposals, so a majority can first mint itself (or burn others) to a supermajority of the supply and then pass a constitutional proposal. Protecting them would make every mint, burn and module attach constitutional; this is left to the DAO's choice of members and minters.
 
 - **Old standard DAOs cannot run reward epochs.** Early builds of the removed `StandardFactory*` contracts passed `address(this)` (the factory) as the RepToken's `timelockAddress`. Because it is immutable, `startNewRewardEpoch` and `setDelegateShareBps` are permanently uncallable on those DAOs. Admin-gated functions still work because `admin` is moved to the real Timelock. `JurisdictionFactory` passes the real Timelock.
 - **Reward-epoch events are not indexed.** The indexer does not listen to `NewRewardEpoch` or `RewardClaimed`; apps must read them from chain.

@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/governance/extensions/GovernorVotesQuorumFractio
 import "@openzeppelin/contracts/governance/extensions/GovernorTimelockControl.sol";
 import "@openzeppelin/contracts/governance/extensions/GovernorSuperQuorum.sol";
 import "./IOptionSource.sol";
+import "./IAdminToken.sol";
 
 /// A proposal is decided as soon as its outcome can't change: it succeeds early once For holds more
 /// than half of all REP at the snapshot and meets the quorum, and is defeated early once Against holds
@@ -20,6 +21,14 @@ import "./IOptionSource.sol";
 /// all votes cast, and the option with the most votes wins (a tie goes to the lowest optionHash).
 /// proposalVotes reports the leading option's tally as For, so it passes early only once the
 /// leader alone holds the super quorum, which no other option can then catch.
+///
+/// Constitutional proposals: a proposal is protected, decided once when it is proposed, if any of its
+/// actions (see _isProtected) edits the Autonet charter or epoch rules in a registry, calls the
+/// timelock, hands over the token, or changes the rules protected votes run under (relay,
+/// updateTimelock, the supermajority, the voting period, the quorum). It passes only if For holds
+/// supermajorityBps of the For and Against votes (abstain excluded) and the quorum is met, and it is
+/// decided early only once no remaining votes could change that. Option-source elections are never
+/// protected: a protected proposal is counted For/Against/Abstain even if its target is a source.
 contract HomebaseDAO is Governor, GovernorSettings, GovernorCountingSimple, GovernorVotes, GovernorVotesQuorumFraction, GovernorTimelockControl, GovernorSuperQuorum {
 constructor(
         IVotes _token,
@@ -29,7 +38,8 @@ constructor(
         uint32 minsVoting,
         uint256 pThreshold,
         uint8 qvrm,
-        address _launcher
+        address _launcher,
+        uint256 _supermajorityBps
     )
         Governor(name)
         GovernorSettings(minsDelay * 1 minutes, minsVoting * 1 minutes, pThreshold) 
@@ -38,6 +48,76 @@ constructor(
         GovernorTimelockControl(_timelock)
     {
         launcher = _launcher;
+        _setSupermajority(_supermajorityBps);
+    }
+
+    /// Share of the For and Against votes, in basis points, a protected proposal needs (5001..10000)
+    uint256 public supermajorityBps;
+    mapping(uint256 => uint256) private _supermajorityOf;
+
+    bytes32 private constant CHARTER_KEY = keccak256("jurisdiction.autonet.charter");
+    bytes32 private constant EPOCH_RULES_KEY = keccak256("jurisdiction.autonet.epoch_rules");
+    bytes4 private constant EDIT_REGISTRY = bytes4(keccak256("editRegistry(string,string)"));
+    bytes4 private constant BATCH_EDIT_REGISTRY = bytes4(keccak256("batchEditRegistry(string[],string[])"));
+
+    event ProposalSupermajority(uint256 indexed proposalId, uint256 bps);
+    event SupermajoritySet(uint256 oldBps, uint256 newBps);
+    error InvalidSupermajority(uint256 bps);
+
+    /// Changing the threshold takes a proposal, which is itself protected
+    function setSupermajority(uint256 bps) external onlyGovernance {
+        _setSupermajority(bps);
+    }
+
+    function _setSupermajority(uint256 bps) private {
+        if (bps <= 5000 || bps > 10000) revert InvalidSupermajority(bps);
+        emit SupermajoritySet(supermajorityBps, bps);
+        supermajorityBps = bps;
+    }
+
+    /// The supermajority a proposal needs, in basis points, fixed when it was proposed; 0 if unprotected
+    function proposalSupermajority(uint256 proposalId) public view returns (uint256) {
+        return _supermajorityOf[proposalId];
+    }
+
+    /// True if any action is constitutional. Registry edits are recognized on any target: only the
+    /// DAO's own Registry obeys this DAO's timelock, and protecting a foreign one costs nothing.
+    function _isProtected(address[] memory targets, bytes[] memory calldatas) private view returns (bool) {
+        address tl = timelock();
+        for (uint256 i = 0; i < targets.length; i++) {
+            address t = targets[i];
+            bytes memory d = calldatas[i];
+            // Any call to the timelock: its roles, delay and admin are what make votes binding
+            if (t == tl) return true;
+            if (d.length < 4) continue;
+            bytes4 s = bytes4(d);
+            if (t == address(this)) {
+                if (s == this.relay.selector || s == this.updateTimelock.selector || s == this.setSupermajority.selector
+                    || s == this.setVotingPeriod.selector || s == this.updateQuorumNumerator.selector) return true;
+            } else if (t == address(token()) && s == IAdminToken.setAdmin.selector) {
+                return true;
+            } else if (s == EDIT_REGISTRY || s == BATCH_EDIT_REGISTRY) {
+                if (_editsProtectedKey(s, d)) return true;
+            }
+        }
+        return false;
+    }
+
+    function _editsProtectedKey(bytes4 s, bytes memory d) private pure returns (bool) {
+        bytes memory args = new bytes(d.length - 4);
+        for (uint256 i = 0; i < args.length; i++) args[i] = d[i + 4];
+        string[] memory keys;
+        if (s == EDIT_REGISTRY) {
+            keys = new string[](1);
+            (keys[0], ) = abi.decode(args, (string, string));
+        } else {
+            (keys, ) = abi.decode(args, (string[], string[]));
+        }
+        for (uint256 i = 0; i < keys.length; i++) {
+            bytes32 k = keccak256(bytes(keys[i]));
+            if (k == CHARTER_KEY || k == EPOCH_RULES_KEY) return true;
+        }
+        return false;
     }
 
     /// The factory that launched this DAO: it may approve option sources (modules attached at launch)
@@ -81,7 +161,12 @@ constructor(
         returns (uint256 proposalId)
     {
         proposalId = super._propose(targets, values, calldatas, description, proposer);
-        if (targets.length == 1 && optionSources[targets[0]]) _sourceOf[proposalId] = targets[0];
+        if (_isProtected(targets, calldatas)) {
+            _supermajorityOf[proposalId] = supermajorityBps;
+            emit ProposalSupermajority(proposalId, supermajorityBps);
+        } else if (targets.length == 1 && optionSources[targets[0]]) {
+            _sourceOf[proposalId] = targets[0];
+        }
     }
 
     function hasVoted(uint256 proposalId, address account) public view override(IGovernor, GovernorCountingSimple) returns (bool) {
@@ -116,8 +201,11 @@ constructor(
     }
 
     function _voteSucceeded(uint256 proposalId) internal view override(Governor, GovernorCountingSimple) returns (bool) {
-        if (_sourceOf[proposalId] == address(0)) return super._voteSucceeded(proposalId);
-        return _optionTotal[proposalId] > 0;
+        if (_sourceOf[proposalId] != address(0)) return _optionTotal[proposalId] > 0;
+        uint256 bps = _supermajorityOf[proposalId];
+        if (bps == 0) return super._voteSucceeded(proposalId);
+        (uint256 againstVotes, uint256 forVotes, ) = proposalVotes(proposalId);
+        return forVotes > 0 && forVotes * 10000 >= bps * (forVotes + againstVotes);
     }
 
     function votingDelay()
@@ -171,11 +259,24 @@ constructor(
         returns (ProposalState)
     {
         ProposalState s = super.state(proposalId);
-        if (s != ProposalState.Active) return s;
-        // Against holds half of all REP: For can never get ahead
-        (uint256 againstVotes, , ) = proposalVotes(proposalId);
+        uint256 bps = _supermajorityOf[proposalId];
         uint256 supply = token().getPastTotalSupply(proposalSnapshot(proposalId));
-        if (supply > 0 && againstVotes * 2 >= supply) return ProposalState.Defeated;
+        // A protected proposal passed early (GovernorSuperQuorum) stands only once For holds the
+        // supermajority even if all the remaining REP votes Against (abstain only lowers the bar)
+        if (bps != 0 && s == ProposalState.Succeeded && clock() <= proposalDeadline(proposalId)) {
+            (, uint256 forVotes, ) = proposalVotes(proposalId);
+            if (forVotes * 10000 < bps * supply) s = ProposalState.Active;
+        }
+        if (s != ProposalState.Active) return s;
+        (uint256 againstVotes, , ) = proposalVotes(proposalId);
+        if (supply == 0) return s;
+        if (bps == 0) {
+            // Against holds half of all REP: For can never get ahead
+            if (againstVotes * 2 >= supply) return ProposalState.Defeated;
+        } else if ((supply - againstVotes) * 10000 < bps * supply) {
+            // Even with all the remaining REP, For can't reach the supermajority
+            return ProposalState.Defeated;
+        }
         return s;
     }
 

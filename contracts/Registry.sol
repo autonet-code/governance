@@ -16,6 +16,9 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
     string[] private keys;
     mapping (string => bool) private listed; // a key cleared to "" stays listed, so it's never pushed twice
     address public owner;
+    // The owner changes once, when the factory hands the Registry to the timelock; never again,
+    // so no vote can move the charter and the treasury out of the DAO's protected proposals
+    bool public ownershipHandedOver;
     address public wrapper;
     address public jurisdictionAddress;
     mapping(bytes32 => uint256) public earmarkedFunds;
@@ -222,10 +225,12 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
 
     event RegistryUpdated(string  key, string  value);
 
-    // NEW FUNCTION: Transfer ownership to the Timelock after setup
+    /// The factory's handover to the timelock at creation, the only ownership change there is
     function transferOwnership(address newOwner) external {
         require(msg.sender == owner, "Only the current owner can transfer ownership");
+        require(!ownershipHandedOver, "Registry: ownership was already handed over");
         require(newOwner != address(0), "New owner cannot be the zero address");
+        ownershipHandedOver = true;
         emit OwnershipTransferred(owner, newOwner);
         owner = newOwner;
     }
