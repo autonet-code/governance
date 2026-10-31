@@ -44,6 +44,7 @@ until grep -q "Starting from block" "$LOG" 2>/dev/null; do sleep 1; done
 echo "indexer up"
 
 npx hardhat run scripts/indexer-e2e/events.js --network localhost
+npx hardhat run scripts/indexer-e2e/legacy.js --network localhost
 
 # Let the indexer drain: stop once the log has been quiet for 15s
 last=0; quiet=0
@@ -52,6 +53,20 @@ while [ $quiet -lt 15 ]; do
 done
 stop_indexer
 echo "indexer errors: $(grep -c -i -E 'error|traceback|exception' "$LOG" || true)"
+python "$HERE/verify.py" "$INDEXER_DIR" || true
+
+# Downtime: a DAO and proposals created, voted and executed while the indexer is stopped. The restart
+# catches up through the historical sync and then the main loop's replay of the same blocks; nothing
+# recorded may be reset (verify checks the downtime proposals' tallies and their proposers' records).
+npx hardhat run scripts/indexer-e2e/downtime.js --network localhost
+start_indexer "$LOG.downtime"
+until grep -q "Resuming from checkpoint\|Starting from block" "$LOG.downtime" 2>/dev/null; do sleep 1; done
+last=0; quiet=0
+while [ $quiet -lt 20 ]; do
+    size=$(wc -c < "$LOG.downtime"); if [ "$size" = "$last" ]; then quiet=$((quiet+1)); else quiet=0; last=$size; fi; sleep 1
+done
+stop_indexer
+echo "downtime indexer errors: $(grep -c -i -E 'error|traceback|exception' "$LOG.downtime" || true)"
 python "$HERE/verify.py" "$INDEXER_DIR" || true
 
 # Replay: rewind both checkpoints (DAOs and projects) so a restarted indexer re-processes every

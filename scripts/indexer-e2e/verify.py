@@ -50,6 +50,13 @@ for kind, d in manifest["daos"].items():
         if m:
             got = m.to_dict().get("personalBalance")
             check(f"[{kind}] member {addr[:8]} balance", str(got) == str(balance), f"got {got}, expected {balance}")
+            # The numeric copy apps order members by
+            sort = m.to_dict().get("balanceSort")
+            check(f"[{kind}] member {addr[:8]} balanceSort", sort == float(int(balance)), f"got {sort!r}, expected {float(int(balance))}")
+    for addr, ids in d.get("proposalsCreated", {}).items():
+        m = find_doc(members, addr)
+        got = set((m.to_dict().get("proposalsCreated") if m else None) or [])
+        check(f"[{kind}] member {addr[:8]} proposalsCreated", set(ids) <= got, f"got {sorted(got)}, expected {ids}")
     for addr, delegatee in d.get("delegates", {}).items():
         m = find_doc(members, addr)
         got = (m.to_dict().get("delegate") if m else None) or ""

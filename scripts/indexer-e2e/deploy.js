@@ -25,6 +25,12 @@ async function main() {
     const debates = await (await ethers.getContractFactory("DebatesFactory")).deploy();
     await debates.waitForDeployment();
     out.debatesFactory = await debates.getAddress();
+    // The retired StandardFactory addresses (legacy DAOs on Etherlink): stand-ins that emit their events
+    for (const key of ["wrapper", "wrapper_t", "wrapper_w"]) {
+        const legacy = await (await ethers.getContractFactory("LegacyFactoryEvents")).deploy();
+        await legacy.waitForDeployment();
+        out[key] = await legacy.getAddress();
+    }
     const file = path.join(__dirname, "out", "deployment.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(out, null, 2));
