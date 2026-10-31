@@ -168,9 +168,10 @@ describe("Standard DAO Governance", function () {
         });
 
         it("should count votes correctly", async function () {
-            // Against first: member1's 100 of 150 For decides the proposal, closing the vote
-            await dao.connect(member2).castVote(proposalId, 0); // Against: 50 tokens
+            // A mint is constitutional (two thirds of For+Against): For first, since member2's 50 of 150
+            // Against alone would put two thirds out of reach and close the vote
             await dao.connect(member1).castVote(proposalId, 1); // For: 100 tokens
+            await dao.connect(member2).castVote(proposalId, 0); // Against: 50 tokens
 
             const proposal = await dao.proposalVotes(proposalId);
             expect(proposal.forVotes).to.equal(ethers.parseEther("100"));

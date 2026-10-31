@@ -30,7 +30,7 @@ constructor(IVotes _token, TimelockController _timelock, string memory name,
 ```
 
 - `supermajorityBps()` (5001..10000): the share of For+Against a protected proposal needs. `setSupermajority(bps)`: governance only, and itself protected. Emits `SupermajoritySet(oldBps, newBps)`.
-- `proposalSupermajority(proposalId)`: the threshold fixed for a protected proposal at `propose`, 0 for an ordinary one. `propose` emits `ProposalSupermajority(proposalId, bps)` for each protected proposal.
+- `proposalSupermajority(proposalId)`: the threshold fixed for a protected proposal at `propose`, 0 for an ordinary one. Protected: any call to the timelock or the governor, any call to the token but `startNewRewardEpoch` and `setDelegateShareBps`, and Registry edits of `jurisdiction.autonet.charter` or `jurisdiction.autonet.epoch_rules`. `propose` emits `ProposalSupermajority(proposalId, bps)` for each protected proposal.
 
 - `minsDelay`, `minsVoting` are **minutes**, multiplied by 60 into `GovernorSettings`. RepToken uses `CLOCK_MODE() == "mode=timestamp"`, so the governor's delay and period are seconds on-chain.
 - `pThreshold`: votes needed to propose (18-decimal token units). `qvrm`: quorum percent of past total supply.

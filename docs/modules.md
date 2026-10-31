@@ -22,7 +22,7 @@ The design follows [Aragon OSx plugins](https://docs.aragon.org/osx-contracts/1.
 Attaching happens at one of two points:
 
 - **At origination.** `JurisdictionFactory.deployCore(params)` creates the core with the factory as token admin and Registry owner. The founder prepares each module for that core, then calls `finalize(core, modules, keys, values)`. That attaches the modules in order and hands everything to the timelock. The factory executes a module's actions only against that DAO's own token and Registry (`ForeignTarget` otherwise). Only the account that deployed a core can finalize it. A DAO with no modules is one call: `deploy(params, keys, values)`.
-- **After origination.** A member prepares the installation and proposes `ModuleProcessor.installCalls(setup, id)`. `uninstallCalls(setup, id)` builds the reverse proposal: it revokes the grants and clears the entries. The proposal lists every grant, so voters see exactly what they approve.
+- **After origination.** A member prepares the installation and proposes `ModuleProcessor.installCalls(setup, id)`. `uninstallCalls(setup, id)` builds the reverse proposal: it revokes the grants and clears the entries. The proposal lists every grant, so voters see exactly what they approve. Preparing grants nothing; the grants and entries are all in the proposal's calldata. A proposal that grants or revokes token rights, approves an option source or writes the Autonet charter is constitutional and needs the DAO's supermajority ([governance.md](governance.md)), so attaching or detaching the Economy, the content court or Autonet always does.
 
 Both paths apply the same checks (`ModuleProcessor.checkInstall`):
 

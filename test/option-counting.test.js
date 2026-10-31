@@ -22,8 +22,11 @@ describe("Option counting", function () {
     async function pass(gov, call, desc) {
         const id = idOf(gov, await (await gov.connect(a).propose(...call, desc)).wait());
         await time.increase(1);
-        await gov.connect(a).castVote(id, 1);
-        await gov.connect(b).castVote(id, 1);
+        // Approving a source is constitutional: an early pass takes two thirds of all REP, so vote
+        // until it is decided
+        for (const voter of [a, b, c]) {
+            if ((await gov.state(id)) === 1n) await gov.connect(voter).castVote(id, 1);
+        }
         await gov.queue(...call, ethers.id(desc));
         await gov.execute(...call, ethers.id(desc));
     }

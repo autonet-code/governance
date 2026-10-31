@@ -84,15 +84,38 @@ describe("Supermajority for constitutional proposals", function () {
             expect(await bpsOf(j, j.core.governor, g.encodeFunctionData("setSupermajority", [7500]), "g3")).to.equal(6667n);
             expect(await bpsOf(j, j.core.governor, g.encodeFunctionData("setVotingPeriod", [60]), "g4")).to.equal(6667n);
             expect(await bpsOf(j, j.core.governor, g.encodeFunctionData("updateQuorumNumerator", [1]), "g5")).to.equal(6667n);
-            // Settings that don't change how a protected vote is decided stay ordinary
-            expect(await bpsOf(j, j.core.governor, g.encodeFunctionData("setVotingDelay", [60]), "g6")).to.equal(0n);
-            expect(await bpsOf(j, j.core.governor, g.encodeFunctionData("setProposalThreshold", [1]), "g7")).to.equal(0n);
+            // Every governance setting: the whole proposal lifecycle and process
+            expect(await bpsOf(j, j.core.governor, g.encodeFunctionData("setVotingDelay", [60]), "g6")).to.equal(6667n);
+            expect(await bpsOf(j, j.core.governor, g.encodeFunctionData("setProposalThreshold", [1]), "g7")).to.equal(6667n);
+            expect(await bpsOf(j, j.core.governor, g.encodeFunctionData("setOptionSource", [outsider.address, true]), "g8")).to.equal(6667n);
         });
 
-        it("handing over the token, but not ordinary token operations", async function () {
+        it("every token operation on voting power: minting, burning, rights, slashing, delegation defaults, admin", async function () {
             const rep = j.rep.interface;
-            expect(await bpsOf(j, j.core.token, rep.encodeFunctionData("setAdmin", [outsider.address]), "k1")).to.equal(6667n);
-            expect(await bpsOf(j, j.core.token, rep.encodeFunctionData("mint", [outsider.address, 1]), "k2")).to.equal(0n);
+            const calls = [
+                ["setAdmin", [outsider.address]], ["mint", [outsider.address, 1]], ["mintDelegated", [outsider.address, 1]],
+                ["burn", [a.address, 1]], ["setMinter", [outsider.address, true]], ["setMinter", [outsider.address, false]],
+                ["setSlasher", [outsider.address, true]], ["setSlasher", [outsider.address, false]],
+                ["slash", [a.address, 1]], ["reassign", [outsider.address, 1]],
+                ["setDefaultDelegate", [outsider.address]], ["setAutoDelegateExempt", [outsider.address, true]],
+            ];
+            for (const [fn, args] of calls) {
+                expect(await bpsOf(j, j.core.token, rep.encodeFunctionData(fn, args), `k-${fn}-${args[1]}`), fn).to.equal(6667n);
+            }
+            expect(await bpsOf(j, j.core.token, "0x", "k-empty")).to.equal(6667n);
+        });
+
+        it("reward epochs stay ordinary: they move treasury funds, not voting power", async function () {
+            const rep = j.rep.interface;
+            expect(await bpsOf(j, j.core.token, rep.encodeFunctionData("startNewRewardEpoch", [1, ethers.ZeroAddress]), "e1")).to.equal(0n);
+            expect(await bpsOf(j, j.core.token, rep.encodeFunctionData("setDelegateShareBps", [200]), "e2")).to.equal(0n);
+        });
+
+        it("rights already granted keep working without a vote", async function () {
+            const mintRight = [[j.core.token], [0n], [j.rep.interface.encodeFunctionData("setMinter", [outsider.address, true])]];
+            await govern(j.dao, a, mintRight, "Grant a minter");
+            await j.rep.connect(outsider).mint(outsider.address, REP(1));
+            expect(await j.rep.balanceOf(outsider.address)).to.equal(REP(1));
         });
 
         it("one protected action protects the whole proposal", async function () {
@@ -111,7 +134,7 @@ describe("Supermajority for constitutional proposals", function () {
     describe("modules", function () {
         const CHARTER_JSON = '{"axes":[{"id":"correctness","thesis":"Works."},{"id":"simplicity","thesis":"Small."}]}';
 
-        it("attaching Autonet with a charter, and detaching it, are protected; attaching the Economy is not", async function () {
+        it("attaching any module that grants token rights is protected: Autonet, the Economy, the content court", async function () {
             const j = await dao();
             const s = j.s;
             const autonet = await prepare(s, a, j.core, "autonet", { substrate: { challengeWindow: 3600, charter: CHARTER_JSON, epochRules: "2", genesisRoot: ethers.ZeroHash } });
@@ -119,9 +142,13 @@ describe("Supermajority for constitutional proposals", function () {
             const { id: attachId } = await propose(j.dao, attach, "Attach Autonet");
             expect(await j.dao.proposalSupermajority(attachId)).to.equal(6667n);
 
+            // The Economy grants its REP claim minter rights; the court gets slasher rights
             const economy = await prepare(s, a, j.core, "economy");
             const { id: ecoId } = await propose(j.dao, await s.processor.installCalls(await economy.setup.getAddress(), economy.id), "Attach Economy");
-            expect(await j.dao.proposalSupermajority(ecoId)).to.equal(0n);
+            expect(await j.dao.proposalSupermajority(ecoId)).to.equal(6667n);
+            const court = await prepare(s, a, j.core, "content_court");
+            const { id: courtId } = await propose(j.dao, await s.processor.installCalls(await court.setup.getAddress(), court.id), "Attach the court");
+            expect(await j.dao.proposalSupermajority(courtId)).to.equal(6667n);
         });
 
         it("detaching an Autonet attached at creation is protected (it clears the charter)", async function () {
@@ -134,6 +161,32 @@ describe("Supermajority for constitutional proposals", function () {
             const detach = await j.s.processor.uninstallCalls(await j.installs.autonet.setup.getAddress(), j.installs.autonet.id);
             const { id } = await propose(j.dao, detach, "Detach Autonet");
             expect(await j.dao.proposalSupermajority(id)).to.equal(6667n);
+        });
+    });
+
+    describe("attaching a module to a live DAO", function () {
+        it("runs end to end by proposal and needs the supermajority; preparing it grants nothing", async function () {
+            // a 60%, b 40%: a majority can't attach the court, two thirds can
+            const j = await dao([REP(6000), REP(4000)]);
+            const court = await prepare(j.s, a, j.core, "content_court");
+            // Preparing deploys the court but grants it nothing and writes no key
+            expect(await j.rep.slashers(court.module)).to.equal(false);
+            expect(await j.registry.getRegistryValue("modules.content_court")).to.equal("");
+            const attach = (await j.s.processor.installCalls(await court.setup.getAddress(), court.id)).map((x) => [...x]);
+            const desc = "Attach the court";
+            const { id } = await propose(j.dao, attach, desc);
+            await j.dao.connect(a).castVote(id, 1);
+            await j.dao.connect(b).castVote(id, 0);
+            await time.increase(Number(await j.dao.votingPeriod()) + 1);
+            expect(await j.dao.state(id)).to.equal(DEFEATED);
+
+            const again = await propose(j.dao, attach, desc + " again");
+            await j.dao.connect(a).castVote(again.id, 1);
+            await j.dao.connect(b).castVote(again.id, 1);
+            await j.dao.queue(...attach, ethers.id(desc + " again"));
+            await j.dao.execute(...attach, ethers.id(desc + " again"));
+            expect(await j.rep.slashers(court.module)).to.equal(true);
+            expect(await j.registry.getRegistryValue("jurisdiction.content_court.court")).to.equal(court.module.toLowerCase());
         });
     });
 

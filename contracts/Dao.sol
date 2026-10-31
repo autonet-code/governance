@@ -9,7 +9,6 @@ import "@openzeppelin/contracts/governance/extensions/GovernorVotesQuorumFractio
 import "@openzeppelin/contracts/governance/extensions/GovernorTimelockControl.sol";
 import "@openzeppelin/contracts/governance/extensions/GovernorSuperQuorum.sol";
 import "./IOptionSource.sol";
-import "./IAdminToken.sol";
 
 /// A proposal is decided as soon as its outcome can't change: it succeeds early once For holds more
 /// than half of all REP at the snapshot and meets the quorum, and is defeated early once Against holds
@@ -24,8 +23,11 @@ import "./IAdminToken.sol";
 ///
 /// Constitutional proposals: a proposal is protected, decided once when it is proposed, if any of its
 /// actions (see _isProtected) edits the Autonet charter or epoch rules in a registry, calls the
-/// timelock, hands over the token, or changes the rules protected votes run under (relay,
-/// updateTimelock, the supermajority, the voting period, the quorum). It passes only if For holds
+/// timelock, calls this governor (every governance-only setting: voting delay and period, proposal
+/// threshold, quorum, supermajority, option sources, relay, updateTimelock), or calls the governance
+/// token for anything but reward epochs (minting, burning, minter and slasher rights, slashing,
+/// default delegation, its admin). So attaching or detaching a module that grants token rights is
+/// constitutional too. Rights already granted keep working without a vote. It passes only if For holds
 /// supermajorityBps of the For and Against votes (abstain excluded) and the quorum is met, and it is
 /// decided early only once no remaining votes could change that. Option-source elections are never
 /// protected: a protected proposal is counted For/Against/Abstain even if its target is a source.
@@ -58,6 +60,9 @@ constructor(
     bytes32 private constant CHARTER_KEY = keccak256("jurisdiction.autonet.charter");
     bytes32 private constant EPOCH_RULES_KEY = keccak256("jurisdiction.autonet.epoch_rules");
     bytes4 private constant EDIT_REGISTRY = bytes4(keccak256("editRegistry(string,string)"));
+    // The token calls that stay ordinary: reward epochs move treasury funds, not voting power
+    bytes4 private constant START_REWARD_EPOCH = bytes4(keccak256("startNewRewardEpoch(uint256,address)"));
+    bytes4 private constant SET_DELEGATE_SHARE = bytes4(keccak256("setDelegateShareBps(uint16)"));
     bytes4 private constant BATCH_EDIT_REGISTRY = bytes4(keccak256("batchEditRegistry(string[],string[])"));
 
     event ProposalSupermajority(uint256 indexed proposalId, uint256 bps);
@@ -84,18 +89,17 @@ constructor(
     /// DAO's own Registry obeys this DAO's timelock, and protecting a foreign one costs nothing.
     function _isProtected(address[] memory targets, bytes[] memory calldatas) private view returns (bool) {
         address tl = timelock();
+        address tk = address(token());
         for (uint256 i = 0; i < targets.length; i++) {
             address t = targets[i];
             bytes memory d = calldatas[i];
-            // Any call to the timelock: its roles, delay and admin are what make votes binding
-            if (t == tl) return true;
-            if (d.length < 4) continue;
-            bytes4 s = bytes4(d);
-            if (t == address(this)) {
-                if (s == this.relay.selector || s == this.updateTimelock.selector || s == this.setSupermajority.selector
-                    || s == this.setVotingPeriod.selector || s == this.updateQuorumNumerator.selector) return true;
-            } else if (t == address(token()) && s == IAdminToken.setAdmin.selector) {
-                return true;
+            // The timelock's roles, delay and admin make votes binding; the governor's settings decide
+            // how votes run (only governance can call them, so every call here is a settings change)
+            if (t == tl || t == address(this)) return true;
+            bytes4 s = d.length < 4 ? bytes4(0) : bytes4(d);
+            // Voting power: minting, burning, minter and slasher rights, slashing, default delegation, admin
+            if (t == tk) {
+                if (s != START_REWARD_EPOCH && s != SET_DELEGATE_SHARE) return true;
             } else if (s == EDIT_REGISTRY || s == BATCH_EDIT_REGISTRY) {
                 if (_editsProtectedKey(s, d)) return true;
             }
