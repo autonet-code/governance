@@ -72,7 +72,7 @@ async function main() {
     //    economy module attached by proposal and detached again
     let j = await createJurisdiction(dep, {
         name: "E2E Standard", symbol: "STD", description: "standard dao",
-        members: [alice.address, bob.address], amounts: [E(600), E(400)],
+        members: [alice.address, bob.address], amounts: [E(600), E(400)], supermajorityBps: 7500,
         keys: ["e2e.key"], values: ["v1"],
     });
     const stdGov = j.governor;
@@ -96,7 +96,8 @@ async function main() {
         members: { [alice.address]: E(600).toString(), [bob.address]: E(400).toString() },
         delegates: { [alice.address]: alice.address, [bob.address]: alice.address },
         votingWeights: { [alice.address]: E(1000).toString() },
-        proposals: { [stdProposal.toString()]: { state: "Executed", forVotes: E(1000).toString() } },
+        proposals: { [stdProposal.toString()]: { state: "Executed", forVotes: E(1000).toString(), supermajorityBps: null } },
+        fields: { supermajorityBps: "7500" },
         registryValues: { "e2e.key": "v2", "jurisdiction.economy": "", "modules.economy": "" },
         economyDetached: stdEconomy.module, projects: { [p0]: { stage: "open", economy: stdEconomy.module } } };
 
@@ -307,10 +308,17 @@ async function main() {
     await wait(repClaim.connect(bob).claim());
     manifest.daos.economy.members[bob.address] = (await ecoToken.balanceOf(bob.address)).toString();
 
+    // A constitutional proposal: raising the economy DAO's own supermajority (protected at 6667)
+    const raise = await govern(ecoGov.connect(deployer), [deployer], [await ecoGov.getAddress()],
+        [ecoGov.interface.encodeFunctionData("setSupermajority", [7000])], "E2E: raise the supermajority");
+    manifest.daos.economy.proposals = { [raise.toString()]: { state: "Executed", forVotes: E(1000).toString(), supermajorityBps: "6667" } };
+    manifest.daos.economy.fields = { supermajorityBps: "7000" };
+
     // Every kind of event the economy DAO went through reaches its activity feed
     manifest.daos.economy.activity = ["daoCreated", "mint", "delegate", "registryEdit", "proposalCreated", "vote",
         "proposalQueued", "proposalExecuted", "createProject", "sendFunds", "signContract", "projectDisputed",
-        "arbitrate", "daoOverruled", "vetoedByDao", "debateCreated", "debateArgument", "debateWeight", "debateClosed"];
+        "arbitrate", "daoOverruled", "vetoedByDao", "debateCreated", "debateArgument", "debateWeight", "debateClosed",
+        "supermajoritySet"];
     manifest.daos.economy.debates = [debateAddr];
 
     // ---------------- Autonet ----------------
@@ -335,8 +343,16 @@ async function main() {
     const binding = owner.signingKey.sign(await substrate.bindingHash(agent.address, ethers.ZeroAddress, 0)).serialized;
     await wait(substrate.registerAgentBound(ethers.toUtf8Bytes("e2e-peer"), owner.address, ethers.ZeroAddress, binding));
     await wait(substrate.updateEndpoint("wss://e2e.example/agent"));
+    // Amending the charter is constitutional
+    const AMENDED = '{"axes":[{"id":"correctness","thesis":"Works."},{"id":"simplicity","thesis":"Small."},{"id":"care","thesis":"Kind."}]}';
+    await wait((await ethers.getContractAt("RepToken", j.core.token)).connect(deployer).delegate(deployer.address));
+    const registryA = await ethers.getContractAt("Registry", j.core.registry);
+    const amend = await govern(j.governor.connect(deployer), [deployer], [j.core.registry],
+        [registryA.interface.encodeFunctionData("editRegistry", ["jurisdiction.autonet.charter", AMENDED])], "E2E: amend the charter");
     manifest.daos.autonet = { dao: j.core.governor, token: j.core.token, registryAddress: j.core.registry,
-        registryValues: { "jurisdiction.autonet.substrate": substrateAddr.toLowerCase() },
+        registryValues: { "jurisdiction.autonet.substrate": substrateAddr.toLowerCase(), "jurisdiction.autonet.charter": AMENDED },
+        proposals: { [amend.toString()]: { state: "Executed", forVotes: E(100).toString(), supermajorityBps: "6667" } },
+        fields: { supermajorityBps: "6667" },
         activity: ["daoCreated", "registryEdit", "agentRegistered", "agentBound", "agentEndpoint"],
         agents: [agent.address] };
 

@@ -67,6 +67,11 @@ for kind, d in manifest["daos"].items():
                   f"got {data.get('latestStage')!r}, statusHistory={list((data.get('statusHistory') or {}).keys())}")
             check(f"[{kind}] proposal {pid[:10]} votes for", str(data.get("inFavor")) == p["forVotes"],
                   f"got inFavor={data.get('inFavor')!r}, expected {p['forVotes']}")
+            if "supermajorityBps" in p:
+                want = p["supermajorityBps"]
+                got = data.get("supermajorityBps")
+                check(f"[{kind}] proposal {pid[:10]} supermajority", (got is None) if want is None else str(got) == want,
+                      f"got {got!r}, expected {want!r}")
             votes = list(ps.reference.collection("votes").stream())
             check(f"[{kind}] proposal {pid[:10]} vote docs", len(votes) >= 1, f"{len(votes)} vote docs")
     for key, value in d.get("registryValues", {}).items():
