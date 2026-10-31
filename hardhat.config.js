@@ -16,6 +16,8 @@ module.exports = {
   }
 },
   networks: {
+    // The indexer e2e harness can run against a second node (E2E_RPC_URL), leaving the usual one alone
+    localhost: { url: process.env.E2E_RPC_URL || "http://127.0.0.1:8545" },
     hardhat: {
       mining: {
         auto: true,

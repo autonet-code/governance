@@ -10,6 +10,23 @@ const dep = require("./out/deployment.json");
 const manifest = { daos: {}, projects: {} };
 
 const eventArgs = (receipt, name) => receipt.logs.find(l => l.eventName === name)?.args;
+// A project doc as the indexer wrote it to the Firestore emulator (homebase), or null
+const EMULATOR = process.env.E2E_EMULATOR_HOST || "127.0.0.1:8080";
+async function projectDoc(dao, project) {
+    const url = `http://${EMULATOR}/v1/projects/homebase-6907d/databases/(default)/documents/idaosLocalhost/${dao}/projects/${project.toLowerCase()}`;
+    const res = await fetch(url, { headers: { Authorization: "Bearer owner" } });
+    return res.ok ? (await res.json()).fields : null;
+}
+// Mines blocks (so the indexer keeps going) until the project doc satisfies [test], or fails
+async function untilProject(dao, project, test, what) {
+    for (let i = 0; i < 120; i++) {
+        if (test(await projectDoc(dao, project))) return;
+        await network.provider.send("evm_mine");
+        await new Promise((r) => setTimeout(r, 1000));
+    }
+    throw new Error(`indexer never ${what}`);
+}
+
 async function advance(seconds) {
     await network.provider.send("evm_increaseTime", [Number(seconds)]);
     await network.provider.send("evm_mine");
@@ -195,7 +212,7 @@ async function main() {
     await advance(61); // economy timelock delay is 1 minute
     await wait(ecoGov.execute([await p3.getAddress()], [0], [overrule], ethers.id(desc)));
     manifest.projects.p3 = { address: await p3.getAddress(), stage: "closed", backers: [bob.address], disputeResolution: 30,
-        appealProposalId: appealId.toString(),
+        appealProposalId: appealId.toString(), appealProposals: [appealId.toString()],
         events: ["NewProject", "SendFunds", "ContractSigned", "ProjectDisputed", "ArbitrationDecision",
                  "ProposalCreated", "DaoOverruled", "ProjectClosed"] };
 
@@ -215,6 +232,29 @@ async function main() {
         [p5.interface.encodeFunctionData("daoVeto")], "E2E: veto P5");
     manifest.projects.p5 = { address: await p5.getAddress(), stage: "closed", backers: [carol.address],
         events: ["NewProject", "SendFunds", "VetoedByDao"] };
+
+    // P6 native: an appeal made the way werule makes it (type "appeal") that the DAO votes down;
+    // the indexer unlinks it so the app offers Appeal again
+    const p6 = await newProject("P6 failed appeal", true);
+    const p6Addr = await p6.getAddress();
+    await wait(p6.connect(bob).sendFunds({ value: E(1) }));
+    await coolingOff();
+    await wait(p6.connect(contractor).signContract({ value: await stakeFor(p6) }));
+    await wait(p6.connect(contractor).disputeAsContractor());
+    await wait(p6.connect(arbiter).arbitrate(70, "ruling-p6"));
+    const overrule6 = p6.interface.encodeFunctionData("daoOverrule", [10, "dao-ruling-p6"]);
+    const desc6 = "Appeal: P6 failed appeal0|||0appeal0|||0Overrule P6 to 10%0|||0https://github.com/e2e/repo";
+    const failedAppeal = eventArgs(await wait(ecoGov.connect(deployer).propose([p6Addr], [0], [overrule6], desc6)), "ProposalCreated").proposalId;
+    const ecoDao = await ecoGov.getAddress();
+    await untilProject(ecoDao, p6Addr, (f) => f?.appealProposalId?.stringValue === failedAppeal.toString(), "linked the P6 appeal");
+    await advance(Number(await ecoGov.votingDelay()) + 1);
+    await wait(ecoGov.connect(deployer).castVote(failedAppeal, 0));
+    await advance(Number(await ecoGov.votingPeriod()) + 1);
+    await untilProject(ecoDao, p6Addr, (f) => f && !f.appealProposalId?.stringValue, "cleared the defeated P6 appeal");
+    console.log("indexer cleared the defeated P6 appeal");
+    manifest.projects.p6 = { address: p6Addr, stage: "appealable", backers: [bob.address],
+        appealProposalId: null, appealProposals: [failedAppeal.toString()],
+        events: ["NewProject", "SendFunds", "ContractSigned", "ProjectDisputed", "ArbitrationDecision", "ProposalCreated"] };
 
     // REP from economy activity (outside any proposal)
     await wait(repClaim.connect(bob).claim());

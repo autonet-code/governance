@@ -11,7 +11,7 @@ async function main() {
     const addr = (c) => c.getAddress();
     // Everything here is seeded into contracts/Localhost; the indexer watches jurisdictionFactory
     const out = {
-        rpc: "http://127.0.0.1:8545",
+        rpc: process.env.E2E_RPC_URL || "http://127.0.0.1:8545",
         chainId: 31337,
         jurisdictionFactory: await addr(s.jurisdictionFactory),
         moduleCatalog: await addr(s.catalog),

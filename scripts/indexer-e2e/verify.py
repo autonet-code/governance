@@ -2,7 +2,7 @@
 # what events.js did on-chain (out/manifest.json). Prints PASS/FAIL lines; exit code 1 on any FAIL.
 #   python scripts/indexer-e2e/verify.py <indexer dir>
 import json, os, sys
-os.environ["FIRESTORE_EMULATOR_HOST"] = "127.0.0.1:8080"  # never touch production
+os.environ["FIRESTORE_EMULATOR_HOST"] = os.environ.get("E2E_EMULATOR_HOST") or "127.0.0.1:8080"  # never touch production
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -14,7 +14,6 @@ def client(name, cred):
     return firestore.client(firebase_admin.initialize_app(credentials.Certificate(os.path.join(indexer_dir, cred)), name=name))
 
 hb = client("homebase", "homebase.json")
-tl = client("trustless", "secrets/trustless.json")
 failures = 0
 
 def check(label, ok, detail=""):
@@ -77,43 +76,48 @@ for kind, d in manifest["daos"].items():
         check(f"[{kind}] {field}", str(got).lower() == str(value).lower(), f"got {got!r}, expected {value!r}")
     # Economy module: attached at origination or by proposal (jurisdiction.economy), or detached
     if d.get("economy"):
-        econ = find_doc(tl.collection("Localhost"), d["economy"])
-        check(f"[{kind}] trustless economy doc exists", econ is not None, d["economy"])
-        if econ:
-            data = econ.to_dict()
-            check(f"[{kind}] trustless economy doc daoAddress", (data.get("daoAddress") or "").lower() == d["dao"].lower(),
-                  f"got {data.get('daoAddress')!r}")
         check(f"[{kind}] DAO doc links economy", (snap.to_dict().get("economy") or "").lower() == d["economy"].lower(),
               f"got {snap.to_dict().get('economy')!r}")
     if d.get("economyDetached"):
         check(f"[{kind}] DAO doc economy unlinked", not snap.to_dict().get("economy"), f"got {snap.to_dict().get('economy')!r}")
-        econ = find_doc(tl.collection("Localhost"), d["economyDetached"])
-        check(f"[{kind}] detached economy doc kept and marked", econ is not None and econ.to_dict().get("detached") is True,
-              "missing" if econ is None else f"detached={econ.to_dict().get('detached')!r}")
 
-# ---------------- Trustless side ----------------
-economy = manifest["daos"]["economy"]["economy"]
-econ_doc = find_doc(tl.collection("Localhost"), economy)
-econ_ref = econ_doc.reference if econ_doc else tl.collection("Localhost").document(economy.lower())
-transactions = [t.to_dict() for t in econ_ref.collection("transactions").stream()]
+# ---------------- Economy projects ----------------
+# Under the Economy's DAO in homebase: idaosLocalhost/{dao}/projects/{project}, with backers/ and activity/
+eco = manifest["daos"]["economy"]
+eco_dao = find_doc(daos, eco["dao"])
+projects_ref = (eco_dao.reference if eco_dao else daos.document(eco["dao"])).collection("projects")
+proposals_ref = (eco_dao.reference if eco_dao else daos.document(eco["dao"])).collection("proposals")
 for key, p in manifest["projects"].items():
-    snap = find_doc(econ_ref.collection("projects"), p["address"])
+    snap = find_doc(projects_ref, p["address"])
     check(f"[{key}] project doc exists", snap is not None, p["address"])
     if not snap:
         continue
     data = snap.to_dict()
     check(f"[{key}] stage", str(data.get("stage", "")).lower() == p["stage"], f"got {data.get('stage')!r}")
+    check(f"[{key}] economyAddress", (data.get("economyAddress") or "").lower() == eco["economy"].lower(),
+          f"got {data.get('economyAddress')!r}")
     if "disputeResolution" in p:
         check(f"[{key}] disputeResolution", str(data.get("disputeResolution")) == str(p["disputeResolution"]),
               f"got {data.get('disputeResolution')!r}")
     if "appealProposalId" in p:
-        check(f"[{key}] appeal proposal linked", str(data.get("appealProposalId")) == p["appealProposalId"],
-              f"got {data.get('appealProposalId')!r}")
+        expected = p["appealProposalId"]
+        if expected is None:
+            check(f"[{key}] failed appeal unlinked", data.get("appealProposalId") is None, f"got {data.get('appealProposalId')!r}")
+        else:
+            check(f"[{key}] appeal proposal linked", str(data.get("appealProposalId")) == expected,
+                  f"got {data.get('appealProposalId')!r}")
+    for pid in p.get("appealProposals", []):
+        ps = find_doc(proposals_ref, pid)
+        pdata = ps.to_dict() if ps else {}
+        check(f"[{key}] appeal proposal {pid[:10]} typed appeal", pdata.get("type") == "appeal", f"got {pdata.get('type')!r}")
+        check(f"[{key}] appeal proposal {pid[:10]} names the project",
+              (pdata.get("appealProject") or "").lower() == p["address"].lower(), f"got {pdata.get('appealProject')!r}")
     backer_ids = [b.id.lower() for b in snap.reference.collection("backers").stream()]
     for b in p["backers"]:
         check(f"[{key}] backer {b[:8]} doc", b.lower() in backer_ids, f"backers={backer_ids}")
-    fns = sorted({t.get("functionName") for t in transactions if (t.get("projectId") or "").lower() == p["address"].lower()})
-    print(f"      [{key}] recorded transactions: {fns}")
+    fns = sorted({a.to_dict().get("functionName") for a in snap.reference.collection("activity").stream()})
+    check(f"[{key}] activity recorded", "createProject" in fns, f"got {fns}")
+    print(f"      [{key}] recorded activity: {fns}")
 
 print(f"\n{failures} failure(s)")
 sys.exit(1 if failures else 0)
