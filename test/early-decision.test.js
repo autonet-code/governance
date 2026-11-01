@@ -59,6 +59,19 @@ describe("Early decision", function () {
         expect(await gov.superQuorum(await gov.proposalSnapshot(id))).to.equal(REP(900));
     });
 
+    it("reads as pending, not a revert, before the snapshot has passed", async function () {
+        const j = await createJurisdiction(a, {
+            members: [a.address], amounts: [REP(400)], votingDelay: 1, votingPeriod: 60,
+        });
+        await j.rep.connect(a).delegate(a.address);
+        const call = [[j.core.registry], [0n], [j.registry.interface.encodeFunctionData("editRegistry", ["k", "v"])]];
+        await j.dao.connect(a).propose(...call, "Set k");
+        const id = await j.dao.hashProposal(...call, ethers.id("Set k"));
+        expect(await j.dao.state(id)).to.equal(0n); // Pending, while the snapshot is still in the future
+        await time.increase(61);
+        expect(await j.dao.state(id)).to.equal(ACTIVE);
+    });
+
     it("otherwise resolves at the deadline as before", async function () {
         const { dao: gov, id } = await dao();
         await gov.connect(c).castVote(id, 1); // 25% For, above the 4% quorum

@@ -76,7 +76,7 @@ describe("AutonetRepClaim", function () {
 
         repToken = await deployRepToken();
         // No treasury, deployer as vault minter, agentA as the governor that anchors
-        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, agentA.address, ethers.ZeroAddress, ethers.ZeroHash);
+        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, agentA.address, ethers.ZeroAddress, ethers.ZeroHash, "Test ATN", "TSTATN");
         await registerAgent(substrate, agentA, "0x01");
         await registerAgent(substrate, agentB, "0x02");
 

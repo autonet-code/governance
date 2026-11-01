@@ -5,6 +5,8 @@ import "../AutonetVault.sol";
 import "../AutonetRepClaim.sol";
 import "../ToolBond.sol"; // for ToolBond.Params; the code itself comes from a blob
 import "./ModuleSetup.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "@openzeppelin/contracts/governance/IGovernor.sol";
 
 interface IOptionSourceAdmin {
     function setOptionSource(address source, bool allowed) external;
@@ -87,14 +89,15 @@ contract AutonetSetup is ModuleSetup {
         Deployment memory d;
         (d.charter, d.epochRules) = (s.charter, s.epochRules);
 
-        // Substrate(treasury, vaultMinter, governor, anchorer, genesisRoot): the timelock governs it and the
-        // election anchors epochs. It needs the vault and the election, which both need the
+        // Substrate(treasury, vaultMinter, governor, anchorer, genesisRoot, name, symbol): the timelock
+        // governs it and the election anchors epochs; ATN is named after the jurisdiction. It needs the vault and the election, which both need the
         // Substrate: compute the Substrate's address first.
         uint256 nonce = 1 + (id - 1) * CREATES_PER_LAUNCH;
         address vaultAddr = _createAddress(nonce);
         address electionAddr = _createAddress(nonce + 1);
         bytes memory substrateInit = abi.encodePacked(_read(substrateCode), abi.encode(
-            core.registry, vaultAddr, core.timelock, electionAddr, s.genesisRoot));
+            core.registry, vaultAddr, core.timelock, electionAddr, s.genesisRoot,
+            string.concat(IGovernor(core.governor).name(), " ATN"), atnSymbol(IERC20Metadata(core.token).symbol())));
         address substrateAddr = address(uint160(uint256(keccak256(
             abi.encodePacked(bytes1(0xff), address(this), salt, keccak256(substrateInit))))));
 
@@ -113,6 +116,21 @@ contract AutonetSetup is ModuleSetup {
 
         _deployments[id] = d;
         return d.substrate;
+    }
+
+    /// @notice ATN's symbol for a RepToken symbol: its first 8 characters and "ATN" (REP gives REPATN),
+    ///         at most 11 characters, as MetaMask allows. A multibyte character is never cut in half.
+    function atnSymbol(string memory repSymbol) public pure returns (string memory) {
+        bytes memory b = bytes(repSymbol);
+        uint256 end;
+        for (uint256 chars; end < b.length && chars < 8; chars++) {
+            uint8 c = uint8(b[end]);
+            end += c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        }
+        if (end > b.length) end = b.length;
+        bytes memory head = new bytes(end);
+        for (uint256 i; i < end; i++) head[i] = b[i];
+        return string.concat(string(head), "ATN");
     }
 
     function _describe(uint256 id, Core memory core, Prepared memory p) internal view override {

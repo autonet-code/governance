@@ -263,6 +263,9 @@ constructor(
         returns (ProposalState)
     {
         ProposalState s = super.state(proposalId);
+        // Only a vote in progress or an early pass can change below; the supply at the snapshot is
+        // readable only once the snapshot is in the past, so a pending proposal must return here
+        if (s != ProposalState.Active && s != ProposalState.Succeeded) return s;
         uint256 bps = _supermajorityOf[proposalId];
         uint256 supply = token().getPastTotalSupply(proposalSnapshot(proposalId));
         // A protected proposal passed early (GovernorSuperQuorum) stands only once For holds the

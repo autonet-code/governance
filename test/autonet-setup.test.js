@@ -35,6 +35,8 @@ describe("AutonetSetup", function () {
         const { j, d } = await launch(launcher, usdc);
 
         const substrate = autonet("Substrate", deployer).attach(d.substrate);
+        // ATN is named after the jurisdiction: its name and the first 8 characters of its RepToken symbol
+        expect([await substrate.name(), await substrate.symbol(), await substrate.decimals()]).to.deep.equal(["Jurisdiction ATN", "REPATN", 6n]);
         expect(await substrate.vaultMinter()).to.equal(d.vault);
         expect(await substrate.treasury()).to.equal(j.core.registry);
         expect(await substrate.governor()).to.equal(j.core.timelock);
@@ -90,5 +92,13 @@ describe("AutonetSetup", function () {
         expect(await j.registry.getRegistryValue("jurisdiction.autonet.charter")).to.equal("");
         expect(await j.registry.getRegistryValue("jurisdiction.autonet.substrate")).to.not.equal("");
         await expect(s.setups.autonet.installationOf(999)).to.be.revertedWithCustomError(s.setups.autonet, "UnknownInstallation");
+    });
+
+    it("derives ATN's symbol from the RepToken's: its first 8 characters and ATN", async function () {
+        const a = s.setups.autonet;
+        expect(await a.atnSymbol("REP")).to.equal("REPATN");
+        expect(await a.atnSymbol("ABCDEFGHIJ")).to.equal("ABCDEFGHATN");
+        expect(await a.atnSymbol("")).to.equal("ATN");
+        expect(await a.atnSymbol("ÄÖÜßàéîõü")).to.equal("ÄÖÜßàéîõATN");
     });
 });
