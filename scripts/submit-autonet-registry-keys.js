@@ -29,7 +29,7 @@ const KEYS = [
 ];
 
 const DESC =
-  "Self-describe autonet attachment: registry keys for substrate, vault (ATN coin offering), and REP claim rail";
+  "Self-describe autonet attachment: registry keys for substrate, vault (ATN sale), and REP claim rail";
 
 // ---- minimal ABIs ----
 const REP_ABI = [

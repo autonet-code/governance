@@ -40,7 +40,7 @@ contract JurisdictionFactory {
         uint256 proposalThreshold;
         uint8 quorumFraction;      // percent of supply
         uint256 executionDelay;    // seconds
-        uint256 supermajorityBps;  // share of For+Against a constitutional proposal needs (5001..10000; 0: 6667)
+        uint256 supermajorityBps;  // share of all REP a constitutional proposal needs (5001..10000; 0: 6667)
     }
 
     struct ModuleRef {

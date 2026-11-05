@@ -46,7 +46,7 @@ Autonet satellites on Shadownet (vault, REP claim, Substrate) are recorded in ea
 | `ets` | 127823 | `https://node.shadownet.etherlink.com` | **Current testnet** |
 | `etm` | 42793 | `https://node.mainnet.etherlink.com` | Mainnet |
 | `et` | 128123 | `https://node.ghostnet.etherlink.com` | Retired (Ghostnet) |
-| `baseSepolia` | 84532 | `https://sepolia.base.org` | Used for CoinOffering tests |
+| `baseSepolia` | 84532 | `https://sepolia.base.org` | Not in use |
 | `sepolia` | 11155111 | Infura | |
 | `localhost` / `hardhat` | 31337 | `http://127.0.0.1:8545` | Local |
 | `ganache` | 1337 | `http://127.0.0.1:7545` | Local |
@@ -80,7 +80,6 @@ Run with `npx hardhat run <script> --network <name>`.
 | `scripts/deployProjectImplsShadownet.js` | Redeploys only `NativeProject` and `ERC20Project` (refuses any chain but 127823). Update `nativeProjectImpl` / `erc20ProjectImpl` in Firestore afterwards. Pre-modules suite only: with the module suite, new economies take the implementations held by `EconomySetup`, so a project change needs a new EconomySetup version (existing economies switch by proposal with `setImplementations`) |
 | `scripts/deploy-autonet-jurisdiction.js` | Autonet jurisdiction on the suite from `deployments/<network>-jurisdiction.json`: `deployCore`, `EconomySetup.prepareInstallation`, `AutonetSetup.prepareInstallation`, then `finalize` attaching both, no follow-up proposals. See [autonet.md](autonet.md#genesis-autonetsetup) |
 | `scripts/deploy-autonet-vault.js`, `deploy-autonet-rep-claim.js` | Individual Autonet satellites; print the governance calldata they need |
-| `scripts/deployCOLocal.js`, `deployTestCOShadownet.js`, `deployTestCOBaseSepolia.js` | Isolated CoinOffering stacks (Registry, transferable RepToken, test USDC) |
 | `scripts/updateFirestoreShadownet.js`, `backupFirestoreAddresses.js` | Write / back up Firestore address docs |
 
 Older one-off scripts (`redeploy*`, `check*`, `debug*`, `updateTrustlessFactory.js` and similar) are historical and target previous deployments or removed factories.

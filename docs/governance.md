@@ -41,7 +41,7 @@ HomebaseDAO(
     uint256 pThreshold,            // votes needed to propose (token base units)
     uint8 qvrm,                    // quorum numerator, out of 100
     address _launcher,             // the factory, which may approve option sources until the handover
-    uint256 _supermajorityBps      // share of For+Against a constitutional proposal needs, 5001..10000
+    uint256 _supermajorityBps      // share of all REP a constitutional proposal needs, 5001..10000
 )
 ```
 
@@ -96,7 +96,7 @@ Protection is decided once, in `propose`, from the proposal's targets and callda
 | Any call to the governor itself | Only governance can call it, so every call is a change to how votes run: `setVotingDelay`, `setVotingPeriod`, `setProposalThreshold`, `updateQuorumNumerator` (the super quorum follows the quorum and the supply, and has no setter), `setSupermajority`, `setOptionSource` (which proposals run as elections), `updateTimelock`, and `relay`, which makes the governor, the Timelock's proposer, call anything |
 | Any call to the governance token except `startNewRewardEpoch` and `setDelegateShareBps` | Voting power: `mint`, `mintDelegated`, `burn`, `setMinter` and `setSlasher` (granting or revoking), `slash`, `reassign`, `setDefaultDelegate`, `setAutoDelegateExempt` and `setAdmin`, and whatever the token gains later. Reward epochs pay out treasury funds and stay ordinary |
 
-Rights already granted keep working without a vote: a minter keeps minting, a slasher keeps slashing (the Economy's and Autonet's REP claims, the coin offering, ToolBond, the content court). What needs the supermajority is granting or revoking them, which is why **attaching or detaching any of today's modules is constitutional**: the Economy grants its REP claim minter rights, the content court gets slasher rights, and Autonet gets both plus an option source on the governor. Preparing an installation (`setup.prepareInstallation`) only deploys the module's own contracts; nothing on the DAO changes until the attach proposal executes, and every grant and Registry entry is in that proposal's calldata.
+Rights already granted keep working without a vote: a minter keeps minting, a slasher keeps slashing (the Economy's and Autonet's REP claims, ToolBond, the content court). What needs the supermajority is granting or revoking them, which is why **attaching or detaching any of today's modules is constitutional**: the Economy grants its REP claim minter rights, the content court gets slasher rights, and Autonet gets both plus an option source on the governor. Preparing an installation (`setup.prepareInstallation`) only deploys the module's own contracts; nothing on the DAO changes until the attach proposal executes, and every grant and Registry entry is in that proposal's calldata.
 
 **Early decision** follows the same bar. For only grows, so a protected proposal passes before the deadline once For reaches the bar and the super quorum, and it is defeated once `(totalSupplyAtSnapshot - Against - Abstain) * 10000 < supermajorityBps * totalSupplyAtSnapshot`, when even every remaining vote For would fall short.
 
@@ -146,7 +146,7 @@ Two addresses matter, and they are set differently:
 
 ### Minters
 
-`minters[account]` lets a contract mint without being admin. It exists for modules and satellites such as `EconomyRepClaim` (mints REP for Economy earnings and spendings), `AutonetRepClaim` (mints REP against Autonet earnings) and `CoinOffering` (mints to buyers up to its cap). Granting it is a governance action (a module attach proposal or a direct `setMinter`), except for modules attached at origination, whose grants the factory makes before handing the token to the Timelock. See [autonet.md](autonet.md).
+`minters[account]` lets a contract mint without being admin. It exists for modules and satellites such as `EconomyRepClaim` (mints REP for Economy earnings and spendings) and `AutonetRepClaim` (mints REP against Autonet earnings). Granting it is a governance action (a module attach proposal or a direct `setMinter`), except for modules attached at origination, whose grants the factory makes before handing the token to the Timelock. See [autonet.md](autonet.md).
 
 ### Slashers
 
@@ -277,7 +277,7 @@ An appeal is just this proposal: nothing is registered on the project. The appea
 
 ## Known caveats
 
-- **Minters and slashers act without a vote.** Once granted (by a constitutional proposal, or at creation), a minter or slasher changes voting power on its own terms: a coin offering sells REP, a REP claim mints for activity, ToolBond slashes. Granting is where the DAO decides how far it trusts each one.
+- **Minters and slashers act without a vote.** Once granted (by a constitutional proposal, or at creation), a minter or slasher changes voting power on its own terms: a REP claim mints for activity, ToolBond slashes. Granting is where the DAO decides how far it trusts each one.
 
 - **Old standard DAOs cannot run reward epochs.** Early builds of the removed `StandardFactory*` contracts passed `address(this)` (the factory) as the RepToken's `timelockAddress`. Because it is immutable, `startNewRewardEpoch` and `setDelegateShareBps` are permanently uncallable on those DAOs. Admin-gated functions still work because `admin` is moved to the real Timelock. `JurisdictionFactory` passes the real Timelock.
 - **Reward-epoch events are not indexed.** The indexer does not listen to `NewRewardEpoch` or `RewardClaimed`; apps must read them from chain.
@@ -288,6 +288,6 @@ An appeal is just this proposal: nothing is registered on the project. The appea
 - [economy.md](economy.md): projects, arbitration, appeals
 - [registry-settings.md](registry-settings.md): registry keys and Economy parameters
 - [technical-reference.md](technical-reference.md): full API
-- [autonet.md](autonet.md): Autonet satellites (minters, Coin Offering)
+- [autonet.md](autonet.md): Autonet satellites (minters)
 - [deployments.md](deployments.md): live addresses
 - [OpenZeppelin Governor 5.x](https://docs.openzeppelin.com/contracts/5.x/governance)

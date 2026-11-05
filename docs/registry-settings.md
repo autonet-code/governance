@@ -56,7 +56,7 @@ Attaching a module records its entries; detaching clears them. See [modules.md](
 
 ### `jurisdiction.parity.<token>`
 
-REP minted per unit of a payment token. Read by `EconomyRepClaim.claim()` (and by the CoinOffering and AutonetVault contracts, which use the same convention).
+REP minted per unit of a payment token. Read by `EconomyRepClaim.claim()` (and by the AutonetVault, which uses the same convention).
 
 | | |
 |---|---|
@@ -77,7 +77,7 @@ Parity is applied when the user claims, to the unclaimed delta of their earnings
 
 ### `jurisdiction.economy.rep_rate_bps`
 
-One rate on all the REP `EconomyRepClaim` mints: `reputation = amount * parity / 1e18 * rate / 10000`, summed across tokens first. The parity keeps its meaning, so the AutonetVault and CoinOffering are unaffected, and AutonetRepClaim does not read this key.
+One rate on all the REP `EconomyRepClaim` mints: `reputation = amount * parity / 1e18 * rate / 10000`, summed across tokens first. The parity keeps its meaning, so the AutonetVault is unaffected, and AutonetRepClaim does not read this key.
 
 | | |
 |---|---|

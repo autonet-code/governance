@@ -34,8 +34,8 @@ An internal audit and a test plan exist; both are kept private.
 | Fake ledger writes | `updateEarnings`, `updateSpendings`, `registerBacker`, `registerProjectRoles` accept calls only from clones the Economy deployed (`isProjectContract`) | `Economy.sol` |
 | Reward claims cut short | Jurisdiction earmarks (reward epochs) cannot be released with `withdrawEarmarkedFunds`; only `reclaimEarmarkedFunds`, after the grace period | `Registry.rewardEarmark` |
 | Double withdrawal | Contractor payout is zeroed before transfer; backers are marked `contributorSettled`; the arbitration stake is reclaimable once and only if it did not pay the arbiter | projects |
-| Non-standard ERC20s (no return value) | `Registry`, `Economy`, `ERC20Project`, `AutonetVault`, `CoinOffering` use `SafeERC20` | see caveats |
-| Reentrancy | `Registry` (`transferETH`, `transferERC20`, `disburseEarmarked`), `AutonetVault.buy`, `CoinOffering.buy` are `nonReentrant`. Project clones have no guard and follow checks-effects-interactions | `test/autonet-vault.test.js`, `test/coin-offering.test.js` (with `ReentrantPaymentToken`) |
+| Non-standard ERC20s (no return value) | `Registry`, `Economy`, `ERC20Project`, `AutonetVault` use `SafeERC20` | see caveats |
+| Reentrancy | `Registry` (`transferETH`, `transferERC20`, `disburseEarmarked`), `AutonetVault.buy` are `nonReentrant`. Project clones have no guard and follow checks-effects-interactions | `test/autonet-vault.test.js` (with `ReentrantPaymentToken`) |
 
 ### Autonet satellites
 
@@ -43,14 +43,13 @@ An internal audit and a test plan exist; both are kept private.
 |--------|-----------|-------|
 | Vault custody risk | Payment moves buyer to Registry in one `safeTransferFrom`; the vault holds neither funds nor ATN | `AutonetVault.buy` |
 | Unbacked ATN | ATN is minted only on the external Substrate, which gates `mintFromVault` to the vault address fixed in its constructor | Substrate (autonet repo) |
-| Parity mispricing | Parity is a Registry key editable only by the timelock; the vault and CO can be paused by their admin (the timelock) | `Registry`, `pause()` |
+| Parity mispricing | Parity is a Registry key editable only by the timelock; the vault can be paused by its admin (the timelock) | `Registry`, `pause()` |
 | REP double count | `AutonetRepClaim` mints only the delta over a per-agent watermark on monotonic Substrate ledgers; `EconomyRepClaim` likewise per user and token | `claimedEarnings` (both), `EconomyRepClaim.claimedSpendings` |
 | Malicious tool | Nodes run only bonded tools and judge them by their ratings. Staked epoch reviews are committed hidden and weighed by REP at the epoch's start, so REP can't be gathered mid-review and nobody can copy a tally; withheld batches lose their whole stake and REP penalty. Settled harm slashes that share of the author's bond and REP after an appeal window in which the DAO can overrule; slashes move ATN and REP and never create them | `ToolBond`, `RepToken.slash`/`reassign` |
-| CO oversells | `saleCap` enforced on every buy and cannot be set below `totalMinted` | `CoinOffering` |
 
 ## Known caveats
 
-- Fee-on-transfer payment tokens would short the treasury in the vault and CO; they are excluded socially when governance sets parity.
+- Fee-on-transfer payment tokens would short the treasury in the vault; they are excluded socially when governance sets parity.
 - Standard DAOs created by factory builds that passed `address(this)` as the RepToken timelock (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) cannot call `startNewRewardEpoch` or `setDelegateShareBps`. `JurisdictionFactory` passes the real timelock for every DAO; economy DAOs were never affected. See [technical-reference.md](technical-reference.md#reptoken).
 - DAOs created by the old standard factories (the live Shadownet suite) have the factory as their Registry `wrapper` and so it keeps registry edit rights; the factory exposes no function that uses them after deployment. `JurisdictionFactory` sets no wrapper.
 - DAOs on a WrappedRepToken can't take modules: the RepToken grant actions revert.

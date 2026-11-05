@@ -9,7 +9,7 @@ describe("AutonetVault", function () {
     const ATN_DECIMALS = 6; // Substrate ATN is 1e6-scaled.
 
     // Parity is the jurisdiction-wide multiplier into 18-decimal REP units (the
-    // same key RepToken and CoinOffering read); 1 ATN prices like 1 REP, so
+    // same key EconomyRepClaim reads); 1 ATN prices like 1 REP, so
     // atnOut = paymentAmount * parity / 1e18 / 1e12.
     // 1 USDC (6 dec) -> 2 ATN: 1e6 * parity / 1e30 = 2e6  =>  parity = 2e30.
     const PARITY = 2n * 10n ** 30n;
@@ -129,8 +129,7 @@ describe("AutonetVault", function () {
         });
 
         it("is uncapped (no sale cap): a very large buy succeeds", async function () {
-            // 50,000 USDC -> 100,000 ATN. CoinOffering would need a cap raise;
-            // the vault has none.
+            // 50,000 USDC -> 100,000 ATN. The vault has no cap.
             const pay = ethers.parseUnits("50000", USDC_DECIMALS);
             await (await vault.connect(buyer).buy(await usdc.getAddress(), pay)).wait();
             expect(await atn.balanceOf(buyer.address)).to.equal(atnUnits("100000"));
@@ -197,7 +196,7 @@ describe("AutonetVault", function () {
             expect(await usdc.balanceOf(registryAddr)).to.equal(pay);
         });
 
-        // FEE-ON-TRANSFER CAVEAT (documented, mirrors CoinOffering):
+        // FEE-ON-TRANSFER CAVEAT (documented):
         // Payment tokens are governance-whitelisted via the parity key, so the
         // standard-ERC20 (no fee-on-transfer) invariant is enforced socially at
         // registration time. If a fee-on-transfer token WERE whitelisted, the
@@ -272,7 +271,7 @@ describe("AutonetVault", function () {
         });
 
         it("has NO sale-cap knob (uncapped by design)", async function () {
-            // AutonetVault deliberately omits CoinOffering's setSaleCap/saleCap.
+            // AutonetVault deliberately has no setSaleCap/saleCap.
             expect(vault.setSaleCap).to.equal(undefined);
             expect(vault.saleCap).to.equal(undefined);
         });

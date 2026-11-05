@@ -8,7 +8,7 @@ A **jurisdiction** is a set of contracts sharing one Timelock as its on-chain id
 
 - **Core** (every DAO): Governor, Timelock, Registry (treasury + config), and a governance token (soulbound or transferable RepToken, or a WrappedRepToken).
 - **Modules** (optional, see [modules.md](modules.md)): the `economy` module (an `Economy` that clones escrow projects, plus an `EconomyRepClaim` that mints REP for what members earn and spend in it), `content_court` and `autonet`. Attached at origination or later by proposal. A DAO has an Economy when its Registry has `jurisdiction.economy`.
-- **Satellites** (optional): standalone contracts that plug into the RepToken, Registry and Timelock, such as `CoinOffering`. See [autonet.md](autonet.md).
+- **Satellites** (optional): standalone contracts that plug into the RepToken, Registry and Timelock, such as `AutonetVault`. See [autonet.md](autonet.md).
 
 ## Contract graph
 
@@ -42,7 +42,7 @@ A **jurisdiction** is a set of contracts sharing one Timelock as its on-chain id
    |
    |  minters / slashers / readers
    v
-Modules: EconomyRepClaim, AutonetRepClaim, ToolBond, ContentCourt; satellites: CoinOffering
+Modules: EconomyRepClaim, AutonetRepClaim, ToolBond, ContentCourt
 ```
 
 ### Who controls what
@@ -75,7 +75,6 @@ Modules are prepared by a `ModuleSetup` and attached by `JurisdictionFactory.fin
 | `Economy`, `EconomyRepClaim` | `economy` module (`EconomySetup`) | Marketplace governed by the Timelock; the claim is a RepToken minter |
 | `ContentCourt` | `content_court` module | RepToken slasher. See [content-court.md](content-court.md) |
 | `AutonetVault`, `AutonetRepClaim`, `ToolBond`, ... | `autonet` module (`AutonetSetup`) | Vault mints ATN on the Autonet `Substrate`, payment to the Registry; the REP claim is a minter against ratified ATN earnings; ToolBond is a slasher |
-| `CoinOffering` | Standalone, deployed by script | Sells a transferable RepToken for payment tokens priced by a Registry parity; payment goes straight to the Registry; mints to buyers as a RepToken minter granted by proposal |
 
 `Substrate` and the ATN token come from the separate Autonet repo. Details in [autonet.md](autonet.md).
 

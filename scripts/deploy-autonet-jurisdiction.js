@@ -120,7 +120,7 @@ async function main() {
     votingDelay: minutes("VOTING_DELAY_SECS", 60), votingPeriod: minutes("VOTING_PERIOD_SECS", 604800),
     proposalThreshold: PROPOSAL_THRESHOLD, quorumFraction: QUORUM_FRACTION,
     executionDelay: Number(env("TIMELOCK_DELAY_SECS", 60)),
-    // Share of For+Against a constitutional proposal (charter, epoch rules, timelock) needs, 0 = 6667
+    // Share of all REP a constitutional proposal (charter, epoch rules, timelock) needs, 0 = 6667
     supermajorityBps: Number(env("SUPERMAJORITY_BPS", 0)),
   };
   if (params.initialMembers.length !== params.initialAmounts.length) throw new Error("MEMBERS and AMOUNTS length mismatch");

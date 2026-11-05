@@ -21,7 +21,7 @@ describe("RepToken defaultDelegate", function () {
         const RepTokenFactory = await ethers.getContractFactory("RepToken");
         // transferable = true so we can exercise both mint-receipt and transfer-receipt paths.
         repToken = await RepTokenFactory.deploy(
-            "Autonet Boats", "ATNB",
+            "Test Rep", "TREP",
             await registry.getAddress(), timelock.address,
             [], [], true
         );
@@ -108,7 +108,7 @@ describe("RepToken defaultDelegate", function () {
 
     it("does not auto-delegate an exempt account (inventory-holding contract)", async function () {
         await repToken.connect(timelock).setDefaultDelegate(execDelegate.address);
-        // Mark `other` exempt (stands in for a CO/treasury holding unsold float).
+        // Mark `other` exempt (stands in for a treasury holding unsold float).
         await expect(repToken.connect(timelock).setAutoDelegateExempt(other.address, true))
             .to.emit(repToken, "AutoDelegateExemptSet")
             .withArgs(other.address, true);

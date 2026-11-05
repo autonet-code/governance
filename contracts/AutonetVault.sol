@@ -27,7 +27,7 @@ interface IAutonetATN {
 
 /**
  * @title AutonetVault
- * @notice A CoinOffering-shaped satellite that lets a JURISDICTION DAO sell ATN
+ * @notice A satellite that lets a JURISDICTION DAO sell ATN
  *         (the Autonet network's substrate token) for registry-whitelisted
  *         ERC20s. It is a ROUTER, not a custodian:
  *
@@ -36,22 +36,21 @@ interface IAutonetATN {
  *           - ATN is minted to the buyer on the EXTERNAL Substrate contract via
  *             `IAutonetATN.mintFromVault`. The vault holds no ATN inventory.
  *
- * DIFFERENCES FROM CoinOffering ("CO")
- * ------------------------------------
+ * WHAT IT SELLS
+ * -------------
  *   - NO SALE CAP. The offering is uncapped; supply policy lives on the
  *     Autonet network (Substrate emission), not here.
  *   - BUY ONLY. No redeem path.
- *   - EXTERNAL minted token. CO mints an in-suite RepToken/ERC20Votes governance
- *     token (`IMintableATNB.mint`); this vault mints the Autonet NETWORK token on
- *     a foreign contract (`IAutonetATN.mintFromVault`), whose address is
- *     immutable (constructor arg). No auto-delegation, no governance-power
- *     concerns — ATN is a network credit, not this DAO's governance token.
+ *   - EXTERNAL minted token. This vault mints the Autonet NETWORK token on a
+ *     foreign contract (`IAutonetATN.mintFromVault`), whose address is immutable
+ *     (constructor arg). No auto-delegation, no governance-power concerns: ATN
+ *     is a network credit, not this DAO's governance token.
  *
  * PARITY (one meaning across the jurisdiction)
  * ---------------------------------------------
  * Price is NOT set here. The vault reads the registry key
  *   "jurisdiction.parity.<lowercaseTokenHex>"
- * the same key RepToken and CoinOffering read: an 18-decimal fixed-point
+ * the same key EconomyRepClaim reads: an 18-decimal fixed-point
  * multiplier from payment-token base units to 18-decimal jurisdiction units
  * (REP base units). Absent / "0" means the token is NOT whitelisted.
  *
@@ -62,8 +61,7 @@ interface IAutonetATN {
  *   atnOut = paymentAmount * parity / 1e18 / 1e12
  *
  * One parity therefore means the same thing everywhere: a USDC parity of 1e30
- * makes 1 USDC worth 1 REP when earned in a project, 1 ATNB in the coin
- * offering and 1 ATN from this vault.
+ * makes 1 USDC worth 1 REP when earned in a project and 1 ATN from this vault.
  *
  *   1 USDC (6 dec) -> 1 ATN:  parity = 1e30   (1e6 * 1e30 / 1e30 = 1e6 = 1 ATN)
  *   1 USDC (6 dec) -> 2 ATN:  parity = 2e30
@@ -74,10 +72,10 @@ interface IAutonetATN {
  *
  * GOVERNANCE
  * ----------
- * There is NOTHING to govern on the vault itself beyond CO's minimum: parity /
+ * There is NOTHING to govern on the vault itself beyond the minimum: parity /
  * whitelist are edited on the Registry (through the DAO timelock), which the
  * vault only READS. `admin` (expected: the Timelock) holds only the
- * pause/unpause and admin-transfer powers CO has — no rate/cap knobs, because
+ * pause/unpause and admin-transfer powers — no rate/cap knobs, because
  * there is no cap and the rate is the registry parity.
  */
 contract AutonetVault is ReentrancyGuard, Pausable {
@@ -203,8 +201,7 @@ contract AutonetVault is ReentrancyGuard, Pausable {
         //    fee-on-transfer payment token would short the treasury vs the
         //    credited paymentAmount — payment tokens are governance-whitelisted
         //    via the parity key, so the standard-ERC20 (no fee-on-transfer)
-        //    invariant is enforced socially at registration time (same caveat
-        //    as CoinOffering).
+        //    invariant is enforced socially at registration time.
         IERC20(paymentToken).safeTransferFrom(msg.sender, registryAddress, paymentAmount);
 
         // 2. Mint ATN to the buyer on the external Substrate contract. The vault

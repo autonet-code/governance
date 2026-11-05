@@ -13,13 +13,12 @@ Related: [architecture.md](architecture.md), [governance.md](governance.md), [re
 | `AutonetVault` | Sells Substrate ATN for whitelisted ERC20s; payment goes to the Registry | **Live.** Deployed on Shadownet and registered under `jurisdiction.autonet.vault` (`scripts/submit-autonet-registry-keys.js`) |
 | `AutonetRepClaim` | Mints REP 1:1 against ATN an agent provably earned on the Substrate | **Live.** Granted minter rights by proposal (the 2026-07-10 flag-day proposal on Shadownet); registered under `jurisdiction.autonet.rep_claim` |
 | `ToolBond` | ATN bonds behind every tool, and staked epoch reviews that rate tools per charter axis and on harm, with DAO appeal on harm | **Reworked (2026-10-17).** Deployed by `AutonetSetup` with its slasher grant; nodes run tools only while `isBonded`, and judge them by their ratings |
-| `CoinOffering` | Sells the jurisdiction's own transferable governance token (ATNB) under a DAO-set cap | **Tested in isolation** (`deployCOLocal.js`, `deployTestCOShadownet.js`, `deployTestCOBaseSepolia.js`). Not part of the Autonet genesis flow |
 
 > New jurisdictions get `AutonetRepClaim` (empty genesis seed) and its minter grant at genesis (see [Genesis](#genesis-autonetsetup)). Jurisdictions that still have the retired ReputationMirror as a minter revoke it by proposal (see [Minter swap](#minter-swap-from-the-retired-mirror)).
 
 ## Parity: one registry key, one formula
 
-`EconomyRepClaim` (economy reputation), `CoinOffering` and `AutonetVault` all price payment tokens from the same Registry key:
+`EconomyRepClaim` (economy reputation) and `AutonetVault` price payment tokens from the same Registry key:
 
 ```
 jurisdiction.parity.<lowercase 0x token address>      (native currency: 0xeeee...eeee)
@@ -28,29 +27,29 @@ jurisdiction.parity.<lowercase 0x token address>      (native currency: 0xeeee..
 The value is a decimal string holding an **18-decimal fixed-point multiplier from payment-token base units into jurisdiction units** (REP base units, 18 decimals). One parity means the same thing everywhere:
 
 ```
-EconomyRepClaim, CoinOffering:  out = paymentAmount * parity / 1e18        (REP / ATNB, 18 dec)
-AutonetVault:                   out = paymentAmount * parity / 1e18 / 1e12  (ATN, 6 dec)
+EconomyRepClaim:  out = paymentAmount * parity / 1e18        (REP, 18 dec)
+AutonetVault:     out = paymentAmount * parity / 1e18 / 1e12  (ATN, 6 dec)
 ```
 
-1 ATN (1e6 base units) prices like 1 REP (1e18), the same 1:1 that `AutonetRepClaim` uses, so the vault only divides by `REP_PER_ATN_BASE = 1e12`. A USDC parity of `1e30` makes 1 USDC worth 1 REP when earned in a project, 1 ATNB in the coin offering and 1 ATN from the vault.
+1 ATN (1e6 base units) prices like 1 REP (1e18), the same 1:1 that `AutonetRepClaim` uses, so the vault only divides by `REP_PER_ATN_BASE = 1e12`. A USDC parity of `1e30` makes 1 USDC worth 1 REP when earned in a project and 1 ATN from the vault.
 
-Absent, empty or `"0"` means the token is not whitelisted (`TokenNotRegistered` in the vault and CO; zero reputation in EconomyRepClaim). Values are parsed with `Strings.parseUint`, so they must be plain integers (`"1000000000000000000"`, not `"1e18"`).
+Absent, empty or `"0"` means the token is not whitelisted (`TokenNotRegistered` in the vault; zero reputation in EconomyRepClaim). Values are parsed with `Strings.parseUint`, so they must be plain integers (`"1000000000000000000"`, not `"1e18"`).
 
 Decimals are not queried. The payment token's decimals are baked into the value:
 
 ```
-parity = price * 10^(36 - paymentDecimals)       (price in REP, ATNB or ATN per payment token)
+parity = price * 10^(36 - paymentDecimals)       (price in REP or ATN per payment token)
 ```
 
 Examples: 1 USDC (6 dec) to 1 unit: `1e30`; 1 USDC to 2 units: `2e30`; 1 DAI or native (18 dec) to 1 unit: `1e18`. This is the form werule writes (`ValueIndexItem.toRegistryValue`, mirrored in `scripts/e2eLocal.js`).
 
 Jurisdictions attached before 2026-10-12 set vault parities 1e12 lower (the vault did not scale then); re-set them when moving to the current vault.
 
-Integer flooring: a payment that floors to zero output reverts with `DustAmount` in the vault and CO. ATN has fewer decimals than most payment tokens, so dust is more likely there.
+Integer flooring: a payment that floors to zero output reverts with `DustAmount` in the vault. ATN has fewer decimals than most payment tokens, so dust is more likely there.
 
 ## AutonetVault
 
-`contracts/AutonetVault.sol`. A buy-only router modelled on CoinOffering.
+`contracts/AutonetVault.sol`. A buy-only router.
 
 - `buy(paymentToken, paymentAmount)`: reads parity, computes `atnOut`, pulls `paymentAmount` from the buyer **straight into the Registry** with `safeTransferFrom`, then calls `IAutonetATN(atnToken).mintFromVault(buyer, atnOut)` on the Substrate. `nonReentrant`, `whenNotPaused`. Emits `AtnPurchased(buyer, paymentToken, paymentAmount, atnOut, parity)`.
 - `quote`, `getParity`: views. `totalMinted`, `totalRaised[token]`: counters.
@@ -101,17 +100,6 @@ Trust assumptions: the Substrate's earnings ledgers are honest and monotonic; Re
 
 Bonds are flat for now; scaling them with a tool's usage is a later step. Bonds are only as sound as ATN itself, which depends on the Substrate's anchors.
 
-## CoinOffering
-
-`contracts/CoinOffering.sol`. Sells ATNB (a transferable RepToken used as the governance token) for whitelisted ERC20s.
-
-- `buy(paymentToken, paymentAmount)`: same parity math and routing as the vault, but mints ATNB via `RepToken.mint` (the CO must be a minter) and enforces `totalMinted + atnbOut <= saleCap` (`CapExceeded`). Emits `TokensPurchased`.
-- `setSaleCap(newCap)`: admin only, never below `totalMinted`. `saleCap = 0` (the default) means closed.
-- `pause`, `unpause`, `transferAdmin`: admin only. `remaining()` view.
-- Delegation is handled by the token: with `RepToken.setDefaultDelegate(executionDelegate)` set, buyers are auto-delegated on first receipt and can later self-delegate. Inventory holders can be excluded with `setAutoDelegateExempt`.
-
-The contract header still describes a "DAO mints inventory to the CO" model. The code mints on demand to the buyer; there is no inventory.
-
 ## Genesis (AutonetSetup)
 
 `contracts/modules/AutonetSetup.sol` is the `autonet` [module](modules.md): it launches a jurisdiction's whole Autonet layer in one transaction. It depends on no other module. At origination it is prepared between `JurisdictionFactory.deployCore` and `finalize` (the werule wizard's Autonet module, and `scripts/deploy-autonet-jurisdiction.js`); a live jurisdiction attaches it by a proposal built with `ModuleProcessor.installCalls`:
@@ -121,7 +109,7 @@ The contract header still describes a "DAO mints inventory to the CO" model. The
 3. `AutonetSetup.prepareInstallation(core, abi.encode(AutonetParams, ToolBond.Params))` deploys the Substrate (treasury = Registry, governor = Timelock, anchorer = the AnchorElection, `genesisRoot` = the ATN genesis claim root of a fork or split, zero for a new network), the AnchorElection (autonet `contracts/core/AnchorElection.sol`), AutonetVault, AutonetRepClaim, ToolBond, ServiceRegistry and PaymentChannel. `id` comes from `lastPreparedBy(preparer)`; `deploymentOf(id)` returns `{ substrate, anchorElection, vault, repClaim, toolBond, serviceRegistry, paymentChannel, charter, epochRules }`.
 4. `JurisdictionFactory.finalize(core, [economy, autonet], keys, values)` attaches both in order. For the autonet installation that means `minter` rights for the REP claim, `slasher` rights for ToolBond, the AnchorElection as an option source on the governor (`HomebaseDAO.setOptionSource`, which the launching factory may call until the handover), the `jurisdiction.autonet.*` keys (every Autonet contract, including `anchor_election`, plus `rep_token`, `dao`, `timelock`, `registry`, and `charter` and `epoch_rules` when given) and `modules.autonet`; `keys` carries the parities. The grants happen while the factory is still RepToken admin, so nothing needs a proposal afterwards. The daemon joins a jurisdiction from those Registry keys alone.
 
-The charter is the Registry entry `jurisdiction.autonet.charter`, the full JSON text `{"axes":[{"id":"...","thesis":"..."}]}`. Each DAO defines its own axes, but every charter must include `correctness` and `simplicity`: the wizard checks that, and the daemon refuses a charter without them. Daemons hash the entry's exact bytes (sha256 of the UTF-8 string, never re-serialized) and read it pinned to the previous anchor's block, so a charter changed by proposal applies from the next epoch. Changing the charter or the epoch rules is a constitutional proposal: it needs the DAO's supermajority of For and Against (see [governance.md](governance.md)). `jurisdiction.autonet.epoch_rules` is the version of the epoch math (`"2"`); it changes only when that math does, and a daemon refuses to join a DAO whose version it doesn't support. The build metadata defaults the charter to v1 and fixes the epoch rules version; every setting can be changed by proposal (a new challenge window applies to channels opened after the change).
+The charter is the Registry entry `jurisdiction.autonet.charter`, the full JSON text `{"axes":[{"id":"...","thesis":"..."}]}`. Each DAO defines its own axes, but every charter must include `correctness` and `simplicity`: the wizard checks that, and the daemon refuses a charter without them. Daemons hash the entry's exact bytes (sha256 of the UTF-8 string, never re-serialized) and read it pinned to the previous anchor's block, so a charter changed by proposal applies from the next epoch. Changing the charter or the epoch rules is a constitutional proposal: it needs the DAO's supermajority of all REP (see [governance.md](governance.md)). `jurisdiction.autonet.epoch_rules` is the version of the epoch math (`"2"`); it changes only when that math does, and a daemon refuses to join a DAO whose version it doesn't support. The build metadata defaults the charter to v1 and fixes the epoch rules version; every setting can be changed by proposal (a new challenge window applies to channels opened after the change).
 
 The Substrate takes the vault as its minter and the vault takes the Substrate. The vault is the launch's first CREATE (its address follows from the setup's nonce, which each launch advances by exactly seven, so from the installation id), so the Substrate is created with CREATE2 at an address computed beforehand. The creation code of the Substrate, ServiceRegistry, PaymentChannel and AnchorElection (from `test/fixtures/autonet`) and of ToolBond (from this repo) lives on-chain in five code blobs fixed when AutonetSetup is deployed (`scripts/lib/modules.js` `deployAutonetSetup`), so a preparer picks parameters but never code. `scripts/deploy-jurisdiction-suite.js` deploys and publishes AutonetSetup with the suite. A launch costs about 11M gas.
 
@@ -145,6 +133,5 @@ Timing env vars are seconds in whole minutes (`VOTING_DELAY_SECS`, `VOTING_PERIO
 | `test/autonet-vault.test.js` | Parity math (USDC and DAI into ATN at jurisdiction-unit parity), uncapped, dust, de-whitelisting, routing, pause, admin, reentrancy |
 | `test/autonet-rep-claim.test.js` | Against the real Substrate: 1e12 scaling, summed base, watermark idempotency, permissionless trigger, registered agents only, genesis seed, no mint without grant |
 | `test/tool-bond.test.js` | Against the real Substrate and a RepToken: slasher rights, author-only bonding, unbond delay and round lock, REP snapshot weights, commit-reveal, malware and clean payouts, silent committers, ties, DAO overrule window, batched finalize, lapse, parameter bounds |
-| `test/coin-offering.test.js` | Cap, auto-delegation, reclaiming votes, 6 to 18 parity |
 
 The real contracts come from `test/fixtures/autonet/` (ABI and bytecode, with the source commit in `SOURCE.json`). Refresh them after changing the autonet contracts: compile in the autonet repo, then `node scripts/sync-autonet-artifacts.js [path to autonet]`. The vault unit test still uses a small stand-in, `contracts/test/MockAutonetATN.sol`.

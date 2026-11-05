@@ -10,7 +10,7 @@ contract DAOFactory {
     address[] public deployedDAOs;
     event Deployed(address dao); // Event to capture the new DAO address
 
-    /// Default share of the For and Against votes a constitutional proposal needs (two thirds)
+    /// Default share of all REP a constitutional proposal needs (two thirds)
     uint256 public constant DEFAULT_SUPERMAJORITY_BPS = 6667;
 
     /// daoSettings: voting delay (minutes), voting period (minutes), proposal threshold, quorum

@@ -54,7 +54,7 @@ constructor(
         _setSupermajority(_supermajorityBps);
     }
 
-    /// Share of the For and Against votes, in basis points, a protected proposal needs (5001..10000)
+    /// Share of all REP at the snapshot, in basis points, a protected proposal needs (5001..10000)
     uint256 public supermajorityBps;
     mapping(uint256 => uint256) private _supermajorityOf;
 

@@ -3,14 +3,14 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-interface ICOReenter {
+interface IBuyReenter {
     function buy(address paymentToken, uint256 paymentAmount) external returns (uint256);
 }
 
 /**
  * @title ReentrantPaymentToken
  * @notice Malicious ERC20 used only in tests: on transferFrom it tries to
- *         re-enter the CoinOffering.buy() function to prove the nonReentrant
+ *         re-enter the AutonetVault.buy() function to prove the nonReentrant
  *         guard holds.
  */
 contract ReentrantPaymentToken is ERC20 {
@@ -42,8 +42,8 @@ contract ReentrantPaymentToken is ERC20 {
     {
         if (armed) {
             armed = false; // prevent infinite loop; one shot
-            // Re-enter CO.buy with a different (registered) token.
-            ICOReenter(co).buy(victimPaymentToken, 1);
+            // Re-enter buy with a different (registered) token.
+            IBuyReenter(co).buy(victimPaymentToken, 1);
         }
         return super.transferFrom(from, to, value);
     }

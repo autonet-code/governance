@@ -409,7 +409,7 @@ event SpendWindowReset(address indexed token, uint256 windowStart);
 | `GRACE` / `MAX_HELD` | `1 days` / `8`, DAO proposal holds | DaoProposalHold |
 | `NATIVE_CURRENCY` / `NATIVE_TOKEN` | `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` | Economy / Registry |
 | `MAX_DELEGATE_SHARE_BPS` | `2500` | RepToken |
-| `PARITY_ONE` | `1e18` | EconomyRepClaim, CoinOffering, AutonetVault |
+| `PARITY_ONE` | `1e18` | EconomyRepClaim, AutonetVault |
 
 Economy constructor defaults (`EconomySetup` sets all but `maxImmediateBps` from its `Params`, the arbitration fee through the constructor):
 

@@ -25,21 +25,20 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     // on first receipt. The moment a holder calls delegate() themselves, their
     // choice wins and is never auto-reset (auto-delegation only fires when the
     // account's current delegate is address(0)). Governance-settable; address(0)
-    // disables the feature (default). Suite-level primitive: enables flows like
-    // the Coin Offering auto-delegating buyers to an execution delegate without
-    // any signature, while preserving each holder's right to reclaim their vote.
+    // disables the feature (default). Suite-level primitive: auto-delegates new
+    // holders to an execution delegate without any signature, while preserving
+    // each holder's right to reclaim their vote.
     address public defaultDelegate;
 
     // Accounts exempted from auto-delegation. Inventory-holding contracts (e.g.
-    // a Coin Offering holding unsold tokens, a treasury, a vesting vault) must
+    // a treasury, a vesting vault) must
     // be exempt so their held float does NOT accrue voting power to the default
     // delegate — only tokens in the hands of real holders should auto-delegate.
     // Governance-settable. An exempt account can still self-delegate explicitly.
     mapping(address => bool) public autoDelegateExempt;
 
-    // Addresses authorized to mint, in addition to admin. Used to grant a sale
-    // contract (the Coin Offering) the right to mint tokens directly to buyers
-    // up to its own cap, so no pre-minted inventory is needed. Governance-settable.
+    // Addresses authorized to mint, in addition to admin. Used to grant a module
+    // (a REP claim, say) the right to mint REP on its own terms. Governance-settable.
     mapping(address => bool) public minters;
 
     // Addresses authorized to slash REP (e.g. a verdict contract that penalizes a malicious tool
@@ -203,7 +202,7 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     }
 
     // Exempt (or un-exempt) an account from auto-delegation. Used for
-    // inventory-holding contracts (Coin Offering, treasury, vesting) whose held
+    // inventory-holding contracts (treasury, vesting) whose held
     // float must not accrue votes to the default delegate. Does not change any
     // existing delegation; only affects future auto-delegation on receipt.
     function setAutoDelegateExempt(address account, bool exempt) external {
@@ -223,14 +222,14 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         admin = newAdmin;
     }
 
-    // Grant/revoke minter rights (e.g. the Coin Offering). Governance-gated.
+    // Grant/revoke minter rights (e.g. a REP claim). Governance-gated.
     function setMinter(address account, bool allowed) external {
         require(msg.sender == admin || msg.sender == timelockAddress, "RepToken: Caller is not the admin or Timelock");
         minters[account] = allowed;
         emit MinterSet(account, allowed);
     }
 
-    // Mint: admin/timelock (governance proposals) or a whitelisted minter (the CO).
+    // Mint: admin/timelock (governance proposals) or a whitelisted minter (a REP claim, say).
     function mint(address to, uint256 amount) public {
         require(msg.sender == admin || minters[msg.sender], "RepToken: Not authorized to mint");
         _mint(to, amount);

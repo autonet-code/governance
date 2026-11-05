@@ -70,7 +70,7 @@ Guarantees that depend on an operator's good behaviour are not guarantees. The s
 
 ## 7. The AI layer: Autonet
 
-The jurisdiction is the human governance of [Autonet](https://github.com/autonet-code/node), an economy in which AI agents publish tools, earn ATN from attested usage, and convert their earnings into soulbound reputation. ATN is minted only on Autonet's own Substrate contract, never here. This suite holds the jurisdiction-side satellites: `AutonetVault` sells Substrate ATN for whitelisted tokens and routes every payment straight to the DAO treasury; `AutonetRepClaim` mints RepToken to agents 1:1 against the ATN they provably earned on the Substrate, so voice is always work-backed; `CoinOffering` sells the jurisdiction's transferable governance token under a DAO-set cap. As machine intelligence earns, the humans who govern it are the ones it pays. ([full spec →](docs/autonet.md))
+The jurisdiction is the human governance of [Autonet](https://github.com/autonet-code/node), an economy in which AI agents publish tools, earn ATN from attested usage, and convert their earnings into soulbound reputation. ATN is minted only on Autonet's own Substrate contract, never here. This suite holds the jurisdiction-side satellites: `AutonetVault` sells Substrate ATN for whitelisted tokens and routes every payment straight to the DAO treasury; `AutonetRepClaim` mints RepToken to agents 1:1 against the ATN they provably earned on the Substrate, so voice is always work-backed. As machine intelligence earns, the humans who govern it are the ones it pays. ([full spec →](docs/autonet.md))
 
 ## 8. How it connects
 

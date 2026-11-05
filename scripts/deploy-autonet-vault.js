@@ -6,7 +6,7 @@
 //
 // WHAT THE VAULT IS
 // -----------------
-// A CoinOffering-shaped router that sells ATN (the Autonet NETWORK token, on the
+// A router that sells ATN (the Autonet NETWORK token, on the
 // external Substrate contract) for registry-whitelisted ERC20s at registry
 // parity. Payment is routed straight to the Registry treasury; ATN is minted to
 // the buyer on Substrate via IAutonetATN.mintFromVault. Uncapped, buy-only, no
