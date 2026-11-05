@@ -153,6 +153,8 @@ async function main() {
     charter: env("CHARTER", charterUi("charter").default),
     epochRules: env("EPOCH_RULES", charterUi("epochRules").fixed),
     genesisRoot: env("GENESIS_ROOT", ethers.ZeroHash),
+    serviceFeeBps: envBig("SERVICE_FEE_BPS", 250),
+    feeTreasuryBps: envBig("FEE_TREASURY_BPS", 5000),
   };
   const autonet = await prepare(autonetSetup, deployer, core, "autonet",
     { substrate: autonetParams, toolBond: bondParams });

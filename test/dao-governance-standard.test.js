@@ -12,7 +12,7 @@ describe("Standard DAO Governance", function () {
         const { createJurisdiction } = require("./helpers/jurisdiction");
         const j = await createJurisdiction(deployer, {
             name: "Test DAO", symbol: "TDAO", description: "A test DAO for governance",
-            members: [member1.address, member2.address], amounts: [ethers.parseEther("100"), ethers.parseEther("50")],
+            members: [member1.address, member2.address], amounts: [ethers.parseEther("100"), ethers.parseEther("50")], supermajorityBps: 6000,
             votingDelay: 1, votingPeriod: 2, proposalThreshold: ethers.parseEther("1"), quorumFraction: 4,
             executionDelay: 60,
         });
@@ -168,10 +168,10 @@ describe("Standard DAO Governance", function () {
         });
 
         it("should count votes correctly", async function () {
-            // A mint is constitutional (two thirds of For+Against): For first, since member2's 50 of 150
-            // Against alone would put two thirds out of reach and close the vote
-            await dao.connect(member1).castVote(proposalId, 1); // For: 100 tokens
+            // A mint is constitutional (60% of all REP here): Against first, since member1's 100 of 150
+            // For reaches the bar and closes the vote
             await dao.connect(member2).castVote(proposalId, 0); // Against: 50 tokens
+            await dao.connect(member1).castVote(proposalId, 1); // For: 100 tokens
 
             const proposal = await dao.proposalVotes(proposalId);
             expect(proposal.forVotes).to.equal(ethers.parseEther("100"));

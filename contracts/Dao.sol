@@ -22,15 +22,16 @@ import "./IOptionSource.sol";
 /// leader alone holds the super quorum, which no other option can then catch.
 ///
 /// Constitutional proposals: a proposal is protected, decided once when it is proposed, if any of its
-/// actions (see _isProtected) edits the Autonet charter or epoch rules in a registry, calls the
-/// timelock, calls this governor (every governance-only setting: voting delay and period, proposal
+/// actions (see _isProtected) edits the Autonet charter or epoch rules or the economy's REP rate in a
+/// registry, calls the timelock, calls this governor (every governance-only setting: voting delay and period, proposal
 /// threshold, quorum, supermajority, option sources, relay, updateTimelock), or calls the governance
 /// token for anything but reward epochs (minting, burning, minter and slasher rights, slashing,
 /// default delegation, its admin). So attaching or detaching a module that grants token rights is
 /// constitutional too. Rights already granted keep working without a vote. It passes only if For holds
-/// supermajorityBps of the For and Against votes (abstain excluded) and the quorum is met, and it is
-/// decided early only once no remaining votes could change that. Option-source elections are never
-/// protected: a protected proposal is counted For/Against/Abstain even if its target is a source.
+/// supermajorityBps of all REP at the snapshot and the quorum is met, so REP that doesn't vote For,
+/// delegated or not, counts against. It fails as soon as the bar is out of reach. Option-source
+/// elections are never protected: a protected proposal is counted For/Against/Abstain even if its
+/// target is a source.
 contract HomebaseDAO is Governor, GovernorSettings, GovernorCountingSimple, GovernorVotes, GovernorVotesQuorumFraction, GovernorTimelockControl, GovernorSuperQuorum {
 constructor(
         IVotes _token,
@@ -59,6 +60,7 @@ constructor(
 
     bytes32 private constant CHARTER_KEY = keccak256("jurisdiction.autonet.charter");
     bytes32 private constant EPOCH_RULES_KEY = keccak256("jurisdiction.autonet.epoch_rules");
+    bytes32 private constant REP_RATE_KEY = keccak256("jurisdiction.economy.rep_rate_bps");
     bytes4 private constant EDIT_REGISTRY = bytes4(keccak256("editRegistry(string,string)"));
     // The token calls that stay ordinary: reward epochs move treasury funds, not voting power
     bytes4 private constant START_REWARD_EPOCH = bytes4(keccak256("startNewRewardEpoch(uint256,address)"));
@@ -119,7 +121,7 @@ constructor(
         }
         for (uint256 i = 0; i < keys.length; i++) {
             bytes32 k = keccak256(bytes(keys[i]));
-            if (k == CHARTER_KEY || k == EPOCH_RULES_KEY) return true;
+            if (k == CHARTER_KEY || k == EPOCH_RULES_KEY || k == REP_RATE_KEY) return true;
         }
         return false;
     }
@@ -208,8 +210,8 @@ constructor(
         if (_sourceOf[proposalId] != address(0)) return _optionTotal[proposalId] > 0;
         uint256 bps = _supermajorityOf[proposalId];
         if (bps == 0) return super._voteSucceeded(proposalId);
-        (uint256 againstVotes, uint256 forVotes, ) = proposalVotes(proposalId);
-        return forVotes > 0 && forVotes * 10000 >= bps * (forVotes + againstVotes);
+        (, uint256 forVotes, ) = proposalVotes(proposalId);
+        return forVotes > 0 && forVotes * 10000 >= bps * token().getPastTotalSupply(proposalSnapshot(proposalId));
     }
 
     function votingDelay()
@@ -263,24 +265,17 @@ constructor(
         returns (ProposalState)
     {
         ProposalState s = super.state(proposalId);
-        // Only a vote in progress or an early pass can change below; the supply at the snapshot is
-        // readable only once the snapshot is in the past, so a pending proposal must return here
-        if (s != ProposalState.Active && s != ProposalState.Succeeded) return s;
+        // Only a vote in progress can change below; the supply at the snapshot is readable only once
+        // the snapshot is in the past, so a pending proposal must return here
+        if (s != ProposalState.Active) return s;
         uint256 bps = _supermajorityOf[proposalId];
         uint256 supply = token().getPastTotalSupply(proposalSnapshot(proposalId));
-        // A protected proposal passed early (GovernorSuperQuorum) stands only once For holds the
-        // supermajority even if all the remaining REP votes Against (abstain only lowers the bar)
-        if (bps != 0 && s == ProposalState.Succeeded && clock() <= proposalDeadline(proposalId)) {
-            (, uint256 forVotes, ) = proposalVotes(proposalId);
-            if (forVotes * 10000 < bps * supply) s = ProposalState.Active;
-        }
-        if (s != ProposalState.Active) return s;
-        (uint256 againstVotes, , ) = proposalVotes(proposalId);
+        (uint256 againstVotes, , uint256 abstainVotes) = proposalVotes(proposalId);
         if (supply == 0) return s;
         if (bps == 0) {
             // Against holds half of all REP: For can never get ahead
             if (againstVotes * 2 >= supply) return ProposalState.Defeated;
-        } else if ((supply - againstVotes) * 10000 < bps * supply) {
+        } else if ((supply - againstVotes - abstainVotes) * 10000 < bps * supply) {
             // Even with all the remaining REP, For can't reach the supermajority
             return ProposalState.Defeated;
         }

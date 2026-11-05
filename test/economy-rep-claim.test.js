@@ -151,5 +151,47 @@ describe("EconomyRepClaim", function () {
         await claim.connect(contractor).claim();
         expect(await repToken.balanceOf(contractor.address)).to.equal(expectedReputation);
     });
+
+    describe("jurisdiction.economy.rep_rate_bps", function () {
+        const KEY = "jurisdiction.economy.rep_rate_bps";
+
+        async function earn(amount) {
+            await updateEconomyState([{ user: contractor, amount, token: await testToken.getAddress(), type: 'earnings' }]);
+        }
+
+        it("absent, mints the full amount", async function () {
+            await earn(ethers.parseEther("100"));
+            expect(await claim.claimable(contractor.address)).to.equal(ethers.parseEther("200"));
+        });
+
+        it("scales the REP of every token, and claimable agrees with claim", async function () {
+            await updateEconomyState([
+                { user: contractor, amount: ethers.parseEther("100"), token: await testToken.getAddress(), type: 'earnings' },
+                { user: contractor, amount: ethers.parseEther("10"), token: NATIVE_CURRENCY, type: 'spendings' },
+            ]);
+            await registry.connect(timelock).editRegistry(KEY, "2500");
+            const expected = ethers.parseEther("210") / 4n;
+            expect(await claim.claimable(contractor.address)).to.equal(expected);
+            await claim.connect(contractor).claim();
+            expect(await repToken.balanceOf(contractor.address)).to.equal(expected);
+        });
+
+        it("reaches REP earned but not yet claimed, and leaves what was claimed alone", async function () {
+            await earn(ethers.parseEther("100"));
+            await claim.connect(contractor).claim();
+            await earn(ethers.parseEther("100"));
+            await registry.connect(timelock).editRegistry(KEY, "5000");
+            await claim.connect(contractor).claim();
+            expect(await repToken.balanceOf(contractor.address)).to.equal(ethers.parseEther("300"));
+        });
+
+        it("at 0 mints nothing, and removing it restores the full amount", async function () {
+            await registry.connect(timelock).editRegistry(KEY, "0");
+            await earn(ethers.parseEther("100"));
+            expect(await claim.claimable(contractor.address)).to.equal(0);
+            await registry.connect(timelock).editRegistry(KEY, "");
+            expect(await claim.claimable(contractor.address)).to.equal(ethers.parseEther("200"));
+        });
+    });
 });
 // RepToken.test.js

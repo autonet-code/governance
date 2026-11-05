@@ -5,7 +5,7 @@ const { createJurisdiction, prepare, govern, REP } = require("./helpers/jurisdic
 
 // Constitutional proposals (docs/governance.md): a proposal is protected when any action edits the
 // Autonet charter or epoch rules, calls the timelock, hands over the token, or changes the rules
-// protected votes run under. It then needs supermajorityBps of For+Against (abstain excluded).
+// protected votes run under. It then needs supermajorityBps of all REP at the snapshot.
 describe("Supermajority for constitutional proposals", function () {
     let a, b, c, outsider;
     const ACTIVE = 1n, DEFEATED = 3n, SUCCEEDED = 4n;
@@ -21,7 +21,7 @@ describe("Supermajority for constitutional proposals", function () {
         const j = await createJurisdiction(a, {
             members: members.map((m) => m.address), amounts, votingPeriod: 60 * 24 * 7, ...o,
         });
-        for (const m of members) await j.rep.connect(m).delegate(m.address);
+        for (const m of members.slice(0, o.delegated ?? members.length)) await j.rep.connect(m).delegate(m.address);
         await time.increase(1);
         return j;
     }
@@ -64,6 +64,8 @@ describe("Supermajority for constitutional proposals", function () {
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", [CHARTER, "{}"]), "c1")).to.equal(6667n);
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", [RULES, "3"]), "r1")).to.equal(6667n);
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("batchEditRegistry", [["a", RULES], ["1", "3"]]), "b1")).to.equal(6667n);
+            expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", ["jurisdiction.economy.rep_rate_bps", "10000"]), "rr1")).to.equal(6667n);
+            expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("batchEditRegistry", [["a", "jurisdiction.economy.rep_rate_bps"], ["1", "5000"]]), "rr2")).to.equal(6667n);
             // Other keys, including look-alikes, are ordinary edits
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", ["description", "x"]), "d1")).to.equal(0n);
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("batchEditRegistry", [["jurisdiction.autonet.charter2", "Jurisdiction.autonet.charter"], ["", ""]]), "l1")).to.equal(0n);
@@ -137,7 +139,7 @@ describe("Supermajority for constitutional proposals", function () {
         it("attaching any module that grants token rights is protected: Autonet, the Economy, the content court", async function () {
             const j = await dao();
             const s = j.s;
-            const autonet = await prepare(s, a, j.core, "autonet", { substrate: { challengeWindow: 3600, charter: CHARTER_JSON, epochRules: "2", genesisRoot: ethers.ZeroHash } });
+            const autonet = await prepare(s, a, j.core, "autonet", { substrate: { challengeWindow: 3600, charter: CHARTER_JSON, epochRules: "2", genesisRoot: ethers.ZeroHash, serviceFeeBps: 250, feeTreasuryBps: 5000 } });
             const attach = await s.processor.installCalls(await autonet.setup.getAddress(), autonet.id);
             const { id: attachId } = await propose(j.dao, attach, "Attach Autonet");
             expect(await j.dao.proposalSupermajority(attachId)).to.equal(6667n);
@@ -154,7 +156,7 @@ describe("Supermajority for constitutional proposals", function () {
         it("detaching an Autonet attached at creation is protected (it clears the charter)", async function () {
             const j = await createJurisdiction(a, {
                 members: [a.address], amounts: [REP(1000)], votingPeriod: 60,
-                modules: [["autonet", { substrate: { challengeWindow: 3600, charter: CHARTER_JSON, epochRules: "2", genesisRoot: ethers.ZeroHash } }]],
+                modules: [["autonet", { substrate: { challengeWindow: 3600, charter: CHARTER_JSON, epochRules: "2", genesisRoot: ethers.ZeroHash, serviceFeeBps: 250, feeTreasuryBps: 5000 } }]],
             });
             await j.rep.connect(a).delegate(a.address);
             await time.increase(1);
@@ -193,26 +195,28 @@ describe("Supermajority for constitutional proposals", function () {
     describe("counting", function () {
         const edit = (j, value) => [[j.core.registry], [0n], [j.registry.interface.encodeFunctionData("editRegistry", [CHARTER, value])]];
 
-        it("passes at exactly the threshold of For+Against, with abstain left out", async function () {
-            // a For 6,667, b Against 3,333, c abstains 90,000: 6,667 of 10,000 cast For or Against
-            const j = await dao([REP(6667), REP(3333), REP(90000)]);
+        it("passes the moment For holds exactly the threshold of all REP", async function () {
+            const j = await dao([REP(6667), REP(3333)]);
             const { id } = await propose(j.dao, edit(j, "x"), "at");
             await j.dao.connect(a).castVote(id, 1);
-            await j.dao.connect(b).castVote(id, 0);
-            await j.dao.connect(c).castVote(id, 2);
-            expect(await j.dao.state(id)).to.equal(ACTIVE);
-            await time.increase(Number(await j.dao.votingPeriod()) + 1);
             expect(await j.dao.state(id)).to.equal(SUCCEEDED);
         });
 
-        it("fails one basis point below it, though a simple majority would pass", async function () {
-            const j = await dao([REP(6666), REP(3334), REP(90000)]);
+        it("fails one basis point below it, even with no vote against", async function () {
+            const j = await dao([REP(6666), REP(3334)]);
             const { id } = await propose(j.dao, edit(j, "x"), "below");
             await j.dao.connect(a).castVote(id, 1);
-            await j.dao.connect(b).castVote(id, 0);
-            await j.dao.connect(c).castVote(id, 2);
+            expect(await j.dao.state(id)).to.equal(ACTIVE);
             await time.increase(Number(await j.dao.votingPeriod()) + 1);
             expect(await j.dao.state(id)).to.equal(DEFEATED);
+        });
+
+        it("turnout doesn't lower the bar: all of the votes cast is not enough", async function () {
+            const j = await dao([REP(6000), REP(1000), REP(3000)]);
+            const { id } = await propose(j.dao, edit(j, "x"), "turnout");
+            await j.dao.connect(a).castVote(id, 1);
+            await time.increase(Number(await j.dao.votingPeriod()) + 1);
+            expect(await j.dao.state(id)).to.equal(DEFEATED); // 100% of votes cast, 60% of all REP
         });
 
         it("an ordinary proposal with the same votes still passes by simple majority", async function () {
@@ -225,29 +229,46 @@ describe("Supermajority for constitutional proposals", function () {
             expect(await j.dao.state(id)).to.equal(SUCCEEDED);
         });
 
-        it("no early pass on a simple majority of all REP; an early pass once For holds the supermajority of all REP", async function () {
-            let j = await dao([REP(6000), REP(4000)]);
-            let { id } = await propose(j.dao, edit(j, "x"), "early1");
-            await j.dao.connect(a).castVote(id, 1); // 60% of all REP: an ordinary proposal would pass now
+        it("REP nobody delegated counts against: the bar is a share of the supply", async function () {
+            // c holds 40% and never delegated, so a's 60% can't pass it however long the vote runs
+            const j = await dao([REP(6000), REP(0), REP(4000)].filter((v) => v > 0n), { delegated: 1 });
+            const { id } = await propose(j.dao, edit(j, "x"), "idle");
+            await j.dao.connect(a).castVote(id, 1);
             expect(await j.dao.state(id)).to.equal(ACTIVE);
             await time.increase(Number(await j.dao.votingPeriod()) + 1);
-            expect(await j.dao.state(id)).to.equal(SUCCEEDED); // b never voted: 100% of For+Against
-
-            j = await dao([REP(7000), REP(3000)]);
-            ({ id } = await propose(j.dao, edit(j, "x"), "early2"));
-            await j.dao.connect(a).castVote(id, 1);
-            expect(await j.dao.state(id)).to.equal(SUCCEEDED);
-            const call = edit(j, "x");
-            await j.dao.queue(...call, ethers.id("early2"));
-            await j.dao.execute(...call, ethers.id("early2"));
-            expect(await j.registry.getRegistryValue(CHARTER)).to.equal("x");
+            expect(await j.dao.state(id)).to.equal(DEFEATED);
         });
 
-        it("an early defeat once Against makes the supermajority unreachable, short of half of all REP", async function () {
+        it("still needs the quorum, when it stands above the bar", async function () {
+            const j = await dao([REP(7000), REP(3000)], { quorumFraction: 90 });
+            const { id } = await propose(j.dao, edit(j, "x"), "quorum");
+            await j.dao.connect(a).castVote(id, 1);
+            expect(await j.dao.state(id)).to.equal(ACTIVE);
+            await time.increase(Number(await j.dao.votingPeriod()) + 1);
+            expect(await j.dao.state(id)).to.equal(DEFEATED);
+        });
+
+        it("an early defeat once the bar is out of reach, short of half of all REP", async function () {
             const j = await dao([REP(6000), REP(4000)]);
             const { id } = await propose(j.dao, edit(j, "x"), "defeat");
             await j.dao.connect(b).castVote(id, 0); // 40% Against: For can reach at most 60%
             expect(await j.dao.state(id)).to.equal(DEFEATED);
+        });
+
+        it("abstaining takes REP out of reach too", async function () {
+            const j = await dao([REP(6000), REP(4000)]);
+            const { id } = await propose(j.dao, edit(j, "x"), "abstain");
+            await j.dao.connect(b).castVote(id, 2);
+            expect(await j.dao.state(id)).to.equal(DEFEATED);
+        });
+
+        it("stays open while Against can't yet stop it", async function () {
+            const j = await dao([REP(7000), REP(3000)]);
+            const { id } = await propose(j.dao, edit(j, "x"), "open");
+            await j.dao.connect(b).castVote(id, 0); // For can still reach 70%
+            expect(await j.dao.state(id)).to.equal(ACTIVE);
+            await j.dao.connect(a).castVote(id, 1);
+            expect(await j.dao.state(id)).to.equal(SUCCEEDED);
         });
 
         it("a unanimity threshold is defeated by a single Against vote", async function () {

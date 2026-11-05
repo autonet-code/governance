@@ -82,7 +82,7 @@ describe("ToolBond", function () {
         registry = await (await ethers.getContractFactory("Registry")).deploy(deployer.address, ethers.ZeroAddress);
         await registry.editRegistry("jurisdiction.autonet.charter", CHARTER);
         treasury = await registry.getAddress();
-        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, timelock.address, ethers.ZeroAddress, ethers.ZeroHash, "Test ATN", "TSTATN");
+        substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, timelock.address, ethers.ZeroAddress, ethers.ZeroHash, "Test ATN", "TSTATN", 250, 5000);
         // Signers stand in for the governor and timelock, so the lifecycle floor is just the 2-day buffer
         bond = await (await ethers.getContractFactory("ToolBond")).deploy(await substrate.getAddress(),
             await rep.getAddress(), treasury, deployer.address, timelock.address, PARAMS);

@@ -109,14 +109,15 @@ async function main() {
     const trfToken = await ethers.getContractAt("RepToken", j.core.token);
     await wait(trfToken.connect(alice).transfer(carol.address, E(30)));
     await wait(trfToken.connect(alice).delegate(alice.address));
+    await wait(trfToken.connect(bob).delegate(bob.address));
     const trfEconomy = await prepare(dep, j.core, "economy", ECONOMY);
     const [trfTargets, , trfCalls] = await processor.installCalls(await trfEconomy.setup.getAddress(), trfEconomy.id);
     // Attaching a module to a live DAO grants token rights, so it is constitutional
-    const trfAttach = await govern(j.governor.connect(alice), [alice], trfTargets, trfCalls, "E2E: add the economy");
+    const trfAttach = await govern(j.governor.connect(alice), [alice, bob], trfTargets, trfCalls, "E2E: add the economy");
     manifest.daos.transferable = { dao: j.core.governor, token: j.core.token, economy: trfEconomy.module,
         members: { [alice.address]: E(70).toString(), [bob.address]: E(100).toString(), [carol.address]: E(30).toString() },
         registryValues: { "jurisdiction.economy": trfEconomy.module.toLowerCase() },
-        proposals: { [trfAttach.toString()]: { state: "Executed", forVotes: E(70).toString(), supermajorityBps: "6667" } } };
+        proposals: { [trfAttach.toString()]: { state: "Executed", forVotes: E(170).toString(), supermajorityBps: "6667" } } };
 
     // 3. Wrapped-token DAO: wrap an existing ERC20
     const underlying = await (await ethers.getContractFactory("TestERC20")).deploy("Underlying", "UND", 18, E(1000));
@@ -138,7 +139,7 @@ async function main() {
     const usdcAddr = await usdc.getAddress();
     const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
     j = await createJurisdiction(dep, {
-        name: "E2E Economy", symbol: "ECO", members: [deployer.address, alice.address], amounts: [E(1000), E(500)],
+        name: "E2E Economy", symbol: "ECO", members: [deployer.address, alice.address], amounts: [E(1000), E(500)], supermajorityBps: 6000,
         modules: { economy: ECONOMY },
         keys: [`jurisdiction.parity.${NATIVE.toLowerCase()}`, `jurisdiction.parity.${usdcAddr.toLowerCase()}`],
         values: [E(1).toString(), (10n ** 30n).toString()],
@@ -310,10 +311,12 @@ async function main() {
     await wait(repClaim.connect(bob).claim());
     manifest.daos.economy.members[bob.address] = (await ecoToken.balanceOf(bob.address)).toString();
 
-    // A constitutional proposal: raising the economy DAO's own supermajority (protected at 6667)
-    const raise = await govern(ecoGov.connect(deployer), [deployer], [await ecoGov.getAddress()],
+    // A constitutional proposal: raising the economy DAO's own supermajority (protected at 6000 of all
+    // REP, including what bob claimed and never delegated, so it takes both voters)
+    const raiseFor = (await ecoToken.getVotes(deployer.address)) + (await ecoToken.getVotes(alice.address));
+    const raise = await govern(ecoGov.connect(deployer), [deployer, alice], [await ecoGov.getAddress()],
         [ecoGov.interface.encodeFunctionData("setSupermajority", [7000])], "E2E: raise the supermajority");
-    manifest.daos.economy.proposals = { [raise.toString()]: { state: "Executed", forVotes: E(1000).toString(), supermajorityBps: "6667" } };
+    manifest.daos.economy.proposals = { [raise.toString()]: { state: "Executed", forVotes: raiseFor.toString(), supermajorityBps: "6000" } };
     manifest.daos.economy.fields = { supermajorityBps: "7000" };
 
     // Every kind of event the economy DAO went through reaches its activity feed
@@ -329,7 +332,7 @@ async function main() {
     j = await createJurisdiction(dep, {
         name: "E2E Autonet", symbol: "ATJ", members: [deployer.address], amounts: [E(100)],
         modules: { autonet: {
-            substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "2", genesisRoot: ethers.ZeroHash },
+            substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "2", genesisRoot: ethers.ZeroHash, serviceFeeBps: 250, feeTreasuryBps: 5000 },
             toolBond: { minStake: 100_000_000n, revealWindow: 86400, degradeBps: 1000, authorSlashBps: 10000,
                 unbondDelay: 30 * 86400, reviewerShareBps: 4000, appealPeriod: 120, harmWeightBps: 20000, harmQuorumBps: 10 },
         } },

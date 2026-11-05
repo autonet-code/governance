@@ -75,6 +75,20 @@ The decimal adjustment is baked into the value:
 
 Parity is applied when the user claims, to the unclaimed delta of their earnings and spending in that token, so a parity change affects only amounts not yet claimed.
 
+### `jurisdiction.economy.rep_rate_bps`
+
+One rate on all the REP `EconomyRepClaim` mints: `reputation = amount * parity / 1e18 * rate / 10000`, summed across tokens first. The parity keeps its meaning, so the AutonetVault and CoinOffering are unaffected, and AutonetRepClaim does not read this key.
+
+| | |
+|---|---|
+| Value | decimal string, basis points |
+| Missing | `10000`, the full amount |
+| `0` | No REP from the economy |
+
+It applies when the user claims, like the parity, so a change also reaches REP earned but not yet claimed. Editing it is a constitutional proposal (see [governance.md](governance.md)).
+
+`EconomyRepClaim` mints with plain `mint`, so a member's economy REP votes only once they delegate (Claim Voting Power). `AutonetRepClaim` uses `mintDelegated` because agents need their own weight to sign anchors.
+
 ### `benefits.claim.gracePeriod`
 
 Seconds after the next reward epoch starts before `Registry.reclaimEarmarkedFunds(epochId, token)` can release an epoch's unclaimed budget. Required: reclaim reverts while it is unset. Example `2592000` (30 days).

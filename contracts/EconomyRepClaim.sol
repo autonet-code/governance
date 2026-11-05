@@ -24,11 +24,14 @@ interface IClaimRep {
 /// @title EconomyRepClaim
 /// @notice Mints REP for what a member earned and spent in one Economy, valued at the jurisdiction's
 ///         parities (`jurisdiction.parity.<token>` in the Registry: reputation = amount * parity / 1e18,
-///         see docs/registry-settings.md). A RepToken minter, granted when the Economy module is
+///         see docs/registry-settings.md), times the module-wide `jurisdiction.economy.rep_rate_bps`
+///         (absent: 10000, the full amount; read at claim time like the parity). A RepToken minter, granted when the Economy module is
 ///         attached and revoked when it is detached. Claims are tracked here, per Economy, so each
 ///         earning and spending counts once.
 contract EconomyRepClaim {
     uint256 internal constant PARITY_ONE = 1e18;
+    uint256 internal constant BPS = 10000;
+    string internal constant REP_RATE_KEY = "jurisdiction.economy.rep_rate_bps";
 
     IEconomyProfile public immutable economy;
     IClaimRep public immutable repToken;
@@ -53,6 +56,7 @@ contract EconomyRepClaim {
         for (uint256 i = 0; i < profile.spentTokens.length; i++) {
             amount += _take(claimedSpendings[msg.sender], profile.spentTokens[i], profile.spentAmounts[i]);
         }
+        amount = _atRate(amount);
         if (amount > 0) {
             repToken.mint(msg.sender, amount);
             emit ReputationClaimedFromEconomy(msg.sender, amount);
@@ -70,6 +74,7 @@ contract EconomyRepClaim {
             uint256 prev = claimedSpendings[user][profile.spentTokens[i]];
             if (profile.spentAmounts[i] > prev) amount += _reputation(profile.spentTokens[i], profile.spentAmounts[i] - prev);
         }
+        amount = _atRate(amount);
     }
 
     function _take(mapping(address => uint256) storage claimed, address token, uint256 total) private returns (uint256) {
@@ -77,6 +82,12 @@ contract EconomyRepClaim {
         if (total <= prev) return 0;
         claimed[token] = total;
         return _reputation(token, total - prev);
+    }
+
+    function _atRate(uint256 amount) private view returns (uint256) {
+        string memory v = registry.getRegistryValue(REP_RATE_KEY);
+        if (bytes(v).length == 0) return amount;
+        return amount * Strings.parseUint(v) / BPS;
     }
 
     function _reputation(address token, uint256 amount) private view returns (uint256) {

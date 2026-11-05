@@ -67,7 +67,7 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
         const nonce = await ethers.provider.getTransactionCount(deployer.address);
         const predictedVault = ethers.getCreateAddress({ from: deployer.address, nonce: nonce + 1 });
         // Only the timelock anchors, so every anchor is a DAO proposal
-        substrate = await autonet("Substrate", deployer).deploy(registryAddr, predictedVault, timelockAddr, ethers.ZeroAddress, ethers.ZeroHash, "Test ATN", "TSTATN");
+        substrate = await autonet("Substrate", deployer).deploy(registryAddr, predictedVault, timelockAddr, ethers.ZeroAddress, ethers.ZeroHash, "Test ATN", "TSTATN", 250, 5000);
         vault = await (await ethers.getContractFactory("AutonetVault")).deploy(await substrate.getAddress(), registryAddr, timelockAddr);
 
         expect(await vault.getAddress()).to.equal(predictedVault);

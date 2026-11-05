@@ -24,7 +24,7 @@ describe("AutonetSetup", function () {
         const parityKey = `jurisdiction.parity.${(await usdc.getAddress()).toLowerCase()}`;
         const j = await createJurisdiction(from, {
             members: [member.address], amounts: [REP(1000)],
-            modules: [["autonet", { substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "2", genesisRoot: GENESIS } }]],
+            modules: [["autonet", { substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "2", genesisRoot: GENESIS, serviceFeeBps: 250, feeTreasuryBps: 5000 } }]],
             keys: [parityKey], values: [(10n ** 30n).toString()],
         });
         return { j, d: await s.setups.autonet.deploymentOf(j.installs.autonet.id) };
@@ -37,6 +37,7 @@ describe("AutonetSetup", function () {
         const substrate = autonet("Substrate", deployer).attach(d.substrate);
         // ATN is named after the jurisdiction: its name and the first 8 characters of its RepToken symbol
         expect([await substrate.name(), await substrate.symbol(), await substrate.decimals()]).to.deep.equal(["Jurisdiction ATN", "REPATN", 6n]);
+        expect([await substrate.serviceFeeBps(), await substrate.feeTreasuryBps()]).to.deep.equal([250n, 5000n]);
         expect(await substrate.vaultMinter()).to.equal(d.vault);
         expect(await substrate.treasury()).to.equal(j.core.registry);
         expect(await substrate.governor()).to.equal(j.core.timelock);
