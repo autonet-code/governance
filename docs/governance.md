@@ -268,7 +268,7 @@ All are `dao.propose([target], [0], [calldata], description)`.
 | Overrule arbitration | Project | `daoOverrule(percent, rulingHash)` (inside the appeal window, or on a silent arbiter) |
 | Veto a project | Project | `daoVeto()` |
 
-An appeal is just this proposal: nothing is registered on the project. The appeal window always fits a full proposal lifecycle plus two days; see [economy.md](economy.md).
+An appeal is this proposal, registered on the project with `registerDaoProposal` (the indexer does this when the proposal is created; anyone can). `appealPeriod` is fixed at the ruling and has no floor, but an overrule registered inside it holds finalization and lands even if its vote ends after the window; see [economy.md](economy.md). ToolBond and the ContentCourt work differently: nothing is registered, and their appeal window is never shorter than a full proposal lifecycle plus two days.
 
 ## Known caveats
 
