@@ -27,7 +27,7 @@ This is not a replacement for traditional systems but an alternative that exists
 
 ## 2. Governance: the jurisdiction itself
 
-A jurisdiction is a DAO built on [OpenZeppelin's Governor](https://docs.openzeppelin.com/contracts/5.x/governance): a Governor that counts votes, a Timelock that delays and executes every decision and holds the treasury's authority, a Registry that is both treasury and the jurisdiction's key-value constitution, and a RepToken that carries voting power. Reputation is non-transferable by default, so influence cannot be bought on a market; transferable and wrapped variants exist for communities that want them. Every governance action passes through the Timelock, which gives members time to review, object, or exit before anything executes. One factory creates this core for every DAO; everything else (the economy, the content court, the Autonet layer) is a module the DAO attaches at origination or later by proposal. ([full spec →](docs/governance.md), [modules →](docs/modules.md))
+A jurisdiction is a DAO built on [OpenZeppelin's Governor](https://docs.openzeppelin.com/contracts/5.x/governance): a Governor that counts votes, a Timelock that delays and executes every decision and holds the treasury's authority, a Registry that is both treasury and the jurisdiction's key-value constitution, and a RepToken that carries voting power. Reputation is non-transferable, so influence cannot be bought on a market. Every governance action passes through the Timelock, which gives members time to review, object, or exit before anything executes. One factory creates this core for every DAO; everything else (the economy, the content court, the Autonet layer) is a module the DAO attaches at origination or later by proposal. ([full spec →](docs/governance.md), [modules →](docs/modules.md))
 
 ## 3. Agreements that enforce themselves
 
@@ -55,7 +55,7 @@ Guarantees that depend on an operator's good behaviour are not guarantees. The s
 
 | Risk | Enforced by |
 |------|-------------|
-| Vote buying | Non-transferable reputation by default |
+| Vote buying | Reputation is non-transferable |
 | Flash-loan voting | Snapshot-based voting power |
 | Contractor signs before the DAO can react | A registered veto proposal holds signing until decided; cooling-off never below a deploy-time minimum |
 | Fee capture or a free-riding economy | Platform fee bounded to 1% to 50%; author and arbitration fees capped at 25% |

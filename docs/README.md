@@ -9,7 +9,7 @@ The specification of the On-Chain Jurisdiction contracts. For the overview, star
 | Doc | What it covers |
 |-----|----------------|
 | [`architecture.md`](architecture.md) | Contract graph, JurisdictionFactory and sub-factory deployment flow, how the indexer and the two web apps consume events. |
-| [`governance.md`](governance.md) | Governor, Timelock, Registry, RepToken (non-transferable, transferable, wrapped), delegation, reward epochs. |
+| [`governance.md`](governance.md) | Governor, Timelock, Registry, RepToken (non-transferable), delegation, reward epochs. |
 | [`economy.md`](economy.md) | The trustless economy: project lifecycle, cooling-off, escrow, platform fees, backer voting, arbitration, appeals, reputation accrual. |
 | [`immediate-release.md`](immediate-release.md) | Releasing part of a contribution to the contractor at signing. |
 | [`registry-settings.md`](registry-settings.md) | Economy parameters and Registry keys (module entries, the parity convention). |

@@ -93,7 +93,6 @@ async function deployJurisdictionSuite(ethers, signer, { log = () => {}, curator
     s.infrastructureFactory = await deploy("InfrastructureFactory");
     s.daoFactory = await deploy("DAOFactory");
     s.repTokenFactory = await deploy("RepTokenFactory");
-    s.wrappedRepTokenFactory = await deploy("WrappedRepTokenFactory");
     s.nativeProject = await deploy("NativeProject");
     s.erc20Project = await deploy("ERC20Project");
     // The signer publishes the first versions, then hands the catalog and repos to the curator
@@ -101,7 +100,7 @@ async function deployJurisdictionSuite(ethers, signer, { log = () => {}, curator
     s.processor = await deploy("ModuleProcessor", await s.catalog.getAddress());
     s.jurisdictionFactory = await deploy("JurisdictionFactory",
         await s.infrastructureFactory.getAddress(), await s.daoFactory.getAddress(),
-        await s.repTokenFactory.getAddress(), await s.wrappedRepTokenFactory.getAddress(),
+        await s.repTokenFactory.getAddress(),
         await s.processor.getAddress());
 
     s.setups = {

@@ -35,7 +35,7 @@ describe("EconomyRepClaim", function () {
         await economy.connect(deployer).setImplementations(ethers.ZeroAddress, await erc20ProjectImpl.getAddress());
         
         const RepTokenFactory = await ethers.getContractFactory("RepToken");
-        repToken = await RepTokenFactory.deploy("Jurisdiction Token", "JUR", await registry.getAddress(), timelock.address, [], [], false);
+        repToken = await RepTokenFactory.deploy("Jurisdiction Token", "JUR", await registry.getAddress(), timelock.address, [], []);
         const TestTokenFactory = await ethers.getContractFactory("TestToken");
         testToken = await TestTokenFactory.deploy();
 

@@ -12,13 +12,11 @@ import {Checkpoints} from "@openzeppelin/contracts/utils/structs/Checkpoints.sol
 import {IJurisdictionData} from "./IJurisdictionData.sol";
 
 // RepToken is the specialized governance token for the Jurisdiction DAO. Reputation is created
-// only by its minters (the Economy module's EconomyRepClaim, the Autonet REP claim, a Coin
-// Offering...), which the DAO grants and revokes, so no source of reputation is built in.
+// only by its minters (the Economy module's EconomyRepClaim, the Autonet REP claim...), which the DAO grants and revokes, so no source of reputation is built in.
 contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionData {
     using Checkpoints for Checkpoints.Trace208;
 
     address public admin;
-    bool public immutable isTransferable;
 
     // Optional auto-delegation target. When set, an account that receives tokens
     // while having NO delegate of its own is auto-delegated to `defaultDelegate`
@@ -89,8 +87,7 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         address payable _registryAddress,
         address _timelockAddress,
         address[] memory initialMembers,
-        uint256[] memory initialAmounts,
-        bool _isTransferable
+        uint256[] memory initialAmounts
     )
         ERC20(name, symbol)
         ERC20Permit(name)
@@ -98,7 +95,6 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         require(_registryAddress != address(0) && _timelockAddress != address(0), "RepToken: Invalid addresses");
         registryAddress = _registryAddress;
         timelockAddress = _timelockAddress;
-        isTransferable = _isTransferable;
         admin = msg.sender; // THE FIX: Set initial admin to the deployer (the RepTokenFactory)
 
         for (uint i = 0; i < initialMembers.length; i++) {
@@ -309,18 +305,18 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     
     function nonces(address owner) public view override(ERC20Permit, Nonces) returns (uint256) { return super.nonces(owner); }
 
-    function transfer(address to, uint256 value) public override returns (bool) {
-        if (!isTransferable) {
-            revert("RepToken: Reputation is non-transferable");
-        }
-        return super.transfer(to, value);
+    // REP is earned, so voting weight can't be bought: it only moves by mint, burn and slash
+    function transfer(address, uint256) public pure override returns (bool) {
+        revert("RepToken: Reputation is non-transferable");
     }
 
-    function transferFrom(address from, address to, uint256 value) public override returns (bool) {
-        if (!isTransferable) {
-            revert("RepToken: Reputation is non-transferable");
-        }
-        return super.transferFrom(from, to, value);
+    function transferFrom(address, address, uint256) public pure override returns (bool) {
+        revert("RepToken: Reputation is non-transferable");
+    }
+
+    // Always false. The indexer reads this from every token, older transferable ones included.
+    function isTransferable() external pure returns (bool) {
+        return false;
     }
 }
 // RepToken.sol

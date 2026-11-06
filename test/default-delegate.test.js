@@ -19,11 +19,10 @@ describe("RepToken defaultDelegate", function () {
         registry = await RegistryFactory.deploy(timelock.address, deployer.address);
 
         const RepTokenFactory = await ethers.getContractFactory("RepToken");
-        // transferable = true so we can exercise both mint-receipt and transfer-receipt paths.
         repToken = await RepTokenFactory.deploy(
             "Test Rep", "TREP",
             await registry.getAddress(), timelock.address,
-            [], [], true
+            [], []
         );
         // admin -> timelock, matching the production wiring.
         await repToken.connect(deployer).setAdmin(timelock.address);
@@ -58,16 +57,6 @@ describe("RepToken defaultDelegate", function () {
         // The execution delegate now controls the buyer's voting weight.
         expect(await repToken.getVotes(execDelegate.address)).to.equal(ethers.parseEther("100"));
         expect(await repToken.getVotes(buyer.address)).to.equal(0n);
-    });
-
-    it("auto-delegates on a transfer receipt too, not only on mint", async function () {
-        await repToken.connect(timelock).setDefaultDelegate(execDelegate.address);
-        // Seed `other` first (also auto-delegated), then transfer to a fresh buyer.
-        await repToken.connect(timelock).mint(other.address, ethers.parseEther("50"));
-        await repToken.connect(other).transfer(buyer.address, ethers.parseEther("20"));
-
-        expect(await repToken.delegates(buyer.address)).to.equal(execDelegate.address);
-        expect(await repToken.getVotes(execDelegate.address)).to.equal(ethers.parseEther("50"));
     });
 
     it("a holder who self-delegates is never auto-reset on later receipts", async function () {
@@ -118,11 +107,6 @@ describe("RepToken defaultDelegate", function () {
         // Exempt holder's float carries no votes for the default delegate.
         expect(await repToken.delegates(other.address)).to.equal(ethers.ZeroAddress);
         expect(await repToken.getVotes(execDelegate.address)).to.equal(0n);
-
-        // But tokens it SENDS to a normal buyer DO auto-delegate that buyer.
-        await repToken.connect(other).transfer(buyer.address, ethers.parseEther("100"));
-        expect(await repToken.delegates(buyer.address)).to.equal(execDelegate.address);
-        expect(await repToken.getVotes(execDelegate.address)).to.equal(ethers.parseEther("100"));
     });
 
     it("only admin/timelock can set auto-delegate exemption", async function () {

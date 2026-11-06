@@ -11,7 +11,7 @@ describe("RepToken balance history", function () {
         [admin, timelock, x, y] = await ethers.getSigners();
         const registry = await (await ethers.getContractFactory("Registry")).deploy(timelock.address, admin.address);
         rep = await (await ethers.getContractFactory("RepToken")).deploy(
-            "Rep", "REP", await registry.getAddress(), timelock.address, [], [], true);
+            "Rep", "REP", await registry.getAddress(), timelock.address, [], []);
     });
 
     async function at() {
@@ -20,10 +20,11 @@ describe("RepToken balance history", function () {
         return t;
     }
 
-    it("follows mint, transfer and burn", async function () {
+    it("follows mint and burn", async function () {
         await rep.mint(x.address, E(100));
         const t1 = await at();
-        await rep.connect(x).transfer(y.address, E(30));
+        await rep.burn(x.address, E(30));
+        await rep.mint(y.address, E(30));
         const t2 = await at();
         await rep.burn(y.address, E(10));
         const t3 = await at();
@@ -44,16 +45,16 @@ describe("RepToken balance history", function () {
         expect(await rep.getPastBalance(y.address, t)).to.equal(0n);
     });
 
-    it("keeps the end-of-block balance across several transfers in one block", async function () {
+    it("keeps the end-of-block balance across several changes in one block", async function () {
         await rep.mint(x.address, E(100));
         const before = await at();
         await network.provider.send("evm_setAutomine", [false]);
         await network.provider.send("evm_setIntervalMining", [0]);
         try {
-            const n = await x.getNonce();
-            await rep.connect(x).transfer(y.address, E(10), { nonce: n, gasLimit: 300000 });
-            await rep.connect(x).transfer(y.address, E(20), { nonce: n + 1, gasLimit: 300000 });
-            await rep.connect(y).transfer(x.address, E(5), { gasLimit: 300000 });
+            const n = await admin.getNonce();
+            await rep.burn(x.address, E(10), { nonce: n, gasLimit: 300000 });
+            await rep.burn(x.address, E(20), { nonce: n + 1, gasLimit: 300000 });
+            await rep.mint(x.address, E(5), { nonce: n + 2, gasLimit: 300000 });
             await network.provider.send("evm_mine");
             expect((await ethers.provider.getBlock("latest")).transactions.length).to.equal(3);
         } finally {
@@ -63,7 +64,6 @@ describe("RepToken balance history", function () {
         const t = await at();
         expect(await rep.getPastBalance(x.address, before)).to.equal(E(100));
         expect(await rep.getPastBalance(x.address, t)).to.equal(E(75));
-        expect(await rep.getPastBalance(y.address, t)).to.equal(E(25));
     });
 
     it("rejects the current or a future time, like getPastVotes", async function () {

@@ -45,7 +45,6 @@ async function main() {
       infrastructureFactory: await addr(s.infrastructureFactory),
       daoFactory: await addr(s.daoFactory),
       repTokenFactory: await addr(s.repTokenFactory),
-      wrappedRepTokenFactory: await addr(s.wrappedRepTokenFactory),
     },
     modules: {},
   };

@@ -1,6 +1,6 @@
 # Modules
 
-Every DAO has the same core: a Governor (`HomebaseDAO`), a `TimelockController`, a `Registry` and a governance token (a soulbound or transferable `RepToken`, or a `WrappedRepToken` over an existing ERC20). Everything else is a module: the Economy, the Autonet layer, the ContentCourt. A DAO picks modules at origination and can add or remove them later by proposal.
+Every DAO has the same core: a Governor (`HomebaseDAO`), a `TimelockController`, a `Registry` and a non-transferable `RepToken`. Everything else is a module: the Economy, the Autonet layer, the ContentCourt. A DAO picks modules at origination and can add or remove them later by proposal.
 
 The design follows [Aragon OSx plugins](https://docs.aragon.org/osx-contracts/1.x/framework/plugin-repos/): setups that prepare installations, versioned repos, a registry of repos, and release and build metadata that apps render setup forms from. It is adapted to an OpenZeppelin core, where rights live on the token and the Registry instead of in a DAO permission manager, and the timelock executes attach actions itself instead of a setup processor.
 
@@ -43,8 +43,6 @@ Detaching is refused while an attached module depends on the one being removed (
 
 The Economy module deploys an `Economy`, configures it, and hands it to the timelock in the same transaction. Its `EconomyRepClaim` mints REP for what members earn and spend in it, at the jurisdiction's parities. RepToken knows nothing about any Economy: reputation comes only from minters the DAO grants and revokes.
 
-Modules need a RepToken, so DAOs on a wrapped token can't take them: the grant actions revert.
-
 ## Metadata
 
 Each module's metadata lives in `modules/<name>/` and is published with each version as a `data:application/json;base64,` URI, so no external host is needed. It follows Aragon's format:
@@ -54,7 +52,7 @@ Each module's metadata lives in `modules/<name>/` and is published with each ver
 
 Two extensions, both ignored by anything that only reads Aragon's fields:
 
-- `ui.requires` lists the modules this one depends on (empty for every published module), and `ui.tokenKinds` the core token kinds it supports.
+- `ui.requires` lists the modules this one depends on (empty for every published module).
 - Each input may carry `x-ui` hints for form rendering: `label`, `section`, `default`, `min`, `max`, and `unit`. Units are `bps-percent` (entered as a percent, encoded times 100), `seconds-days`, `seconds-hours`, `seconds-duration` (days, hours and minutes fields; `default`, `min` and `max` in seconds), `decimals:<n>` (a decimal amount in base units), and `bytes32-optional` (empty encodes as zero). `fixed` encodes a constant without showing a field, and `source: "module:<name>"` fills an address with that attached module's main contract. `immutable: true` marks a value the module can't change after creation (the form says so); no published module uses it now, so the DAO can change every value by proposal. `minFrom: "<view>"` reads `min` from a no-argument uint view on the setup, for minimums fixed per deployment such as the Economy's `minCoolingOffPeriod`.
 
 `scripts/lib/modules.js` `encodeInstallData(name, values)` encodes `data` from the metadata. The tests prepare every module through it, so the metadata and the setups can't drift apart.

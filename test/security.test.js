@@ -91,7 +91,7 @@ describe("Security", function () {
             await economy.setImplementations(await nativeImpl.getAddress(), await erc20Impl.getAddress());
 
             repToken = await (await ethers.getContractFactory("RepToken")).deploy(
-                "Jurisdiction", "JUR", await registry.getAddress(), timelock.address, [], [], false);
+                "Jurisdiction", "JUR", await registry.getAddress(), timelock.address, [], []);
             await repToken.setAdmin(timelock.address);
             claim = await (await ethers.getContractFactory("EconomyRepClaim")).deploy(
                 await economy.getAddress(), await repToken.getAddress(), await registry.getAddress());

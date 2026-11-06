@@ -7,11 +7,9 @@ const { encodeInstallData } = require("../lib/modules");
 const wait = async (txPromise) => (await txPromise).wait();
 const SETUP_CONTRACTS = { economy: "EconomySetup", content_court: "ContentCourtSetup", autonet: "AutonetSetup" };
 
-// tokenKind: 0 soulbound, 1 transferable, 2 wrapped (`underlying` ERC20, no initial members)
 function coreParams(o = {}) {
     return {
         name: o.name, symbol: o.symbol, description: o.description ?? "",
-        tokenKind: o.tokenKind ?? 0, underlying: o.underlying ?? ethers.ZeroAddress,
         initialMembers: o.members ?? [], initialAmounts: o.amounts ?? [],
         votingDelay: o.votingDelay ?? 0, votingPeriod: o.votingPeriod ?? 1,          // minutes
         proposalThreshold: o.proposalThreshold ?? 0, quorumFraction: o.quorumFraction ?? 4,

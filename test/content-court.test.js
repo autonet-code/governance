@@ -73,7 +73,7 @@ describe("ContentCourt", function () {
     beforeEach(async function () {
         [deployer, timelock, treasury, j1, j2, j3, member, outsider] = await ethers.getSigners();
         rep = await (await ethers.getContractFactory("RepToken")).deploy("Rep", "REP", deployer.address, timelock.address,
-            [j1.address, j2.address, j3.address, member.address], [REP(300), REP(200), REP(100), REP(400)], false);
+            [j1.address, j2.address, j3.address, member.address], [REP(300), REP(200), REP(100), REP(400)]);
         // Signers stand in for the governor and timelock, so the lifecycle floor is just the 2-day buffer
         court = await (await ethers.getContractFactory("ContentCourt")).deploy(
             await rep.getAddress(), deployer.address, timelock.address, treasury.address, PARAMS);

@@ -74,6 +74,9 @@ for kind, d in manifest["daos"].items():
                   f"got {data.get('latestStage')!r}, statusHistory={list((data.get('statusHistory') or {}).keys())}")
             check(f"[{kind}] proposal {pid[:10]} votes for", str(data.get("inFavor")) == p["forVotes"],
                   f"got inFavor={data.get('inFavor')!r}, expected {p['forVotes']}")
+            if "abstain" in p:
+                check(f"[{kind}] proposal {pid[:10]} abstain", str(data.get("abstain")) == p["abstain"],
+                      f"got abstain={data.get('abstain')!r}, expected {p['abstain']}")
             if "supermajorityBps" in p:
                 want = p["supermajorityBps"]
                 got = data.get("supermajorityBps")

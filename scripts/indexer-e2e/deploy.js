@@ -14,6 +14,8 @@ async function main() {
         rpc: process.env.E2E_RPC_URL || "http://127.0.0.1:8545",
         chainId: 31337,
         jurisdictionFactory: await addr(s.jurisdictionFactory),
+        infrastructureFactory: await addr(s.infrastructureFactory),
+        daoFactory: await addr(s.daoFactory),
         moduleCatalog: await addr(s.catalog),
         moduleProcessor: await addr(s.processor),
         nativeProject: await addr(s.nativeProject),

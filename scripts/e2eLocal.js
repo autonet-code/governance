@@ -47,7 +47,7 @@ async function main() {
     // --- Economy DAO: deployCore, prepare the economy module, finalize ---
     const factory = suite.jurisdictionFactory;
     const params = {
-        name: "E2E", symbol: "E2E", description: "", tokenKind: 0, underlying: ethers.ZeroAddress,
+        name: "E2E", symbol: "E2E", description: "",
         initialMembers: [deployer.address], initialAmounts: [ethers.parseEther("100")],
         votingDelay: 1, votingPeriod: 5, proposalThreshold: 0, quorumFraction: 4, executionDelay: 60,
         supermajorityBps: 0,

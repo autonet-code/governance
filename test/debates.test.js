@@ -20,8 +20,7 @@ describe("Debates (Per-Network Model)", function () {
             deployer.address, // registry (not used in debates)
             deployer.address, // admin
             [member1.address, member2.address, member3.address],
-            [INITIAL_TOKENS, INITIAL_TOKENS, INITIAL_TOKENS],
-            false // non-transferable
+            [INITIAL_TOKENS, INITIAL_TOKENS, INITIAL_TOKENS]
         );
         await repToken.waitForDeployment();
 
@@ -32,8 +31,7 @@ describe("Debates (Per-Network Model)", function () {
             deployer.address,
             deployer.address,
             [member1.address, member2.address],
-            [INITIAL_TOKENS, INITIAL_TOKENS],
-            false
+            [INITIAL_TOKENS, INITIAL_TOKENS]
         );
         await repToken2.waitForDeployment();
 

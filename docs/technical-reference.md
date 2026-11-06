@@ -4,7 +4,7 @@ Per-contract API for the production suite: key functions, parameters, constants,
 
 - [Roles after deployment](#roles-after-deployment)
 - [HomebaseDAO](#homebasedao) · [RepToken](#reptoken) · [Registry](#registry) · [Economy](#economy) · [EconomyRepClaim](#economyrepclaim) · [NativeProject / ERC20Project](#nativeproject--erc20project)
-- [Factories](#factories) (JurisdictionFactory, modules) · [WrappedRepToken](#wrappedreptoken) · [Debates](#debates)
+- [Factories](#factories) (JurisdictionFactory, modules) · [Debates](#debates)
 - [Events](#events) · [Constants and defaults](#constants-and-defaults)
 
 ## Roles after deployment
@@ -44,10 +44,10 @@ constructor(IVotes _token, TimelockController _timelock, string memory name,
 
 ```solidity
 constructor(string name, string symbol, address payable _registryAddress, address _timelockAddress,
-            address[] initialMembers, uint256[] initialAmounts, bool _isTransferable)
+            address[] initialMembers, uint256[] initialAmounts)
 ```
 
-State: `admin`, `isTransferable` (immutable), `registryAddress` (immutable), `timelockAddress` (immutable), `defaultDelegate`, `autoDelegateExempt[account]`, `minters[account]`, `slashers[account]`, `slashedCredit[slasher]`. RepToken has no Economy link; see [EconomyRepClaim](#economyrepclaim).
+State: `admin`, `registryAddress` (immutable), `timelockAddress` (immutable), `defaultDelegate`, `autoDelegateExempt[account]`, `minters[account]`, `slashers[account]`, `slashedCredit[slasher]`. RepToken has no Economy link; see [EconomyRepClaim](#economyrepclaim).
 
 ### Access control
 
@@ -64,7 +64,8 @@ State: `admin`, `isTransferable` (immutable), `registryAddress` (immutable), `ti
 | `setAutoDelegateExempt(address account, bool exempt)` | `admin` or `timelockAddress` |
 | `setDelegateShareBps(uint16)` | `timelockAddress` only, `<= MAX_DELEGATE_SHARE_BPS` |
 | `startNewRewardEpoch(uint256 budget, address paymentToken)` | `timelockAddress` only |
-| `transfer`, `transferFrom` | revert `"RepToken: Reputation is non-transferable"` unless `isTransferable` |
+| `transfer`, `transferFrom` | always revert `"RepToken: Reputation is non-transferable"` |
+| `isTransferable` | always false, for readers that also follow older tokens |
 
 > **Old-factory caveat.** `JurisdictionFactory` passes the DAO's timelock as `_timelockAddress`. Early builds of the removed standard factories passed `address(this)`, so DAOs created by those builds (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) have the factory as their immutable `timelockAddress`. In those DAOs, functions gated to `timelockAddress` only (`startNewRewardEpoch`, `setDelegateShareBps`) are unreachable; admin-or-timelock functions still work because `admin` is handed to the timelock. Economy DAOs always had the real timelock.
 
@@ -237,12 +238,9 @@ Fees on every reputation-accruing payout (`_payWithFees`): platform fee to the R
 `contracts/factories/JurisdictionFactory.sol`. Creates every DAO (Firestore `jurisdictionFactory`). Flow and rationale: [architecture.md](architecture.md#jurisdictionfactory), [modules.md](modules.md).
 
 ```solidity
-enum TokenKind { Soulbound, Transferable, Wrapped }
 struct CoreParams {
     string name; string symbol; string description;
-    TokenKind tokenKind;
-    address underlying;          // Wrapped only
-    address[] initialMembers;    // RepToken only
+    address[] initialMembers;
     uint256[] initialAmounts;
     uint48 votingDelay;          // minutes
     uint32 votingPeriod;         // minutes
@@ -258,10 +256,10 @@ function finalize(Core memory core, ModuleRef[] memory modules, string[] calldat
 function pendingOf(address registry) external view returns (address originator, Core memory core)
 ```
 
-- `deployCore`: Timelock (admin = factory), Registry (owner = factory, no wrapper), token (RepToken with `timelockAddress` = the Timelock, or a non-transferable WrappedRepToken over `underlying`), Governor, `setJurisdictionAddress(token)`. Records the pending core under its Registry, bound to `msg.sender`. Emits `CoreDeployed`.
+- `deployCore`: Timelock (admin = factory), Registry (owner = factory, no wrapper), token (RepToken with `timelockAddress` = the Timelock), Governor, `setJurisdictionAddress(token)`. Records the pending core under its Registry, bound to `msg.sender`. Emits `CoreDeployed`.
 - `finalize`: originator only. Writes `keys`/`values`, then for each module in order runs `ModuleProcessor.checkInstall`, executes its `install` actions (only against this token or Registry), writes its entries and emits `ModuleAttached`. Then token admin and Registry ownership to the timelock, governor gets `PROPOSER_ROLE` and `CANCELLER_ROLE`, `EXECUTOR_ROLE` to `address(0)`, factory admin role revoked. Emits `NewDaoCreated` and deletes the pending entry.
 - `deploy`: `deployCore` plus `finalize` with no modules.
-- Errors: `BadParams` (member and amount lengths differ, or Wrapped without `underlying`), `NotPending`, `NotOriginator`, `WrongCore`, `ForeignTarget(target)`, `ActionFailed(index)`.
+- Errors: `BadParams` (member and amount lengths differ), `NotPending`, `NotOriginator`, `WrongCore`, `ForeignTarget(target)`, `ActionFailed(index)`.
 
 ### Modules
 
@@ -302,13 +300,8 @@ function uninstallCalls(IModuleSetup setup, uint256 id) external view returns (a
 | `InfrastructureFactory` | `deployTimelock(address admin, uint256 executionDelay)`, `deployRegistry(address initialOwner, address wrapperAddress)` |
 | `DAOFactory` | `deployDAO(address token, address timelock, string name, uint[] daoSettings)`; emits `Deployed` |
 | `RepTokenFactory` | `deployRepToken(name, symbol, registry, timelock, members, amounts, transferrable)`; hands admin to the caller |
-| `WrappedRepTokenFactory` | `deployWrappedRepToken(IERC20 underlying, name, symbol, transferrable)`; hands admin to the caller |
 
 ---
-
-## WrappedRepToken
-
-`contracts/WrappedRepToken.sol`. `ERC20Wrapper + ERC20Votes` over an existing ERC20 (deposit/withdraw 1:1), optional non-transferability, `setAdmin` by admin. Decimals follow the underlying token.
 
 ## Debates
 

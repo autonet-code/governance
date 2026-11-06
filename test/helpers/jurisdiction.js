@@ -31,7 +31,6 @@ async function suite() {
 function coreParams(o = {}) {
     return {
         name: o.name ?? "Jurisdiction", symbol: o.symbol ?? "REP", description: o.description ?? "",
-        tokenKind: o.tokenKind ?? 0, underlying: o.underlying ?? ethers.ZeroAddress,
         initialMembers: o.members ?? [], initialAmounts: o.amounts ?? [],
         votingDelay: o.votingDelay ?? 0, votingPeriod: o.votingPeriod ?? 2,
         proposalThreshold: o.proposalThreshold ?? 0, quorumFraction: o.quorumFraction ?? 4,
@@ -93,7 +92,7 @@ async function createJurisdiction(from, o = {}) {
     return {
         s, core: c, installs,
         dao: await ethers.getContractAt("HomebaseDAO", c.governor),
-        rep: await ethers.getContractAt(o.tokenKind === 2 ? "WrappedRepToken" : "RepToken", c.token),
+        rep: await ethers.getContractAt("RepToken", c.token),
         registry: await ethers.getContractAt("Registry", c.registry),
         timelock: await ethers.getContractAt("TimelockController", c.timelock),
         economy: installs.economy && await ethers.getContractAt("Economy", installs.economy.module),

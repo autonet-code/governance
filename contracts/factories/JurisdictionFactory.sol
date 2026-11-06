@@ -4,16 +4,14 @@ pragma solidity ^0.8.26;
 import "./InfrastructureFactory.sol";
 import "./DAOFactory.sol";
 import "./RepTokenFactory.sol";
-import "./WrappedRepTokenFactory.sol";
 import "../Registry.sol";
 import "../IAdminToken.sol";
 import "../modules/ModuleProcessor.sol";
 import "@openzeppelin/contracts/governance/TimelockController.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title JurisdictionFactory
 /// @notice Creates every DAO: a core of Governor, TimelockController, Registry and governance token
-///         (soulbound or transferable RepToken, or a WrappedRepToken over an existing ERC20), plus
+///         (a non-transferable RepToken), plus
 ///         any modules (docs/modules.md), the Economy among them.
 ///
 ///         `deploy` creates a DAO with no modules in one transaction. With modules: `deployCore`,
@@ -25,15 +23,11 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 ///         a module's actions only against that DAO's own token and Registry. A pending core can
 ///         be finalized only by the account that deployed it.
 contract JurisdictionFactory {
-    enum TokenKind { Soulbound, Transferable, Wrapped }
-
     struct CoreParams {
         string name;
         string symbol;
         string description;
-        TokenKind tokenKind;
-        address underlying;        // Wrapped only: the ERC20 to wrap
-        address[] initialMembers;  // RepToken only
+        address[] initialMembers;
         uint256[] initialAmounts;
         uint48 votingDelay;        // minutes
         uint32 votingPeriod;       // minutes
@@ -57,7 +51,6 @@ contract JurisdictionFactory {
     InfrastructureFactory public immutable infrastructureFactory;
     DAOFactory public immutable daoFactory;
     RepTokenFactory public immutable repTokenFactory;
-    WrappedRepTokenFactory public immutable wrappedRepTokenFactory;
     ModuleProcessor public immutable processor;
 
     mapping(address => Pending) private _pending; // by registry
@@ -90,13 +83,11 @@ contract JurisdictionFactory {
         InfrastructureFactory _infra,
         DAOFactory _dao,
         RepTokenFactory _rep,
-        WrappedRepTokenFactory _wrapped,
         ModuleProcessor _processor
     ) {
         infrastructureFactory = _infra;
         daoFactory = _dao;
         repTokenFactory = _rep;
-        wrappedRepTokenFactory = _wrapped;
         processor = _processor;
     }
 
@@ -109,13 +100,8 @@ contract JurisdictionFactory {
         if (p.initialMembers.length != p.initialAmounts.length) revert BadParams();
         core.timelock = infrastructureFactory.deployTimelock(address(this), p.executionDelay);
         core.registry = payable(infrastructureFactory.deployRegistry(address(this), address(0)));
-        if (p.tokenKind == TokenKind.Wrapped) {
-            if (p.underlying == address(0)) revert BadParams();
-            core.token = wrappedRepTokenFactory.deployWrappedRepToken(IERC20(p.underlying), p.name, p.symbol, false);
-        } else {
-            core.token = repTokenFactory.deployRepToken(p.name, p.symbol, core.registry, core.timelock,
-                p.initialMembers, p.initialAmounts, p.tokenKind == TokenKind.Transferable);
-        }
+        core.token = repTokenFactory.deployRepToken(p.name, p.symbol, core.registry, core.timelock,
+            p.initialMembers, p.initialAmounts);
         uint256[] memory settings = new uint256[](5);
         (settings[0], settings[1], settings[2], settings[3], settings[4]) =
             (p.votingDelay, p.votingPeriod, p.proposalThreshold, p.quorumFraction, p.supermajorityBps);

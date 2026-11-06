@@ -42,11 +42,11 @@ describe("AutonetRepClaim", function () {
         const Registry = await ethers.getContractFactory("Registry");
         registry = await Registry.deploy(timelock.address, deployer.address);
         const RepToken = await ethers.getContractFactory("RepToken");
-        // transferable=false (Economy-DAO convention), no initial members.
+        // No initial members.
         return RepToken.deploy(
             "Jurisdiction Token", "JUR",
             await registry.getAddress(), timelock.address,
-            [], [], false
+            [], []
         );
     }
 

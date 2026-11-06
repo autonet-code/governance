@@ -14,12 +14,11 @@ contract RepTokenFactory {
         address payable registryAddress,
         address timelockAddress,
         address[] memory initialMembers,
-        uint256[] memory initialAmounts,
-        bool transferrable
+        uint256[] memory initialAmounts
     ) external returns (address) {
         require(initialMembers.length == initialAmounts.length, "RepTokenFactory: member and amount arrays must have the same length");
 
-        RepToken repToken = new RepToken(name, symbol, registryAddress, timelockAddress, initialMembers, initialAmounts, transferrable);
+        RepToken repToken = new RepToken(name, symbol, registryAddress, timelockAddress, initialMembers, initialAmounts);
         
         // As the initial admin, transfer adminship to the main factory that called this function
         repToken.setAdmin(msg.sender);

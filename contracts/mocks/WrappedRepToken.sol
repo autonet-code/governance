@@ -7,9 +7,12 @@ import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20P
 import {ERC20Votes} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
 import {ERC20Wrapper} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Wrapper.sol";
 import {Nonces} from "@openzeppelin/contracts/utils/Nonces.sol";
-import {IAdminToken} from "./IAdminToken.sol";
+import {IAdminToken} from "../IAdminToken.sol";
 
 /**
+ * Test only: jurisdictions have one kind of token, the non-transferable RepToken. Etherlink still has
+ * DAOs on this token (homebase-app shows them and the indexer follows them), so the indexer e2e uses it.
+ *
  * @title WrappedRepToken
  * @notice Governance token that wraps an underlying ERC20 token
  * @dev Combines ERC20Wrapper for wrapping with ERC20Votes for governance

@@ -2,7 +2,7 @@
 
 How a jurisdiction governs itself: the Governor, its Timelock, the RepToken that carries voting power, reward epochs, and the Registry that holds the treasury and configuration. For how these contracts are deployed and wired together, see [architecture.md](architecture.md). For function-level API detail, see [technical-reference.md](technical-reference.md).
 
-Sources: `contracts/Dao.sol`, `RepToken.sol`, `WrappedRepToken.sol`, `Registry.sol`, `IJurisdictionData.sol`, `IAdminToken.sol`, `contracts/factories/`, `contracts/debates/`. Behaviour described here is exercised by `test/dao-governance*.test.js`, `test/reward-epochs.test.js`, `test/default-delegate.test.js`, `test/treasury-spend-guard.test.js` and `test/security.test.js`.
+Sources: `contracts/Dao.sol`, `RepToken.sol`, `Registry.sol`, `IJurisdictionData.sol`, `IAdminToken.sol`, `contracts/factories/`, `contracts/debates/`. Behaviour described here is exercised by `test/dao-governance*.test.js`, `test/reward-epochs.test.js`, `test/default-delegate.test.js`, `test/treasury-spend-guard.test.js` and `test/security.test.js`.
 
 ## Contracts at a glance
 
@@ -11,7 +11,6 @@ Sources: `contracts/Dao.sol`, `RepToken.sol`, `WrappedRepToken.sol`, `Registry.s
 | `HomebaseDAO` (`Dao.sol`) | OpenZeppelin 5.x Governor: proposals and votes | Itself (settings changes go through proposals) |
 | `TimelockController` (OZ) | Executes passed proposals after a delay; the jurisdiction's identity on-chain | Governor is the only proposer; anyone may execute |
 | `RepToken` | ERC20Votes reputation token, reward epochs, minters and slashers | `admin` = Timelock, plus `timelockAddress` for epoch functions |
-| `WrappedRepToken` | ERC20Votes wrapper over an existing ERC20 (wrapped-token DAOs) | `admin` = Timelock (no other admin powers) |
 | `Registry` | Treasury (native, ERC20, ERC721), key/value config, earmarks, spend cap | `owner` = Timelock |
 
 Every governance action follows the same path: **propose, vote, queue, execute**. The Timelock is the `msg.sender` of every executed action, so anything gated to "the DAO" is gated to the Timelock address.
@@ -33,7 +32,7 @@ Constructor:
 
 ```solidity
 HomebaseDAO(
-    IVotes _token,                 // RepToken or WrappedRepToken
+    IVotes _token,                 // RepToken
     TimelockController _timelock,
     string memory name,
     uint48 minsDelay,              // voting delay, MINUTES (converted to seconds)
@@ -142,7 +141,7 @@ Two addresses matter, and they are set differently:
 
 ### Transferability
 
-`isTransferable` is immutable. When false, `transfer` and `transferFrom` revert; minting and burning still work. `JurisdictionFactory` deploys a non-transferable (soulbound) RepToken for `TokenKind.Soulbound` and a transferable one for `TokenKind.Transferable`.
+REP is earned, so voting weight can't be bought: `transfer` and `transferFrom` always revert, and REP only moves by mint, burn and slash. `isTransferable()` always returns false, for readers that also follow older tokens.
 
 ### Minters
 
@@ -206,10 +205,6 @@ Summed over all holders the weights equal total supply, so payouts never exceed 
 **Unclaimed funds.** After the next epoch has started and `benefits.claim.gracePeriod` seconds have passed since that start, the Timelock can call `Registry.reclaimEarmarkedFunds(epochId, paymentToken)` to release the remaining reservation back to the free treasury balance. The money never leaves the Registry; only the earmark is lifted.
 
 `getRewardEpochStart(epochId)` is the only `IJurisdictionData` function and is what the Registry uses for that grace-period check.
-
-## WrappedRepToken
-
-`ERC20 + ERC20Permit + ERC20Votes + ERC20Wrapper`, timestamp clock, decimals inherited from the underlying token. Holders call `depositFor` / `withdrawTo` to wrap and unwrap 1:1; wrapped balances are the voting power. `isTransferable` (immutable) blocks `transfer`/`transferFrom` only. `JurisdictionFactory` deploys it non-transferable. It has an `admin` (set to the Timelock) but no mint, burn, epoch, minter, slasher or Registry features. Reward epochs and modules (whose grants need a RepToken) are therefore RepToken-only.
 
 ## Registry
 

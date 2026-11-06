@@ -10,7 +10,7 @@ An internal audit and a test plan exist; both are kept private.
 
 | Threat | Mitigation | Where |
 |--------|-----------|-------|
-| Vote buying | RepToken is non-transferable by default: `transfer`/`transferFrom` revert unless `isTransferable`. `JurisdictionFactory` deploys a transferable token only for `TokenKind.Transferable` | `RepToken.sol`, `JurisdictionFactory` |
+| Vote buying | RepToken is non-transferable: `transfer`/`transferFrom` always revert, and `JurisdictionFactory` makes no other token, so a direct factory call can't get around it | `RepToken.sol`, `JurisdictionFactory` |
 | Flash-loan voting | Voting power is read at the proposal snapshot (`getPastVotes`, timestamp clock). Reward epochs use the snapshot one second before the epoch starts | OZ `Governor`, `RepToken.rewardOf` |
 | Malicious proposal | Every action runs through `TimelockController` with a minimum delay; only the governor holds `PROPOSER_ROLE` | `JurisdictionFactory.finalize`, `Dao.sol` |
 | Factory keeps control | `finalize` hands token `admin` and Registry `owner` to the timelock and revokes the factory's `DEFAULT_ADMIN_ROLE` on the timelock in the same transaction that attaches the modules. The Registry has no `wrapper` | `JurisdictionFactory.finalize` |
@@ -52,6 +52,5 @@ An internal audit and a test plan exist; both are kept private.
 - Fee-on-transfer payment tokens would short the treasury in the vault; they are excluded socially when governance sets parity.
 - Standard DAOs created by factory builds that passed `address(this)` as the RepToken timelock (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) cannot call `startNewRewardEpoch` or `setDelegateShareBps`. `JurisdictionFactory` passes the real timelock for every DAO; economy DAOs were never affected. See [technical-reference.md](technical-reference.md#reptoken).
 - DAOs created by the old standard factories (the live Shadownet suite) have the factory as their Registry `wrapper` and so it keeps registry edit rights; the factory exposes no function that uses them after deployment. `JurisdictionFactory` sets no wrapper.
-- DAOs on a WrappedRepToken can't take modules: the RepToken grant actions revert.
 - Timelock delay can be configured to zero (test networks do this), which removes the review window between a passed proposal and its execution.
 - Holds depend on someone registering the proposal. If the indexer is down and nobody calls `registerDaoProposal`, a contractor can sign once cooling-off ends, or a ruling can finalize once the window closes, before the vote does.

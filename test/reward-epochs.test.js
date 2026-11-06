@@ -20,7 +20,7 @@ describe("Reward epochs", function () {
         registry = await (await ethers.getContractFactory("Registry")).deploy(timelock.address, deployer.address);
         repToken = await (await ethers.getContractFactory("RepToken")).deploy(
             "Jurisdiction", "JUR", await registry.getAddress(), timelock.address,
-            [alice.address, bob.address, carol.address], [REP(600), REP(300), REP(100)], false);
+            [alice.address, bob.address, carol.address], [REP(600), REP(300), REP(100)]);
         await registry.connect(timelock).setJurisdictionAddress(await repToken.getAddress());
 
         usdc = await (await ethers.getContractFactory("TestToken")).deploy();

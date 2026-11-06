@@ -6,7 +6,7 @@ How the contracts fit together, how a jurisdiction is deployed, and how off-chai
 
 A **jurisdiction** is a set of contracts sharing one Timelock as its on-chain identity:
 
-- **Core** (every DAO): Governor, Timelock, Registry (treasury + config), and a governance token (soulbound or transferable RepToken, or a WrappedRepToken).
+- **Core** (every DAO): Governor, Timelock, Registry (treasury + config), and a non-transferable RepToken.
 - **Modules** (optional, see [modules.md](modules.md)): the `economy` module (an `Economy` that clones escrow projects, plus an `EconomyRepClaim` that mints REP for what members earn and spend in it), `content_court` and `autonet`. Attached at origination or later by proposal. A DAO has an Economy when its Registry has `jurisdiction.economy`.
 - **Satellites** (optional): standalone contracts that plug into the RepToken, Registry and Timelock, such as `AutonetVault`. See [autonet.md](autonet.md).
 
@@ -93,20 +93,18 @@ Modules are prepared by a `ModuleSetup` and attached by `JurisdictionFactory.fin
 | `InfrastructureFactory` | `TimelockController(delay, [], [], admin)`, `Registry(owner, wrapper)` | Caller passes itself as temporary admin/owner, and no wrapper |
 | `DAOFactory` | `HomebaseDAO` from `daoSettings[4]` = `[votingDelayMin, votingPeriodMin, threshold, quorum]` | |
 | `RepTokenFactory` | `RepToken`, then `setAdmin(caller)` | |
-| `WrappedRepTokenFactory` | `WrappedRepToken`, then `setAdmin(caller)` | |
 
 Sub-factories are permissionless; anyone can call them. The security of a DAO comes from `JurisdictionFactory` holding every admin role until it finalizes.
 
 ### JurisdictionFactory
 
-One factory creates every DAO (Firestore `jurisdictionFactory`). `CoreParams` holds `name`, `symbol`, `description`, `tokenKind` (`Soulbound`, `Transferable` or `Wrapped`), `underlying` (Wrapped only), `initialMembers`, `initialAmounts`, `votingDelay` and `votingPeriod` (minutes), `proposalThreshold`, `quorumFraction` (percent) and `executionDelay` (seconds).
+One factory creates every DAO (Firestore `jurisdictionFactory`). `CoreParams` holds `name`, `symbol`, `description`, `initialMembers`, `initialAmounts`, `votingDelay` and `votingPeriod` (minutes), `proposalThreshold`, `quorumFraction` (percent) and `executionDelay` (seconds).
 
 ```
 deployCore(params)                                  (tx 1, by the originator)
   InfrastructureFactory.deployTimelock(this, executionDelay)
   InfrastructureFactory.deployRegistry(owner = this, wrapper = 0)
   RepTokenFactory.deployRepToken(..., registry, timelockAddress = timelock, ...)
-    or WrappedRepTokenFactory.deployWrappedRepToken(underlying, ...)
   DAOFactory.deployDAO(token, timelock, name, settings)
   registry.setJurisdictionAddress(token)
   record the pending core under the registry, bound to msg.sender
@@ -166,7 +164,7 @@ Binding the pending core to its originator stops anyone else from finalizing a h
 
 | State | Location | Source of truth |
 |---|---|---|
-| Votes, delegation, balances, delegatee history | RepToken / WrappedRepToken checkpoints | Chain |
+| Votes, delegation, balances, delegatee history | RepToken checkpoints | Chain |
 | Proposals and vote tallies | Governor | Chain |
 | Queued operations | Timelock | Chain |
 | Treasury balances, earmarks, spend-cap windows | Registry | Chain |

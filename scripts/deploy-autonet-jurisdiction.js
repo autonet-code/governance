@@ -114,7 +114,7 @@ async function main() {
 
   // 1. Core
   const params = {
-    name: JURISDICTION_NAME, symbol: TOKEN_SYMBOL, description: "", tokenKind: 0, underlying: ethers.ZeroAddress,
+    name: JURISDICTION_NAME, symbol: TOKEN_SYMBOL, description: "",
     initialMembers: env("MEMBERS", deployer.address).split(",").map((a) => a.trim()),
     initialAmounts: env("AMOUNTS", ethers.parseEther("1000").toString()).split(",").map((a) => BigInt(a.trim())),
     votingDelay: minutes("VOTING_DELAY_SECS", 60), votingPeriod: minutes("VOTING_PERIOD_SECS", 604800),

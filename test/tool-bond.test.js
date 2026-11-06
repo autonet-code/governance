@@ -78,7 +78,7 @@ describe("ToolBond", function () {
         [deployer, timelock, author, a1, a2, a3, outsider] = await ethers.getSigners();
         anchors = 0;
         rep = await (await ethers.getContractFactory("RepToken")).deploy("Rep", "REP", deployer.address, timelock.address,
-            [a1.address, a2.address, a3.address, author.address], [REP(300), REP(200), REP(100), REP(400)], false);
+            [a1.address, a2.address, a3.address, author.address], [REP(300), REP(200), REP(100), REP(400)]);
         registry = await (await ethers.getContractFactory("Registry")).deploy(deployer.address, ethers.ZeroAddress);
         await registry.editRegistry("jurisdiction.autonet.charter", CHARTER);
         treasury = await registry.getAddress();

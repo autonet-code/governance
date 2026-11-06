@@ -45,13 +45,13 @@ describe("JurisdictionFactory", function () {
             .to.equal(`${(await s.setups.economy.getAddress()).toLowerCase()}:${j.installs.economy.id}`);
     });
 
-    it("creates a transferable DAO and a wrapped-token DAO", async function () {
-        const t = await createJurisdiction(m1, { tokenKind: 1, members: [m1.address], amounts: [REP(10)] });
-        expect(await t.rep.isTransferable()).to.equal(true);
-        const erc20 = await (await ethers.getContractFactory("TestERC20")).deploy("Gov", "GOV", 18, 0);
-        const w = await createJurisdiction(m1, { tokenKind: 2, underlying: await erc20.getAddress() });
-        expect(await w.rep.underlying()).to.equal(await erc20.getAddress());
-        expect(await w.rep.admin()).to.equal(w.core.timelock);
+    it("every DAO gets a non-transferable token, whoever calls the factory", async function () {
+        const { rep } = await createJurisdiction(m1, { members: [m1.address], amounts: [REP(10)] });
+        expect(await rep.isTransferable()).to.equal(false);
+        await expect(rep.connect(m1).transfer(m2.address, REP(1))).to.be.revertedWith("RepToken: Reputation is non-transferable");
+        await rep.connect(m1).approve(m2.address, REP(1));
+        await expect(rep.connect(m2).transferFrom(m1.address, m2.address, REP(1)))
+            .to.be.revertedWith("RepToken: Reputation is non-transferable");
     });
 
     it("only the originator finalizes a pending core, once", async function () {

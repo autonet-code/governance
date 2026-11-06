@@ -1,7 +1,6 @@
 {
   "ui": {
-    "requires": [],
-    "tokenKinds": ["Soulbound", "Transferable"]
+    "requires": []
   },
   "change": "Initial build.",
   "pluginSetup": {

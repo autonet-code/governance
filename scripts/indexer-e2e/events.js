@@ -101,37 +101,22 @@ async function main() {
         registryValues: { "e2e.key": "v2", "jurisdiction.economy": "", "modules.economy": "" },
         economyDetached: stdEconomy.module, projects: { [p0]: { stage: "open", economy: stdEconomy.module } } };
 
-    // 2. Transferable DAO: a token transfer between members, and the economy attached by proposal
+    // 2. The economy attached to a live DAO by proposal
     j = await createJurisdiction(dep, {
-        name: "E2E Transferable", symbol: "TRF", description: "transferable dao", tokenKind: 1,
+        name: "E2E Attach", symbol: "ATT", description: "economy attached later",
         members: [alice.address, bob.address], amounts: [E(100), E(100)],
     });
-    const trfToken = await ethers.getContractAt("RepToken", j.core.token);
-    await wait(trfToken.connect(alice).transfer(carol.address, E(30)));
-    await wait(trfToken.connect(alice).delegate(alice.address));
-    await wait(trfToken.connect(bob).delegate(bob.address));
-    const trfEconomy = await prepare(dep, j.core, "economy", ECONOMY);
-    const [trfTargets, , trfCalls] = await processor.installCalls(await trfEconomy.setup.getAddress(), trfEconomy.id);
+    const attToken = await ethers.getContractAt("RepToken", j.core.token);
+    await wait(attToken.connect(alice).delegate(alice.address));
+    await wait(attToken.connect(bob).delegate(bob.address));
+    const attEconomy = await prepare(dep, j.core, "economy", ECONOMY);
+    const [attTargets, , attCalls] = await processor.installCalls(await attEconomy.setup.getAddress(), attEconomy.id);
     // Attaching a module to a live DAO grants token rights, so it is constitutional
-    const trfAttach = await govern(j.governor.connect(alice), [alice, bob], trfTargets, trfCalls, "E2E: add the economy");
-    manifest.daos.transferable = { dao: j.core.governor, token: j.core.token, economy: trfEconomy.module,
-        members: { [alice.address]: E(70).toString(), [bob.address]: E(100).toString(), [carol.address]: E(30).toString() },
-        registryValues: { "jurisdiction.economy": trfEconomy.module.toLowerCase() },
-        proposals: { [trfAttach.toString()]: { state: "Executed", forVotes: E(170).toString(), supermajorityBps: "6667" } } };
-
-    // 3. Wrapped-token DAO: wrap an existing ERC20
-    const underlying = await (await ethers.getContractFactory("TestERC20")).deploy("Underlying", "UND", 18, E(1000));
-    await underlying.waitForDeployment();
-    j = await createJurisdiction(dep, {
-        name: "E2E Wrapped", symbol: "wUND", description: "wrapped dao", tokenKind: 2,
-        underlying: await underlying.getAddress(),
-    });
-    const wTok = await ethers.getContractAt("WrappedRepToken", j.core.token);
-    await wait(underlying.approve(j.core.token, E(50)));
-    await wait(wTok.depositFor(deployer.address, E(50)));
-    manifest.daos.wrapped = { dao: j.core.governor, token: j.core.token,
-        members: { [deployer.address]: E(50).toString() },
-        fields: { underlyingToken: await underlying.getAddress() } };
+    const attAttach = await govern(j.governor.connect(alice), [alice, bob], attTargets, attCalls, "E2E: add the economy");
+    manifest.daos.attached = { dao: j.core.governor, token: j.core.token, economy: attEconomy.module,
+        members: { [alice.address]: E(100).toString(), [bob.address]: E(100).toString() },
+        registryValues: { "jurisdiction.economy": attEconomy.module.toLowerCase() },
+        proposals: { [attAttach.toString()]: { state: "Executed", forVotes: E(200).toString(), supermajorityBps: "6667" } } };
 
     // 4. Economy DAO: the economy module attached at origination, parities recorded by finalize
     const usdc = await (await ethers.getContractFactory("TestERC20")).deploy("Test USDC", "USDC", 6, 10n ** 15n);
