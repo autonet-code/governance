@@ -59,9 +59,9 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     mapping(address => Checkpoints.Trace208) private _balanceHistory;
 
     // Reward epochs: two pools, each with its own budget. The passive pool pays by REP balance at the
-    // snapshot, whatever the holder delegated. The delegate pool pays the top delegates by the weight
-    // they received from others at the snapshot: sorting every address on chain can't work, so after
-    // the epoch starts there is a sign-up window that keeps the top list, and claims open when it ends.
+    // snapshot, whatever the holder delegated. The delegate pool pays any delegate whose weight
+    // received from others at the snapshot reaches the bar, a share of all REP. Each pays
+    // budget * received / total REP, so the budget is a ceiling and what isn't earned stays reclaimable.
     enum RewardPool { Passive, Delegate }
 
     struct RewardEpoch {
@@ -69,30 +69,20 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         address paymentToken;
         uint48 startTimestamp;
         RewardPool pool;
-        uint16 topN;       // delegate pool: how many delegates it pays
-        uint48 signupEnds; // delegate pool: entries close and claims open after this time
+        uint16 delegateBarBps; // delegate pool: the bar, fixed at the start
     }
 
-    uint16 public constant MAX_DELEGATE_TOP_N = 100; // bounds the search for the lowest entry
-    uint32 public constant MAX_DELEGATE_SIGNUP = 30 days;
-    uint16 public delegateTopN = 10;
-    uint32 public delegateSignupPeriod = 3 days;
+    uint16 public delegateBarBps = 100; // 1% of all REP
 
     uint256 public currentRewardEpoch;
     mapping(uint256 => RewardEpoch) public rewardEpochs;
     mapping(uint256 => mapping(address => bool)) public hasClaimedReward;
 
-    mapping(uint256 => address[]) private _topDelegates;
-    mapping(uint256 => mapping(address => uint256)) public delegatePoolWeight; // 0: not in the top list
-    mapping(uint256 => uint256) public delegatePoolTotal;
-
     mapping(address => Checkpoints.Trace208) private _delegateeHistory;
 
-    event NewRewardEpoch(uint256 indexed epochId, RewardPool pool, uint256 budget, address indexed paymentToken, uint16 topN, uint48 signupEnds);
+    event NewRewardEpoch(uint256 indexed epochId, RewardPool pool, uint256 budget, address indexed paymentToken, uint16 delegateBarBps);
     event RewardClaimed(address indexed account, uint256 indexed epochId, uint256 amount);
-    event DelegateRewardsSet(uint16 topN, uint32 signupPeriod);
-    event DelegatePoolEntered(uint256 indexed epochId, address indexed delegatee, uint256 weight);
-    event DelegatePoolDisplaced(uint256 indexed epochId, address indexed delegatee);
+    event DelegateBarSet(uint16 delegateBarBps);
 
     constructor(
         string memory name,
@@ -117,13 +107,11 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
 
     // --- REWARD EPOCHS ---
 
-    function setDelegateRewards(uint16 topN, uint32 signupPeriod) external {
-        require(msg.sender == timelockAddress, "RepToken: Only Timelock can set delegate rewards");
-        require(topN > 0 && topN <= MAX_DELEGATE_TOP_N, "RepToken: Invalid top N");
-        require(signupPeriod > 0 && signupPeriod <= MAX_DELEGATE_SIGNUP, "RepToken: Invalid sign-up period");
-        delegateTopN = topN;
-        delegateSignupPeriod = signupPeriod;
-        emit DelegateRewardsSet(topN, signupPeriod);
+    function setDelegateBar(uint16 newBarBps) external {
+        require(msg.sender == timelockAddress, "RepToken: Only Timelock can set the delegate bar");
+        require(newBarBps <= 10000, "RepToken: Delegate bar too high");
+        delegateBarBps = newBarBps;
+        emit DelegateBarSet(newBarBps);
     }
 
     function rewardPurpose(uint256 epochId, address paymentToken) public pure returns (bytes32) {
@@ -132,15 +120,15 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
 
     // Starts a passive pool and reserves its budget in the registry in the same call.
     function startPassiveEpoch(uint256 budget, address paymentToken) external {
-        _startEpoch(budget, paymentToken, RewardPool.Passive, 0, 0);
+        _startEpoch(budget, paymentToken, RewardPool.Passive, 0);
     }
 
-    // Starts a delegate pool, its sign-up window and its reservation. The epoch keeps today's settings.
+    // Starts a delegate pool and its reservation. The epoch keeps today's bar.
     function startDelegateEpoch(uint256 budget, address paymentToken) external {
-        _startEpoch(budget, paymentToken, RewardPool.Delegate, delegateTopN, clock() + delegateSignupPeriod);
+        _startEpoch(budget, paymentToken, RewardPool.Delegate, delegateBarBps);
     }
 
-    function _startEpoch(uint256 budget, address paymentToken, RewardPool pool, uint16 topN, uint48 signupEnds) private {
+    function _startEpoch(uint256 budget, address paymentToken, RewardPool pool, uint16 barBps) private {
         require(msg.sender == timelockAddress, "RepToken: Only Timelock can start an epoch");
         require(budget > 0, "RepToken: Empty budget");
         currentRewardEpoch++;
@@ -149,11 +137,10 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
             paymentToken: paymentToken,
             startTimestamp: clock(),
             pool: pool,
-            topN: topN,
-            signupEnds: signupEnds
+            delegateBarBps: barBps
         });
         Registry(registryAddress).earmarkFunds(rewardPurpose(currentRewardEpoch, paymentToken), budget, paymentToken);
-        emit NewRewardEpoch(currentRewardEpoch, pool, budget, paymentToken, topN, signupEnds);
+        emit NewRewardEpoch(currentRewardEpoch, pool, budget, paymentToken, barBps);
     }
 
     // The voting weight others gave an account: its votes, less its own REP if it delegated to itself.
@@ -162,61 +149,25 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         return pastDelegatee(account, timepoint) == account ? votes - _getPastBalance(account, timepoint) : votes;
     }
 
-    // Enters a delegate in the top list, displacing the lowest entry when the list is full. Anyone
-    // can enter anyone: the weight is on chain, so one honest caller is enough to get a delegate in.
-    function enterDelegatePool(uint256 epochId, address delegatee) external {
-        RewardEpoch memory epoch = rewardEpochs[epochId];
-        require(epoch.pool == RewardPool.Delegate && epoch.startTimestamp > 0, "RepToken: Not a delegate pool");
-        require(clock() <= epoch.signupEnds, "RepToken: Sign-up has closed");
-        require(delegatePoolWeight[epochId][delegatee] == 0, "RepToken: Already in the top list");
-        uint256 weight = receivedWeight(delegatee, epoch.startTimestamp - 1);
-        require(weight > 0, "RepToken: No delegated weight");
-
-        address[] storage top = _topDelegates[epochId];
-        if (top.length < epoch.topN) {
-            top.push(delegatee);
-        } else {
-            uint256 lowest;
-            uint256 lowestWeight = type(uint256).max;
-            for (uint256 i = 0; i < top.length; i++) {
-                uint256 w = delegatePoolWeight[epochId][top[i]];
-                if (w < lowestWeight) (lowest, lowestWeight) = (i, w);
-            }
-            require(weight > lowestWeight, "RepToken: Below the top list");
-            emit DelegatePoolDisplaced(epochId, top[lowest]);
-            delete delegatePoolWeight[epochId][top[lowest]];
-            delegatePoolTotal[epochId] -= lowestWeight;
-            top[lowest] = delegatee;
-        }
-        delegatePoolWeight[epochId][delegatee] = weight;
-        delegatePoolTotal[epochId] += weight;
-        emit DelegatePoolEntered(epochId, delegatee, weight);
-    }
-
-    function topDelegates(uint256 epochId) external view returns (address[] memory) {
-        return _topDelegates[epochId];
-    }
-
-    // An account's reward. While a delegate pool's sign-up is open this is what it would get so far.
+    // An account's reward, all read at the snapshot before the epoch.
     function rewardOf(uint256 epochId, address account) public view returns (uint256) {
         RewardEpoch memory epoch = rewardEpochs[epochId];
         require(epochId > 0 && epochId <= currentRewardEpoch, "RepToken: Invalid epoch ID");
-        if (epoch.pool == RewardPool.Delegate) {
-            uint256 total = delegatePoolTotal[epochId];
-            return total == 0 ? 0 : (delegatePoolWeight[epochId][account] * epoch.budget) / total;
-        }
         uint256 snapshot = epoch.startTimestamp - 1;
         uint256 totalReputation = getPastTotalSupply(snapshot);
-        return totalReputation == 0 ? 0 : (_getPastBalance(account, snapshot) * epoch.budget) / totalReputation;
+        if (totalReputation == 0) return 0;
+        if (epoch.pool == RewardPool.Passive) return (_getPastBalance(account, snapshot) * epoch.budget) / totalReputation;
+        uint256 received = receivedWeight(account, snapshot);
+        if (received * 10000 < uint256(epoch.delegateBarBps) * totalReputation) return 0;
+        return (received * epoch.budget) / totalReputation;
     }
 
     function claimReward(uint256 epochId) external {
         require(!hasClaimedReward[epochId][msg.sender], "RepToken: Already claimed for this epoch");
-        RewardEpoch memory epoch = rewardEpochs[epochId];
-        require(clock() > epoch.signupEnds, "RepToken: Sign-up is still open");
         uint256 rewardAmount = rewardOf(epochId, msg.sender);
         require(rewardAmount > 0, "RepToken: Reward amount is zero");
         hasClaimedReward[epochId][msg.sender] = true;
+        RewardEpoch memory epoch = rewardEpochs[epochId];
         Registry(registryAddress).disburseEarmarked(msg.sender, rewardAmount, rewardPurpose(epochId, epoch.paymentToken), epoch.paymentToken);
         emit RewardClaimed(msg.sender, epochId, rewardAmount);
     }
@@ -224,11 +175,6 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
     // --- GETTERS & CONFIG ---
     function getRewardEpochStart(uint256 epochId) external view override returns (uint48) {
         return rewardEpochs[epochId].startTimestamp;
-    }
-
-    function getRewardClaimsOpen(uint256 epochId) external view override returns (uint48) {
-        RewardEpoch storage epoch = rewardEpochs[epochId];
-        return epoch.pool == RewardPool.Delegate ? epoch.signupEnds : epoch.startTimestamp;
     }
 
     function pastDelegatee(address account, uint256 timepoint) public view returns (address) {

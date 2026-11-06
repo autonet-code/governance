@@ -20,7 +20,7 @@ An internal audit and a test plan exist; both are kept private.
 | Minting outside governance | `RepToken.mint` requires `admin` (the timelock) or an explicit `minters` entry, which only the admin or timelock can grant. RepToken has no built-in Economy path: economy REP comes from the `EconomyRepClaim` minter granted when the module attaches | `RepToken.setMinter` |
 | Treasury drained by a captured vote | Optional per-token rolling-window spend cap on `transferETH`, `transferERC20` and `disburseEarmarked` (fixed window: worst case 2x the cap across a boundary) | `Registry._meterSpend`; `test/treasury-spend-guard.test.js` |
 | Reward budget overspent or reused | Epoch budgets are earmarked in the Registry when the epoch starts; earmarks cannot exceed unreserved balance and ordinary transfers cannot touch reserved funds; each account claims once per epoch | `Registry.earmarkFunds`, `_requireUnreserved`, `RepToken.claimReward` |
-| Sybil delegation for rewards | Not guarded on chain, by design: a member can delegate to their own second wallet and earn from both pools. Each jurisdiction handles it through its code of conduct and REP burns by constitutional proposal. Only the top delegates are paid, by weight received from others | `RepToken.enterDelegatePool` |
+| Sybil delegation for rewards | Not guarded on chain, by design: a member can delegate to their own second wallet and earn from both pools. Each jurisdiction handles it through its code of conduct and REP burns by constitutional proposal. Delegates are paid only for weight received from others, above the bar | `RepToken.rewardOf` |
 
 ### Trustless economy
 
@@ -50,7 +50,7 @@ An internal audit and a test plan exist; both are kept private.
 ## Known caveats
 
 - Fee-on-transfer payment tokens would short the treasury in the vault; they are excluded socially when governance sets parity.
-- Standard DAOs created by factory builds that passed `address(this)` as the RepToken timelock (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) cannot call `startPassiveEpoch`, `startDelegateEpoch` or `setDelegateRewards`. `JurisdictionFactory` passes the real timelock for every DAO; economy DAOs were never affected. See [technical-reference.md](technical-reference.md#reptoken).
+- Standard DAOs created by factory builds that passed `address(this)` as the RepToken timelock (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) cannot call `startPassiveEpoch`, `startDelegateEpoch` or `setDelegateBar`. `JurisdictionFactory` passes the real timelock for every DAO; economy DAOs were never affected. See [technical-reference.md](technical-reference.md#reptoken).
 - DAOs created by the old standard factories (the live Shadownet suite) have the factory as their Registry `wrapper` and so it keeps registry edit rights; the factory exposes no function that uses them after deployment. `JurisdictionFactory` sets no wrapper.
 - Timelock delay can be configured to zero (test networks do this), which removes the review window between a passed proposal and its execution.
 - Holds depend on someone registering the proposal. If the indexer is down and nobody calls `registerDaoProposal`, a contractor can sign once cooling-off ends, or a ruling can finalize once the window closes, before the vote does.

@@ -2,7 +2,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
-// Reward epochs: a passive pool paid by REP balance and a delegate pool paid to the top delegates.
+// Reward epochs: a passive pool paid by REP balance and a delegate pool paid above a share bar.
 describe("Reward epochs", function () {
     const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
     let deployer, timelock, alice, aliceAlt, bob, carol, outsider;
@@ -62,125 +62,82 @@ describe("Reward epochs", function () {
             await repToken.connect(timelock).startDelegateEpoch(budget, await usdc.getAddress());
             return repToken.currentRewardEpoch();
         };
-        const closeSignup = () => time.increase(Number(3 * 86400) + 1);
 
-        it("pays by the weight received from others, not the delegate's own REP", async function () {
+        it("pays by the weight received from others, at once, and the delegate's own REP doesn't count", async function () {
             await repToken.connect(alice).delegate(alice.address); // 600 of its own, nothing received
             await repToken.connect(bob).delegate(bob.address);     // 300 of its own
             await repToken.connect(carol).delegate(bob.address);   // 100 received
             const epoch = await startDelegates(REP(1000));
 
             expect(await repToken.receivedWeight(bob.address, (await time.latest()) - 1)).to.equal(REP(100));
-            await expect(repToken.enterDelegatePool(epoch, alice.address)).to.be.revertedWith("RepToken: No delegated weight");
-            await repToken.enterDelegatePool(epoch, bob.address);
-            await closeSignup();
-            expect(await repToken.rewardOf(epoch, bob.address)).to.equal(REP(1000));
+            expect(await repToken.rewardOf(epoch, bob.address)).to.equal(REP(100)); // 10% of all REP
+            expect(await repToken.rewardOf(epoch, alice.address)).to.equal(0n);
+            await repToken.connect(bob).claimReward(epoch);
+            expect(await usdc.balanceOf(bob.address)).to.equal(REP(100));
             await expect(repToken.connect(alice).claimReward(epoch)).to.be.revertedWith("RepToken: Reward amount is zero");
         });
 
-        it("splits the budget in proportion to the weight, and a delegate need not delegate to itself", async function () {
-            await repToken.connect(alice).delegate(outsider.address); // 600 to an account with no REP
-            await repToken.connect(bob).delegate(aliceAlt.address);   // 300
-            const epoch = await startDelegates(REP(900));
-            await repToken.connect(carol).enterDelegatePool(epoch, outsider.address); // anyone can enter anyone
-            await repToken.enterDelegatePool(epoch, aliceAlt.address);
-            await closeSignup();
-            expect(await repToken.rewardOf(epoch, outsider.address)).to.equal(REP(600));
-            expect(await repToken.rewardOf(epoch, aliceAlt.address)).to.equal(REP(300));
-            await repToken.connect(outsider).claimReward(epoch);
-            expect(await usdc.balanceOf(outsider.address)).to.equal(REP(600));
-        });
-
-        it("keeps only the top N: a heavier entry displaces the lowest, a lighter one is refused", async function () {
-            await repToken.connect(timelock).setDelegateRewards(2, 3 * 86400);
-            await repToken.connect(alice).delegate(outsider.address); // 600
-            await repToken.connect(bob).delegate(aliceAlt.address);   // 300
-            await repToken.connect(carol).delegate(deployer.address); // 100
-            const epoch = await startDelegates(REP(900));
-            await repToken.enterDelegatePool(epoch, deployer.address);
-            await repToken.enterDelegatePool(epoch, aliceAlt.address);
-            await expect(repToken.enterDelegatePool(epoch, outsider.address))
-                .to.emit(repToken, "DelegatePoolDisplaced").withArgs(epoch, deployer.address);
-            await expect(repToken.enterDelegatePool(epoch, deployer.address)).to.be.revertedWith("RepToken: Below the top list");
-            expect(await repToken.delegatePoolTotal(epoch)).to.equal(REP(900));
-            expect([...await repToken.topDelegates(epoch)]).to.have.members([outsider.address, aliceAlt.address]);
-            await closeSignup();
-            expect(await repToken.rewardOf(epoch, deployer.address)).to.equal(0n);
-        });
-
-        it("refuses a second entry, late entries and early claims", async function () {
-            await repToken.connect(carol).delegate(bob.address);
-            const epoch = await startDelegates(REP(100));
-            await repToken.enterDelegatePool(epoch, bob.address);
-            await expect(repToken.enterDelegatePool(epoch, bob.address)).to.be.revertedWith("RepToken: Already in the top list");
-            await expect(repToken.connect(bob).claimReward(epoch)).to.be.revertedWith("RepToken: Sign-up is still open");
-            await repToken.connect(alice).delegate(aliceAlt.address);
-            await closeSignup();
-            await expect(repToken.enterDelegatePool(epoch, bob.address)).to.be.revertedWith("RepToken: Sign-up has closed");
-            await repToken.connect(bob).claimReward(epoch);
-        });
-
-        it("ranks by the delegations at the start of the epoch", async function () {
-            await repToken.connect(carol).delegate(bob.address);
-            const epoch = await startDelegates(REP(100));
-            await repToken.connect(carol).delegate(carol.address);
-            await repToken.connect(alice).delegate(aliceAlt.address);
-            await repToken.enterDelegatePool(epoch, bob.address);
-            await expect(repToken.enterDelegatePool(epoch, aliceAlt.address)).to.be.revertedWith("RepToken: No delegated weight");
-        });
-
-        it("keeps the settings in force when the epoch started", async function () {
+        it("a delegate need not delegate to itself or hold any REP", async function () {
             await repToken.connect(alice).delegate(outsider.address);
-            await repToken.connect(bob).delegate(aliceAlt.address);
-            await repToken.connect(timelock).setDelegateRewards(1, 3600);
-            const epoch = await startDelegates(REP(100));
-            await repToken.connect(timelock).setDelegateRewards(5, 86400);
-            await repToken.enterDelegatePool(epoch, aliceAlt.address);
-            await repToken.enterDelegatePool(epoch, outsider.address);
-            expect([...await repToken.topDelegates(epoch)]).to.deep.equal([outsider.address]);
+            const epoch = await startDelegates(REP(1000));
+            expect(await repToken.rewardOf(epoch, outsider.address)).to.equal(REP(600));
         });
 
-        it("rejects entries in a passive pool, and out-of-range settings or callers", async function () {
-            const epoch = await startEpoch(REP(10));
-            await expect(repToken.enterDelegatePool(epoch, bob.address)).to.be.revertedWith("RepToken: Not a delegate pool");
-            await expect(repToken.enterDelegatePool(99, bob.address)).to.be.revertedWith("RepToken: Not a delegate pool");
-            await expect(repToken.connect(timelock).setDelegateRewards(0, 3600)).to.be.revertedWith("RepToken: Invalid top N");
-            await expect(repToken.connect(timelock).setDelegateRewards(101, 3600)).to.be.revertedWith("RepToken: Invalid top N");
-            await expect(repToken.connect(timelock).setDelegateRewards(5, 0)).to.be.revertedWith("RepToken: Invalid sign-up period");
-            await expect(repToken.connect(outsider).setDelegateRewards(5, 3600)).to.be.revertedWith("RepToken: Only Timelock can set delegate rewards");
+        it("pays at exactly the bar and nothing just below it", async function () {
+            await repToken.connect(timelock).setDelegateBar(1000); // 10% of all REP
+            await repToken.connect(carol).delegate(bob.address);   // exactly 10%
+            let epoch = await startDelegates(REP(1000));
+            expect(await repToken.rewardOf(epoch, bob.address)).to.equal(REP(100));
+
+            await repToken.connect(timelock).setDelegateBar(1001);
+            epoch = await startDelegates(REP(1000));
+            expect(await repToken.rewardOf(epoch, bob.address)).to.equal(0n);
+        });
+
+        it("the budget is a ceiling: only weight above the bar is paid and the rest stays reclaimable", async function () {
+            const usdcAddr = await usdc.getAddress();
+            await registry.connect(timelock).editRegistry("benefits.claim.gracePeriod", "60");
+            await repToken.connect(carol).delegate(bob.address);
+            const epoch = await startDelegates(REP(1000));
+            await repToken.connect(bob).claimReward(epoch); // 10% of the budget
+            await startEpoch(REP(1));
+            await time.increase(61);
+            await registry.connect(timelock).reclaimEarmarkedFunds(epoch, usdcAddr);
+            expect(await registry.totalEarmarked(usdcAddr)).to.equal(REP(1)); // only the second epoch
+        });
+
+        it("never pays more than the budget, even with all REP delegated", async function () {
+            await repToken.connect(alice).delegate(bob.address);
+            await repToken.connect(bob).delegate(carol.address);
+            await repToken.connect(carol).delegate(alice.address);
+            const epoch = await startDelegates(REP(999));
+            let total = 0n;
+            for (const a of [alice, bob, carol]) total += await repToken.rewardOf(epoch, a.address);
+            expect(total).to.be.lte(REP(999));
+        });
+
+        it("uses the delegations and the bar in force when the epoch started", async function () {
+            await repToken.connect(carol).delegate(bob.address);
+            const epoch = await startDelegates(REP(1000));
+            await repToken.connect(carol).delegate(carol.address);
+            await repToken.connect(alice).delegate(bob.address);
+            await repToken.connect(timelock).setDelegateBar(5000);
+            expect(await repToken.rewardOf(epoch, bob.address)).to.equal(REP(100));
+        });
+
+        it("a delegate with the default 1% bar is paid, one below it is not", async function () {
+            expect(await repToken.delegateBarBps()).to.equal(100);
+            await repToken.connect(deployer).mint(outsider.address, REP(9));
+            await repToken.connect(outsider).delegate(aliceAlt.address); // 9 of 1009: under 1%
+            const epoch = await startDelegates(REP(1000));
+            expect(await repToken.rewardOf(epoch, aliceAlt.address)).to.equal(0n);
+        });
+
+        it("only the timelock sets the bar, up to all REP", async function () {
+            await expect(repToken.connect(timelock).setDelegateBar(10001)).to.be.revertedWith("RepToken: Delegate bar too high");
+            await expect(repToken.connect(outsider).setDelegateBar(200)).to.be.revertedWith("RepToken: Only Timelock can set the delegate bar");
             await expect(repToken.connect(outsider).startDelegateEpoch(1, await usdc.getAddress())).to.be.revertedWith("RepToken: Only Timelock can start an epoch");
         });
-
-        it("displacing from a full list at the largest N stays affordable", async function () {
-            await repToken.connect(timelock).setDelegateRewards(100, 3 * 86400);
-            const delegatees = [];
-            for (let i = 0; i < 100; i++) {
-                const holder = ethers.Wallet.createRandom().connect(ethers.provider);
-                await deployer.sendTransaction({ to: holder.address, value: REP(0.01) });
-                await repToken.connect(deployer).mint(holder.address, REP(1));
-                delegatees.push(ethers.Wallet.createRandom().address);
-                await repToken.connect(holder).delegate(delegatees[i]);
-            }
-            await repToken.connect(alice).delegate(outsider.address);
-            const epoch = await startDelegates(REP(100));
-            for (const d of delegatees) await repToken.enterDelegatePool(epoch, d);
-            const tx = await repToken.enterDelegatePool(epoch, outsider.address);
-            expect((await tx.wait()).gasUsed).to.be.lessThan(700000n);
-        });
-    });
-
-    it("a pool's reservation stays until a delegate pool's sign-up has passed the grace period", async function () {
-        const usdcAddr = await usdc.getAddress();
-        await registry.connect(timelock).editRegistry("benefits.claim.gracePeriod", "60");
-        await repToken.connect(carol).delegate(bob.address);
-        await repToken.connect(timelock).startDelegateEpoch(REP(100), usdcAddr);
-        const epoch = await repToken.currentRewardEpoch();
-        await startEpoch(REP(100)); // the next epoch starts during the sign-up
-        await time.increase(120);
-        await expect(registry.connect(timelock).reclaimEarmarkedFunds(epoch, usdcAddr))
-            .to.be.revertedWith("Registry: Claim grace period has not passed");
-        await time.increase(3 * 86400);
-        await registry.connect(timelock).reclaimEarmarkedFunds(epoch, usdcAddr);
     });
 
     describe("treasury reservations", function () {

@@ -336,7 +336,7 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
 
     /**
      * @notice Allows DAO governance to release the unclaimed rest of a reward epoch after a grace period.
-     * @dev The grace period starts from the beginning of the *next* epoch, or when claims open if that is later.
+     * @dev The grace period starts from the beginning of the *next* epoch.
      * @param epochId The ID of the epoch to reclaim from.
      * @param paymentToken The address of the token used in that epoch.
      */
@@ -346,9 +346,6 @@ contract Registry is IERC721Receiver, ReentrancyGuard {
 
         uint48 gracePeriodStartTime = IJurisdictionData(jurisdictionAddress).getRewardEpochStart(epochId + 1);
         require(gracePeriodStartTime > 0, "Registry: The subsequent epoch has not started yet");
-        // A delegate pool's claims open after its sign-up, which can end after the next epoch starts
-        uint48 claimsOpen = IJurisdictionData(jurisdictionAddress).getRewardClaimsOpen(epochId);
-        if (claimsOpen > gracePeriodStartTime) gracePeriodStartTime = claimsOpen;
         require(block.timestamp > gracePeriodStartTime + gracePeriod, "Registry: Claim grace period has not passed");
 
         bytes32 purpose = keccak256(abi.encodePacked("REWARD", epochId, paymentToken));

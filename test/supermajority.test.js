@@ -111,7 +111,7 @@ describe("Supermajority for constitutional proposals", function () {
             const rep = j.rep.interface;
             expect(await bpsOf(j, j.core.token, rep.encodeFunctionData("startPassiveEpoch", [1, ethers.ZeroAddress]), "e1")).to.equal(0n);
             expect(await bpsOf(j, j.core.token, rep.encodeFunctionData("startDelegateEpoch", [1, ethers.ZeroAddress]), "e3")).to.equal(0n);
-            expect(await bpsOf(j, j.core.token, rep.encodeFunctionData("setDelegateRewards", [5, 3600]), "e2")).to.equal(0n);
+            expect(await bpsOf(j, j.core.token, rep.encodeFunctionData("setDelegateBar", [200]), "e2")).to.equal(0n);
         });
 
         it("rights already granted keep working without a vote", async function () {

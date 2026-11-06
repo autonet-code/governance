@@ -30,7 +30,7 @@ constructor(IVotes _token, TimelockController _timelock, string memory name,
 ```
 
 - `supermajorityBps()` (5001..10000): the share of all REP at the snapshot a protected proposal needs. `setSupermajority(bps)`: governance only, and itself protected. Emits `SupermajoritySet(oldBps, newBps)`.
-- `proposalSupermajority(proposalId)`: the threshold fixed for a protected proposal at `propose`, 0 for an ordinary one. Protected: any call to the timelock or the governor, any call to the token but `startPassiveEpoch`, `startDelegateEpoch` and `setDelegateRewards`, and Registry edits of `jurisdiction.autonet.charter` or `jurisdiction.autonet.epoch_rules`. `propose` emits `ProposalSupermajority(proposalId, bps)` for each protected proposal.
+- `proposalSupermajority(proposalId)`: the threshold fixed for a protected proposal at `propose`, 0 for an ordinary one. Protected: any call to the timelock or the governor, any call to the token but `startPassiveEpoch`, `startDelegateEpoch` and `setDelegateBar`, and Registry edits of `jurisdiction.autonet.charter` or `jurisdiction.autonet.epoch_rules`. `propose` emits `ProposalSupermajority(proposalId, bps)` for each protected proposal.
 
 - `minsDelay`, `minsVoting` are **minutes**, multiplied by 60 into `GovernorSettings`. RepToken uses `CLOCK_MODE() == "mode=timestamp"`, so the governor's delay and period are seconds on-chain.
 - `pThreshold`: votes needed to propose (18-decimal token units). `qvrm`: quorum percent of past total supply.
@@ -62,12 +62,12 @@ State: `admin`, `registryAddress` (immutable), `timelockAddress` (immutable), `d
 | `slash(address from, uint256 amount)`, `reassign(address to, uint256 amount)` | a `slashers` entry; `reassign` up to that slasher's `slashedCredit` |
 | `setDefaultDelegate(address)` | `admin` or `timelockAddress`; `address(0)` disables |
 | `setAutoDelegateExempt(address account, bool exempt)` | `admin` or `timelockAddress` |
-| `setDelegateRewards(uint16 topN, uint32 signupPeriod)` | `timelockAddress` only, `1..100` and up to 30 days |
+| `setDelegateBar(uint16)` | `timelockAddress` only, `<= 10000` |
 | `startPassiveEpoch`, `startDelegateEpoch` (`uint256 budget, address paymentToken`) | `timelockAddress` only |
 | `transfer`, `transferFrom` | always revert `"RepToken: Reputation is non-transferable"` |
 | `isTransferable` | always false, for readers that also follow older tokens |
 
-> **Old-factory caveat.** `JurisdictionFactory` passes the DAO's timelock as `_timelockAddress`. Early builds of the removed standard factories passed `address(this)`, so DAOs created by those builds (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) have the factory as their immutable `timelockAddress`. In those DAOs, functions gated to `timelockAddress` only (`startPassiveEpoch`, `startDelegateEpoch`, `setDelegateRewards`) are unreachable; admin-or-timelock functions still work because `admin` is handed to the timelock. Economy DAOs always had the real timelock.
+> **Old-factory caveat.** `JurisdictionFactory` passes the DAO's timelock as `_timelockAddress`. Early builds of the removed standard factories passed `address(this)`, so DAOs created by those builds (including standard DAOs created on Shadownet before the 2026-10-12 redeploy) have the factory as their immutable `timelockAddress`. In those DAOs, functions gated to `timelockAddress` only (`startPassiveEpoch`, `startDelegateEpoch`, `setDelegateBar`) are unreachable; admin-or-timelock functions still work because `admin` is handed to the timelock. Economy DAOs always had the real timelock.
 
 ### Reward epochs
 
@@ -76,16 +76,14 @@ Two pools with their own budgets, numbered together. See [governance.md](governa
 | Item | Detail |
 |------|--------|
 | `startPassiveEpoch(uint256 budget, address paymentToken)` | Timelock only, `budget > 0`. Increments `currentRewardEpoch` and calls `Registry.earmarkFunds(rewardPurpose(id, token), budget, token)` |
-| `startDelegateEpoch(uint256 budget, address paymentToken)` | The same, and fixes `topN` and `signupEnds` from the current settings |
-| `enterDelegatePool(uint256 epochId, address delegatee)` | Anyone, until `signupEnds`. Needs `receivedWeight > 0`; on a full list needs more than the lowest entry, which it displaces |
-| `topDelegates(uint256)`, `delegatePoolWeight(uint256, address)`, `delegatePoolTotal(uint256)` | The top list, its weights and their total |
+| `startDelegateEpoch(uint256 budget, address paymentToken)` | The same, and fixes the epoch's `delegateBarBps` |
 | `receivedWeight(address, uint256 timepoint) view` | Past votes, less the account's own balance if it delegated to itself |
-| `rewardOf(uint256 epochId, address account) view` | Passive: `pastBalance * budget / pastTotalSupply` at `startTimestamp - 1`. Delegate: `weight * budget / delegatePoolTotal`, provisional during the sign-up |
-| `claimReward(uint256 epochId)` | Once per epoch per account, non-zero, after `signupEnds`; pays via `Registry.disburseEarmarked` |
+| `rewardOf(uint256 epochId, address account) view` | At `startTimestamp - 1`. Passive: `pastBalance * budget / pastTotalSupply`. Delegate: `received * budget / pastTotalSupply` if `received` reaches the bar, else 0 |
+| `claimReward(uint256 epochId)` | Once per epoch per account, non-zero; pays via `Registry.disburseEarmarked` |
 | `rewardPurpose(uint256 epochId, address paymentToken) pure` | `keccak256(abi.encodePacked("REWARD", epochId, paymentToken))` |
-| `delegateTopN`, `delegateSignupPeriod` | Defaults 10 and 3 days; max `MAX_DELEGATE_TOP_N = 100`, `MAX_DELEGATE_SIGNUP = 30 days`. Set by `setDelegateRewards` |
-| `getRewardEpochStart(uint256)`, `getRewardClaimsOpen(uint256)`, `pastDelegatee(address, uint256)` | Views (`IJurisdictionData`, plus the delegatee history) |
-| Unclaimed remainder | `Registry.reclaimEarmarkedFunds(epochId, token)` after the next epoch starts plus `benefits.claim.gracePeriod`, counted from claims opening if that is later |
+| `delegateBarBps` | Default `100` (1% of all REP); up to `10000`. Set by `setDelegateBar` |
+| `getRewardEpochStart(uint256)`, `pastDelegatee(address, uint256)` | Views (`IJurisdictionData`, plus the delegatee history) |
+| Unclaimed remainder | `Registry.reclaimEarmarkedFunds(epochId, token)` after the next epoch starts plus `benefits.claim.gracePeriod` |
 
 ### Auto-delegation
 
@@ -359,11 +357,9 @@ event ProjectClosed(address by);
 event OrphanedTokensSwept(address indexed token, uint256 amount);      // ERC20Project only
 
 // RepToken (plus ERC20Votes DelegateChanged / DelegateVotesChanged)
-event NewRewardEpoch(uint256 indexed epochId, RewardPool pool, uint256 budget, address indexed paymentToken, uint16 topN, uint48 signupEnds);
+event NewRewardEpoch(uint256 indexed epochId, RewardPool pool, uint256 budget, address indexed paymentToken, uint16 delegateBarBps);
 event RewardClaimed(address indexed account, uint256 indexed epochId, uint256 amount);
-event DelegateRewardsSet(uint16 topN, uint32 signupPeriod);
-event DelegatePoolEntered(uint256 indexed epochId, address indexed delegatee, uint256 weight);
-event DelegatePoolDisplaced(uint256 indexed epochId, address indexed delegatee);
+event DelegateBarSet(uint16 delegateBarBps);
 event DefaultDelegateUpdated(address indexed previous, address indexed current);
 event AutoDelegateExemptSet(address indexed account, bool exempt);
 event MinterSet(address indexed account, bool allowed);
@@ -423,6 +419,5 @@ Economy constructor defaults (`EconomySetup` sets all but `maxImmediateBps` from
 | `projectThreshold` | 0 |
 | `appealPeriod` | 7 days |
 | `maxImmediateBps` | 2000 (20%) |
-| RepToken `delegateTopN` | 10 |
-| RepToken `delegateSignupPeriod` | 3 days |
+| RepToken `delegateBarBps` | 100 (1% of all REP) |
 | Registry `windowDuration` | 7 days; caps default to 0 (unmetered) |

@@ -65,7 +65,7 @@ constructor(
     // The token calls that stay ordinary: reward epochs move treasury funds, not voting power
     bytes4 private constant START_PASSIVE_EPOCH = bytes4(keccak256("startPassiveEpoch(uint256,address)"));
     bytes4 private constant START_DELEGATE_EPOCH = bytes4(keccak256("startDelegateEpoch(uint256,address)"));
-    bytes4 private constant SET_DELEGATE_REWARDS = bytes4(keccak256("setDelegateRewards(uint16,uint32)"));
+    bytes4 private constant SET_DELEGATE_BAR = bytes4(keccak256("setDelegateBar(uint16)"));
     bytes4 private constant BATCH_EDIT_REGISTRY = bytes4(keccak256("batchEditRegistry(string[],string[])"));
 
     event ProposalSupermajority(uint256 indexed proposalId, uint256 bps);
@@ -102,7 +102,7 @@ constructor(
             bytes4 s = d.length < 4 ? bytes4(0) : bytes4(d);
             // Voting power: minting, burning, minter and slasher rights, slashing, default delegation, admin
             if (t == tk) {
-                if (s != START_PASSIVE_EPOCH && s != START_DELEGATE_EPOCH && s != SET_DELEGATE_REWARDS) return true;
+                if (s != START_PASSIVE_EPOCH && s != START_DELEGATE_EPOCH && s != SET_DELEGATE_BAR) return true;
             } else if (s == EDIT_REGISTRY || s == BATCH_EDIT_REGISTRY) {
                 if (_editsProtectedKey(s, d)) return true;
             }

@@ -110,7 +110,7 @@ Token parity settings allow different economic activities to generate reputation
 | No accountability mechanism | Reputation at stake |
 | Passive delegation | Active representation incentivized |
 
-**Delegate Reward Epochs:** The DAO can allocate treasury funds to reward its top delegates, a number it sets, in proportion to the voting power others delegated to them. This creates:
+**Delegate Reward Epochs:** The DAO can allocate treasury funds to reward delegates in proportion to the voting power others delegated to them, once that reaches a share of all REP the DAO sets. This creates:
 - Financial incentive to represent delegators well
 - Competition among delegates for delegation
 - Accountability through re-delegation

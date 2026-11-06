@@ -93,7 +93,7 @@ Protection is decided once, in `propose`, from the proposal's targets and callda
 | `editRegistry` or `batchEditRegistry` writing `jurisdiction.autonet.charter`, `jurisdiction.autonet.epoch_rules` or `jurisdiction.economy.rep_rate_bps`, on any target | The charter and epoch rules are the Autonet constitution, and the REP rate decides how much voting power economic activity mints. Module attach and detach proposals write these keys in their own `batchEditRegistry` action (`ModuleProcessor`). Only the DAO's own Registry obeys its timelock, so matching any target costs nothing and needs no address |
 | Any call to the DAO's Timelock | Its roles (`grantRole` would let a contract schedule calls without a vote), delay (the execution delay) and admin are what make votes binding |
 | Any call to the governor itself | Only governance can call it, so every call is a change to how votes run: `setVotingDelay`, `setVotingPeriod`, `setProposalThreshold`, `updateQuorumNumerator` (the super quorum follows the quorum and the supply, and has no setter), `setSupermajority`, `setOptionSource` (which proposals run as elections), `updateTimelock`, and `relay`, which makes the governor, the Timelock's proposer, call anything |
-| Any call to the governance token except `startPassiveEpoch`, `startDelegateEpoch` and `setDelegateRewards` | Voting power: `mint`, `mintDelegated`, `burn`, `setMinter` and `setSlasher` (granting or revoking), `slash`, `reassign`, `setDefaultDelegate`, `setAutoDelegateExempt` and `setAdmin`, and whatever the token gains later. Reward epochs pay out treasury funds and stay ordinary |
+| Any call to the governance token except `startPassiveEpoch`, `startDelegateEpoch` and `setDelegateBar` | Voting power: `mint`, `mintDelegated`, `burn`, `setMinter` and `setSlasher` (granting or revoking), `slash`, `reassign`, `setDefaultDelegate`, `setAutoDelegateExempt` and `setAdmin`, and whatever the token gains later. Reward epochs pay out treasury funds and stay ordinary |
 
 Rights already granted keep working without a vote: a minter keeps minting, a slasher keeps slashing (the Economy's and Autonet's REP claims, ToolBond, the content court). What needs the supermajority is granting or revoking them, which is why **attaching or detaching any of today's modules is constitutional**: the Economy grants its REP claim minter rights, the content court gets slasher rights, and Autonet gets both plus an option source on the governor. Preparing an installation (`setup.prepareInstallation`) only deploys the module's own contracts; nothing on the DAO changes until the attach proposal executes, and every grant and Registry entry is in that proposal's calldata.
 
@@ -127,7 +127,7 @@ Consequences: role changes are possible, but only through a proposal executed by
 Two addresses matter, and they are set differently:
 
 - `admin`: starts as the deployer (`RepTokenFactory`), handed to `JurisdictionFactory`, then to the Timelock in `finalize`. Module grants (`setMinter`, `setSlasher`) at origination run while the factory is still admin. `setAdmin` is admin-only and rejects `address(0)`.
-- `timelockAddress`: **immutable**, set in the constructor. Reward epoch functions (`startPassiveEpoch`, `startDelegateEpoch`, `setDelegateRewards`) check this address, not `admin`.
+- `timelockAddress`: **immutable**, set in the constructor. Reward epoch functions (`startPassiveEpoch`, `startDelegateEpoch`, `setDelegateBar`) check this address, not `admin`.
 
 | Function | Caller |
 |---|---|
@@ -136,7 +136,7 @@ Two addresses matter, and they are set differently:
 | `burn(from, amount)` | `admin` only |
 | `slash(from, amount)` / `reassign(to, amount)` | An address in `slashers`; `reassign` mints only out of what that slasher burned |
 | `setMinter`, `setSlasher`, `setDefaultDelegate`, `setAutoDelegateExempt` | `admin` or `timelockAddress` |
-| `startPassiveEpoch`, `startDelegateEpoch`, `setDelegateRewards` | `timelockAddress` only |
+| `startPassiveEpoch`, `startDelegateEpoch`, `setDelegateBar` | `timelockAddress` only |
 | `setAdmin` | `admin` only |
 
 ### Transferability
@@ -168,19 +168,14 @@ Parity is an 18-decimal fixed-point multiplier (`1e18` = 1:1, and a 6-decimal to
 
 ### Reward epochs
 
-There are two pools, each with its own budget, and starting either one is an ordinary proposal. The passive pool pays every holder by REP balance. The delegate pool pays the top delegates by the voting weight others gave them. Delegating has no effect on the passive pool.
+There are two pools, each with its own budget, and starting either one is an ordinary proposal. The passive pool pays every holder by REP balance. The delegate pool pays delegates by the voting weight others gave them, above a bar. Delegating has no effect on the passive pool.
 
 ```solidity
-uint16 public constant MAX_DELEGATE_TOP_N = 100;
-uint32 public constant MAX_DELEGATE_SIGNUP = 30 days;
-uint16 public delegateTopN = 10;
-uint32 public delegateSignupPeriod = 3 days;
+uint16 public delegateBarBps = 100;                                          // 1% of all REP
 
-function setDelegateRewards(uint16 topN, uint32 signupPeriod) external;      // timelock only
+function setDelegateBar(uint16 newBarBps) external;                          // timelock only, <= 10000
 function startPassiveEpoch(uint256 budget, address paymentToken) external;   // timelock only
 function startDelegateEpoch(uint256 budget, address paymentToken) external;  // timelock only
-function enterDelegatePool(uint256 epochId, address delegatee) external;     // anyone, during the sign-up
-function topDelegates(uint256 epochId) external view returns (address[] memory);
 function receivedWeight(address account, uint256 timepoint) public view returns (uint256);
 function rewardOf(uint256 epochId, address account) public view returns (uint256);
 function claimReward(uint256 epochId) external;
@@ -189,27 +184,28 @@ function rewardPurpose(uint256 epochId, address paymentToken) public pure return
     // keccak256(abi.encodePacked("REWARD", epochId, paymentToken))
 ```
 
-**Starting.** Both start functions increment `currentRewardEpoch` (the pools share the numbering), record `{budget, paymentToken, startTimestamp, pool, topN, signupEnds}`, and call `Registry.earmarkFunds(rewardPurpose(...), budget, paymentToken)` in the same transaction. There is no separate earmark step; the call reverts if the Registry's unreserved balance of that token is below `budget`. `paymentToken` may be `Registry.NATIVE_TOKEN` (`0xEeee...EEeE`) for the native currency. A delegate pool keeps the `delegateTopN` and `delegateSignupPeriod` in force when it starts; `setDelegateRewards` only affects later epochs.
+**Starting.** Both start functions increment `currentRewardEpoch` (the pools share the numbering), record `{budget, paymentToken, startTimestamp, pool, delegateBarBps}`, and call `Registry.earmarkFunds(rewardPurpose(...), budget, paymentToken)` in the same transaction. There is no separate earmark step; the call reverts if the Registry's unreserved balance of that token is below `budget`. `paymentToken` may be `Registry.NATIVE_TOKEN` (`0xEeee...EEeE`) for the native currency. A delegate pool keeps the bar in force when it starts; `setDelegateBar` only affects later epochs.
 
-**Passive pool.** At `snapshot = startTimestamp - 1`, `reward = pastBalance(account) * budget / pastTotalSupply`. Delegation plays no part, and claims open at once.
-
-**Delegate pool.** Ranking every address on chain can't work, so the epoch starts a sign-up window that builds the top list:
+**Computing.** All inputs are read at `snapshot = startTimestamp - 1`, with `total = getPastTotalSupply(snapshot)`:
 
 ```
-received = getPastVotes(account, snapshot) - (pastDelegatee(account, snapshot) == account ? pastBalance : 0)
+passive:   reward = pastBalance(account) * budget / total
+
+delegate:  received = getPastVotes(account, snapshot) - (pastDelegatee(account, snapshot) == account ? pastBalance : 0)
+           reward   = received * 10000 >= delegateBarBps * total ? received * budget / total : 0
 ```
 
-`enterDelegatePool` records a delegate with `received > 0`. While the list has fewer than `topN` entries the delegate joins it; after that a delegate joins only with strictly more weight than the lowest entry, which it displaces (on a tie the earlier entry stays). Anyone can enter anyone, since the weight is on chain, so the list is the true top N as long as someone enters each of those delegates. When the sign-up ends, `reward = weight * budget / delegatePoolTotal`, and claims open. If nobody signs up, the budget stays reserved until it is reclaimed.
+A delegate's own REP counts for neither the bar nor the pay, and a delegate needs no REP of its own. The delegate budget is a ceiling, not a full payout: it would all be paid only if every REP were delegated to delegates above the bar. What isn't earned comes back through the reclaim below.
 
-A delegate's own REP doesn't count, and an account that never delegated to itself can still receive weight. Nothing on chain stops a member from delegating to their own second wallet and earning from both pools; that is left to each jurisdiction's code of conduct, enforced by burning REP through a constitutional proposal.
+Nothing on chain stops a member from delegating to their own second wallet and earning from both pools; that is left to each jurisdiction's code of conduct, enforced by burning REP through a constitutional proposal.
 
 `pastDelegatee` is backed by a per-account delegatee checkpoint trace written on every `_delegate` (including auto-delegation); balances use a separate `_balanceHistory` trace written in `_update`.
 
-**Claiming.** `claimReward(epochId)` marks `hasClaimedReward[epochId][caller]`, then calls `Registry.disburseEarmarked`, which pays ERC20 or native currency. Zero rewards revert, and so does claiming from a delegate pool before its sign-up ends.
+**Claiming.** `claimReward(epochId)` marks `hasClaimedReward[epochId][caller]`, then calls `Registry.disburseEarmarked`, which pays ERC20 or native currency. Zero rewards revert.
 
-**Unclaimed funds.** After the next epoch has started, and `benefits.claim.gracePeriod` seconds have passed since that start or since claims opened, whichever is later, the Timelock can call `Registry.reclaimEarmarkedFunds(epochId, paymentToken)` to release the remaining reservation back to the free treasury balance. The money never leaves the Registry; only the earmark is lifted.
+**Unclaimed funds.** After the next epoch has started and `benefits.claim.gracePeriod` seconds have passed since that start, the Timelock can call `Registry.reclaimEarmarkedFunds(epochId, paymentToken)` to release the remaining reservation back to the free treasury balance. The money never leaves the Registry; only the earmark is lifted.
 
-`getRewardEpochStart(epochId)` and `getRewardClaimsOpen(epochId)` are the `IJurisdictionData` functions the Registry uses for that grace-period check.
+`getRewardEpochStart(epochId)` is the only `IJurisdictionData` function and is what the Registry uses for that grace-period check.
 
 ## Registry
 
@@ -265,7 +261,7 @@ All are `dao.propose([target], [0], [calldata], description)`.
 | Set a parity | Registry | `editRegistry("jurisdiction.parity.0x...", "1000000000000000000")` |
 | Start a passive pool | RepToken | `startPassiveEpoch(budget, token)` |
 | Start a delegate pool | RepToken | `startDelegateEpoch(budget, token)` |
-| Change the delegates paid and their sign-up | RepToken | `setDelegateRewards(topN, signupPeriod)` |
+| Change the delegate bar | RepToken | `setDelegateBar(bps)` |
 | Arm the spend cap | Registry | `setSpendCap(token, cap)` |
 | Grant a minter | RepToken | `setMinter(contract, true)` |
 | Grant a slasher | RepToken | `setSlasher(contract, true)` |
@@ -280,7 +276,7 @@ An appeal is this proposal, registered on the project with `registerDaoProposal`
 
 - **Minters and slashers act without a vote.** Once granted (by a constitutional proposal, or at creation), a minter or slasher changes voting power on its own terms: a REP claim mints for activity, ToolBond slashes. Granting is where the DAO decides how far it trusts each one.
 
-- **Old standard DAOs cannot run reward epochs.** Early builds of the removed `StandardFactory*` contracts passed `address(this)` (the factory) as the RepToken's `timelockAddress`. Because it is immutable, `startPassiveEpoch`, `startDelegateEpoch` and `setDelegateRewards` are permanently uncallable on those DAOs. Admin-gated functions still work because `admin` is moved to the real Timelock. `JurisdictionFactory` passes the real Timelock.
+- **Old standard DAOs cannot run reward epochs.** Early builds of the removed `StandardFactory*` contracts passed `address(this)` (the factory) as the RepToken's `timelockAddress`. Because it is immutable, `startPassiveEpoch`, `startDelegateEpoch` and `setDelegateBar` are permanently uncallable on those DAOs. Admin-gated functions still work because `admin` is moved to the real Timelock. `JurisdictionFactory` passes the real Timelock.
 - **Reward-epoch events are not indexed.** The indexer does not listen to `NewRewardEpoch` or `RewardClaimed`; apps must read them from chain.
 
 ## Further reading
