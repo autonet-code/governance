@@ -141,50 +141,87 @@ describe("ToolBond", function () {
     });
 
     describe("bounty", function () {
-        const coder = ethers.AbiCoder.defaultAbiCoder();
-        const bountyLeaf = (digest, claimant, amount) => ethers.keccak256(ethers.keccak256(
-            coder.encode(["string", "bytes32", "address", "uint256"], ["autonet:bounty", digest, claimant, amount])));
-        // Two leaves, sorted-pair hashing: each one's proof is the other
-        const pairRoot = (x, y) => ethers.keccak256(ethers.concat(x < y ? [x, y] : [y, x]));
+        const GATE = "jurisdiction.autonet.mint_gate_rep_bps";
+        const sanctionKey = (a) => `sanction.${a.toLowerCase()}`;
 
-        async function anchorRoot(root) {
-            const epoch = Number(await substrate.anchorCount());
-            await time.increase(60);
-            await substrate.connect(timelock).anchor(...(await anchorArgs(substrate, `epoch-${anchors++}`, root)));
-            return epoch;
+        // a1 (300 REP) and a2 (200 REP) agree, so both are fully accurate
+        async function agreeingRound() {
+            return epochWith([
+                [a1, [review(scores(50, 50), 0, ATN(10))]],
+                [a2, [review(scores(50, 50), 0, ATN(10))]],
+            ]);
         }
 
-        it("anyone adds to a tool's bounty, and reviewers claim their close-awarded shares once", async function () {
+        async function paid(epoch, signer) {
+            const before = await substrate.balanceOf(signer.address);
+            await bond.claim(DIGEST, epoch, signer.address);
+            return await substrate.balanceOf(signer.address) - before - ATN(10); // less the stake back
+        }
+
+        it("anyone adds to a bonded tool's bounty", async function () {
             await expect(bond.connect(outsider).addBounty(ethers.id("no bond"), ATN(1))).to.be.revertedWithCustomError(bond, "NotBonded");
             await bond.connect(author).addBounty(DIGEST, ATN(30));
             await expect(bond.connect(outsider).addBounty(DIGEST, ATN(20)))
                 .to.emit(bond, "BountyAdded").withArgs(DIGEST, outsider.address, ATN(20), ATN(50));
             expect((await bond.bonds(DIGEST)).bounty).to.equal(ATN(50));
-
-            const l1 = bountyLeaf(DIGEST, a1.address, ATN(15));
-            const l2 = bountyLeaf(DIGEST, a2.address, ATN(10));
-            // The bounty leaf shares the tree with a mint leaf, and can't be claimed as one
-            const epoch = await anchorRoot(pairRoot(l1, l2));
-
-            const before = await substrate.balanceOf(a1.address);
-            await expect(bond.connect(outsider).claimBounty(DIGEST, a1.address, ATN(15), epoch, [l2]))
-                .to.emit(bond, "BountyClaimed").withArgs(DIGEST, epoch, a1.address, ATN(15));
-            expect(await substrate.balanceOf(a1.address) - before).to.equal(ATN(15));
-            await expect(bond.claimBounty(DIGEST, a1.address, ATN(15), epoch, [l2])).to.be.revertedWithCustomError(bond, "NothingToClaim");
-            await expect(bond.claimBounty(DIGEST, a2.address, ATN(11), epoch, [l1])).to.be.revertedWithCustomError(bond, "BadProof");
-            await expect(bond.claimBounty(DIGEST, a3.address, ATN(10), epoch, [l1])).to.be.revertedWithCustomError(bond, "BadProof");
-            await bond.claimBounty(DIGEST, a2.address, ATN(10), epoch, [l1]);
-            expect((await bond.bonds(DIGEST)).bounty).to.equal(ATN(25));
         });
 
-        it("a claim is capped at the bounty left, and the rest goes back to the author with the bond", async function () {
-            await bond.connect(outsider).addBounty(DIGEST, ATN(10));
-            const leaf = bountyLeaf(DIGEST, a1.address, ATN(15));
-            const epoch = await anchorRoot(leaf); // a single leaf: the root, with an empty proof
-            await bond.claimBounty(DIGEST, a1.address, ATN(15), epoch, []);
-            expect((await bond.bonds(DIGEST)).bounty).to.equal(0n);
-            await expect(bond.claimBounty(DIGEST, a1.address, ATN(15), epoch, [])).to.be.revertedWithCustomError(bond, "NothingToClaim");
+        it("a round pays each review bounty x its REP / the REP needed x its accuracy", async function () {
+            await registry.editRegistry(GATE, "10000"); // a tool needs all 1000 REP
+            await bond.connect(author).addBounty(DIGEST, ATN(100));
+            const epoch = await agreeingRound();
+            await bond.finalize(DIGEST, epoch, 10);
+            const b = await bond.roundBounty(DIGEST, epoch);
+            expect(b.base).to.equal(ATN(100));
+            expect(b.need).to.equal(REP(1000));
+            expect(b.pool).to.equal(ATN(50));
+            expect((await bond.bonds(DIGEST)).bounty).to.equal(ATN(50));
+            await expect(bond.claim(DIGEST, epoch, a1.address))
+                .to.emit(bond, "BountyPaid").withArgs(DIGEST, epoch, a1.address, ATN(30));
+            expect(await paid(epoch, a2)).to.equal(ATN(20));
+        });
 
+        it("parts that would overspend the bounty are scaled down together", async function () {
+            // The default gate is 1% of REP (10): a1 alone covers it many times over
+            await bond.connect(author).addBounty(DIGEST, ATN(100));
+            const epoch = await agreeingRound();
+            await bond.finalize(DIGEST, epoch, 10);
+            expect((await bond.roundBounty(DIGEST, epoch)).need).to.equal(REP(10));
+            expect((await bond.bonds(DIGEST)).bounty).to.equal(0n);
+            expect(await paid(epoch, a1)).to.equal(ATN(60));
+            expect(await paid(epoch, a2)).to.equal(ATN(40));
+        });
+
+        it("a malformed gate reads as the default", async function () {
+            await registry.editRegistry(GATE, "50%");
+            await bond.connect(author).addBounty(DIGEST, ATN(1));
+            const epoch = await agreeingRound();
+            await bond.finalize(DIGEST, epoch, 10);
+            expect((await bond.roundBounty(DIGEST, epoch)).need).to.equal(REP(10));
+        });
+
+        it("a sanctioned reviewer or household takes nothing, and its part stays in the bounty", async function () {
+            await registry.editRegistry(GATE, "10000");
+            await registry.editRegistry(sanctionKey(a2.address), '{"until": 99999999999, "reason": "spam"}');
+            await bond.connect(author).addBounty(DIGEST, ATN(100));
+            const epoch = await agreeingRound();
+            await bond.finalize(DIGEST, epoch, 10);
+            expect((await bond.bonds(DIGEST)).bounty).to.equal(ATN(70));
+            await expect(bond.claim(DIGEST, epoch, a2.address)).to.not.emit(bond, "BountyPaid");
+            expect(await paid(epoch, a1)).to.equal(ATN(30));
+        });
+
+        it("reads a sanction as in force unless it is JSON with an integer until already past", async function () {
+            const key = sanctionKey(outsider.address);
+            expect(await bond.sanctioned(outsider.address)).to.equal(false);
+            for (const [value, inForce] of [["yes", true], ['{"until": 1}', false], ['{"until":99999999999}', true],
+                ['{"reason":"x"}', true], ['{"until":"soon"}', true]]) {
+                await registry.editRegistry(key, value);
+                expect(await bond.sanctioned(outsider.address), value).to.equal(inForce);
+            }
+        });
+
+        it("what's left goes back to the author with the bond", async function () {
             await bond.connect(outsider).addBounty(DIGEST, ATN(7));
             await bond.connect(author).requestUnbond(DIGEST);
             await time.increase(PARAMS.unbondDelay + 1);

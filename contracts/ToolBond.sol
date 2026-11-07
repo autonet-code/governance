@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {DaoProposalHold} from "./DaoProposalHold.sol";
-import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 /// @notice The parts of the autonet Substrate a bond needs: tool authorship, the ATN token and the
 ///         anchored epochs.
@@ -81,10 +81,11 @@ interface IToolBondRegistry {
 ///           the author agent's owner changes nothing. The slashed bond goes to the reviews by REP x
 ///           harm accuracy. Any H above zero waits out the appeal window first.
 ///
-///         A tool's bounty is ATN anyone adds for its reviewers, apart from the bond. The close decides
-///         who earns it once the tool's rounds conclude, and anchors each share as a leaf of the epoch's
-///         agentMintRoot; the household's owner claims it with a proof. What's unclaimed goes back to
-///         the author with the bond.
+///         A tool's bounty is ATN anyone adds for its reviewers, apart from the bond. Each round pays
+///         out of it as it finalizes: a settled review takes bounty x its REP weight / the REP a tool
+///         needs to conclude (`jurisdiction.autonet.mint_gate_rep_bps` of the epoch's supply) x its
+///         accuracy, scaled down together if they'd overspend it, to its household, unless sanctioned.
+///         What's left goes back to the author with the bond.
 ///
 ///         A round with no REP behind it settles nothing: its stakes are refunded. A commit declares how
 ///         many reviews it holds, and a batch never revealed loses its whole stake to the treasury and
@@ -138,6 +139,7 @@ contract ToolBond {
         uint128 stake;
         uint128 weight;
         uint64 harmAccuracy;
+        bool bountied;             // takes a part of the round's bounty
     }
 
     struct Round {
@@ -157,6 +159,10 @@ contract ToolBond {
         uint256 repWin;            // sum of REP x accuracy
         uint256 bondPool;          // the author's slashed bond
         uint256 harmWin;           // sum of REP x harm accuracy
+        uint256 bountyBase;        // the tool's bounty when the round started finalizing
+        uint256 bountyNeed;        // REP a tool needs to conclude, at the epoch's supply
+        uint256 bountyWin;         // sum of REP x accuracy of the reviews taking a part
+        uint256 bountyPool;        // the bounty the round pays out
         Review[] reviews;
     }
 
@@ -172,6 +178,8 @@ contract ToolBond {
     uint64 private constant UNINFORMATIVE = type(uint64).max;
     bytes16 private constant NO_SCORES = bytes16(0x80808080808080808080808080808080); // NO_SCORE on every axis
     string public constant CHARTER_KEY = "jurisdiction.autonet.charter";
+    string public constant MINT_GATE_KEY = "jurisdiction.autonet.mint_gate_rep_bps";
+    uint256 public constant DEFAULT_MINT_GATE_BPS = 100;
 
     IToolBondSubstrate public immutable substrate;
     IToolBondRep public immutable rep;
@@ -207,14 +215,12 @@ contract ToolBond {
     mapping(uint256 => mapping(address => uint256)) public reviewCountOf; // reviews a commit declared
     /// @notice The household that bonded a tool, liable for its harm: its author's owner at the first bond
     mapping(bytes32 => address) public bondHousehold;
-    /// @notice Whether a claimant has claimed a tool's bounty leaf in an epoch's close
-    mapping(bytes32 => mapping(address => mapping(uint256 => bool))) public bountyClaimed;
 
     event Bonded(bytes32 indexed digest, address indexed author, uint256 amount, uint256 stake);
     event UnbondRequested(bytes32 indexed digest, uint256 availableAt);
     event Unbonded(bytes32 indexed digest, address indexed author, uint256 amount, uint256 bounty);
     event BountyAdded(bytes32 indexed digest, address indexed from, uint256 amount, uint256 bounty);
-    event BountyClaimed(bytes32 indexed digest, uint256 indexed epoch, address indexed claimant, uint256 amount);
+    event BountyPaid(bytes32 indexed digest, uint256 indexed epoch, address indexed household, uint256 amount);
     event EpochStarted(uint256 indexed epoch, bytes32 charterHash, bytes32[] axisIds, uint48 snapshot, uint256 supply);
     event Committed(uint256 indexed epoch, address indexed agent, uint256 stake, uint256 weight);
     event Reviewed(bytes32 indexed digest, uint256 indexed epoch, address indexed reviewer, bytes scores, uint8 harm,
@@ -252,7 +258,6 @@ contract ToolBond {
     error NothingToClaim();
     error BadParams();
     error NotAboutRound();
-    error BadProof();
 
     struct Params {
         uint256 minStake;
@@ -317,6 +322,35 @@ contract ToolBond {
     }
 
     /// @notice A round's sum of REP x score and REP mass on charter axis `i`: the mean is sum / mass.
+    /// @notice A round's bounty: the tool's bounty when it started finalizing, the REP a tool needs to
+    ///         conclude, the REP x accuracy taking a part, and what the round pays out once Done
+    function roundBounty(bytes32 digest, uint256 epoch) external view returns (
+        uint256 base, uint256 need, uint256 win, uint256 pool
+    ) {
+        Round storage r = _rounds[digest][epoch];
+        return (r.bountyBase, r.bountyNeed, r.bountyWin, r.bountyPool);
+    }
+
+    /// @notice Whether a Registry sanction is in force on [account]: `sanction.<address>` (lowercase) is
+    ///         set, and isn't JSON with an integer `until` already past
+    function sanctioned(address account) public view returns (bool) {
+        bytes memory v = bytes(registry.getRegistryValue(string.concat("sanction.", Strings.toHexString(account))));
+        if (v.length == 0) return false;
+        for (uint256 i = 0; i + 7 <= v.length; i++) {
+            bytes7 w;
+            assembly ("memory-safe") { w := mload(add(add(v, 32), i)) }
+            if (w != '"until"') continue;
+            uint256 j = i + 7;
+            while (j < v.length && v[j] == " ") j++;
+            if (j == v.length || v[j] != ":") return true;
+            j++;
+            while (j < v.length && v[j] == " ") j++;
+            (uint256 until, bool ok) = _uint(v, j);
+            return !ok || block.timestamp <= until;
+        }
+        return true;
+    }
+
     function roundAxis(bytes32 digest, uint256 epoch, uint256 i) external view returns (int256 sum, uint256 mass) {
         Axis storage a = _roundAxes[digest][epoch][i];
         return (a.sum, a.mass);
@@ -402,8 +436,8 @@ contract ToolBond {
 
     // ── Bounty ───────────────────────────────────────────────────────────────
 
-    /// @notice Add ATN to a bonded tool's bounty (approve this contract first). Anyone can; it goes
-    ///         back to the author with the bond, less what reviewers claimed.
+    /// @notice Add ATN to a bonded tool's bounty (approve this contract first). Anyone can. Rounds pay
+    ///         out of it as they finalize; what's left goes back to the author with the bond.
     function addBounty(bytes32 digest, uint256 amount) external {
         if (amount == 0) revert ZeroAmount();
         Bond storage b = bonds[digest];
@@ -411,27 +445,6 @@ contract ToolBond {
         b.bounty += amount;
         substrate.transferFrom(msg.sender, address(this), amount);
         emit BountyAdded(digest, msg.sender, amount, b.bounty);
-    }
-
-    /// @notice Pay a share of a tool's bounty that the close of epoch [epoch] (the Substrate's anchor
-    ///         at that index) awarded [claimant], a reviewer household's owner wallet. The leaf is
-    ///         keccak256(bytes.concat(keccak256(abi.encode("autonet:bounty", digest, claimant, amount))))
-    ///         under the anchor's agentMintRoot, sorted-pair hashing. Once per tool, claimant and epoch,
-    ///         capped at the bounty left. Anyone can submit it; the ATN goes to the claimant.
-    function claimBounty(bytes32 digest, address claimant, uint256 amount, uint256 epoch, bytes32[] calldata proof)
-        external
-    {
-        if (bountyClaimed[digest][claimant][epoch]) revert NothingToClaim();
-        bytes32 root = substrate.getAnchor(epoch).agentMintRoot;
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode("autonet:bounty", digest, claimant, amount))));
-        if (root == bytes32(0) || !MerkleProof.verifyCalldata(proof, root, leaf)) revert BadProof();
-        Bond storage b = bonds[digest];
-        uint256 paid = amount < b.bounty ? amount : b.bounty;
-        if (paid == 0) revert NothingToClaim();
-        bountyClaimed[digest][claimant][epoch] = true;
-        b.bounty -= paid;
-        substrate.transfer(claimant, paid);
-        emit BountyClaimed(digest, epoch, claimant, paid);
     }
 
     // ── Reviews ──────────────────────────────────────────────────────────────
@@ -564,10 +577,10 @@ contract ToolBond {
                 emit HarmSettled(digest, epoch, r.settledHarm, r.appealEnds);
                 return;
             }
-            r.stage = Stage.Finalizing;
+            _startFinalizing(digest, epoch, r);
         } else if (r.stage == Stage.Cooling) {
             if (!r.overruled && (block.timestamp <= r.appealEnds || block.timestamp <= r.heldUntil)) revert TooEarly();
-            r.stage = Stage.Finalizing;
+            _startFinalizing(digest, epoch, r);
         } else if (r.stage != Stage.Finalizing) {
             revert WrongStage();
         }
@@ -612,11 +625,21 @@ contract ToolBond {
             substrate.transfer(address(registry), r.lossPool);
             r.lossPool = 0;
         }
+        // The bounty's parts, scaled down together so they never spend more than there is
+        if (r.bountyWin > 0) {
+            uint256 pool = r.bountyNeed == 0 ? r.bountyBase : r.bountyBase * r.bountyWin / r.bountyNeed;
+            if (pool > r.bountyBase) pool = r.bountyBase;
+            Bond storage b = bonds[digest];
+            if (pool > b.bounty) pool = b.bounty;
+            b.bounty -= pool;
+            r.bountyPool = pool;
+        }
         _done(digest, epoch, r, slashed);
     }
 
     /// @notice A review's settlement: its stake back less losses, its share of the losses and of any
-    ///         slashed bond, and its share of the slashed REP. Anyone can claim it for the reviewer.
+    ///         slashed bond, its share of the slashed REP, and its part of the bounty (to its household).
+    ///         Anyone can claim it for the reviewer.
     function claim(bytes32 digest, uint256 epoch, address reviewer) external {
         Round storage r = _rounds[digest][epoch];
         if (r.stage != Stage.Done) revert WrongStage();
@@ -638,6 +661,14 @@ contract ToolBond {
                 winnings += r.bondPool * (uint256(v.weight) * v.harmAccuracy / 1e18) / r.harmWin;
             }
             if (r.repWin > 0) repShare = r.repPool * (uint256(v.weight) * v.accuracy / 1e18) / r.repWin;
+            if (v.bountied && r.bountyPool > 0) {
+                uint256 part = r.bountyPool * (uint256(v.weight) * v.accuracy / 1e18) / r.bountyWin;
+                if (part > 0) {
+                    address household = householdOf(epoch, reviewer);
+                    substrate.transfer(household, part);
+                    emit BountyPaid(digest, epoch, household, part);
+                }
+            }
         }
         if (refund > 0) substrate.transfer(reviewer, refund);
         // Through the service rail, so the winnings count as the reviewer's earnings
@@ -740,7 +771,7 @@ contract ToolBond {
         r.reviews.push(Review({
             reviewer: agent, harm: ri.harm, claimed: false, accuracy: 0,
             scores: ri.scores.length == 0 ? NO_SCORES : bytes16(ri.scores),
-            stake: uint128(ri.stake), weight: uint128(weight), harmAccuracy: 0
+            stake: uint128(ri.stake), weight: uint128(weight), harmAccuracy: 0, bountied: false
         }));
         _reviewIndex[ri.digest][epoch][agent] = r.reviews.length;
         emit Reviewed(ri.digest, epoch, agent, ri.scores, ri.harm, ri.stake, weight, ri.evidenceHash);
@@ -812,9 +843,40 @@ contract ToolBond {
         r.lossPool += v.stake - keep;
         r.keepSum += keep;
         if (v.weight > 0) {
-            r.repPool += rep.slash(householdOf(epoch, v.reviewer), uint256(v.weight) * degradeBps / BPS * (1e18 - v.accuracy) / 1e18);
+            address household = householdOf(epoch, v.reviewer);
+            r.repPool += rep.slash(household, uint256(v.weight) * degradeBps / BPS * (1e18 - v.accuracy) / 1e18);
             r.repWin += uint256(v.weight) * v.accuracy / 1e18;
+            // A sanctioned reviewer's part stays in the bounty
+            if (r.bountyBase > 0 && !sanctioned(v.reviewer) && (household == v.reviewer || !sanctioned(household))) {
+                v.bountied = true;
+                r.bountyWin += uint256(v.weight) * v.accuracy / 1e18;
+            }
         }
+    }
+
+    /// The round's bounty is the tool's balance now, so the order of reviews inside it doesn't matter
+    function _startFinalizing(bytes32 digest, uint256 epoch, Round storage r) private {
+        r.stage = Stage.Finalizing;
+        r.bountyBase = bonds[digest].bounty;
+        if (r.bountyBase > 0) r.bountyNeed = _mintGateBps() * _epochs[epoch].supply / BPS;
+    }
+
+    /// The share of REP supply a tool needs to conclude; unset or malformed is the default
+    function _mintGateBps() private view returns (uint256) {
+        bytes memory v = bytes(registry.getRegistryValue(MINT_GATE_KEY));
+        (uint256 bps, bool ok) = _uint(v, 0);
+        return ok && bps <= BPS ? bps : DEFAULT_MINT_GATE_BPS;
+    }
+
+    /// A decimal integer from [start] up to the end or the first non-digit; ok only if it has a digit
+    /// and, read as a whole value (from 0), nothing follows
+    function _uint(bytes memory v, uint256 start) private pure returns (uint256 n, bool ok) {
+        uint256 j = start;
+        while (j < v.length && v[j] >= "0" && v[j] <= "9" && j - start < 30) {
+            n = n * 10 + uint8(v[j]) - 48;
+            j++;
+        }
+        ok = j > start && (start > 0 || j == v.length);
     }
 
     function _keep(uint256 stake, uint64 accuracy) private pure returns (uint256) {
