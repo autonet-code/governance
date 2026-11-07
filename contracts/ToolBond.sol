@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {DaoProposalHold} from "./DaoProposalHold.sol";
+import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /// @notice The parts of the autonet Substrate a bond needs: tool authorship, the ATN token and the
 ///         anchored epochs.
@@ -74,11 +75,16 @@ interface IToolBondRegistry {
 ///         - REP: each review loses REP x `degradeBps` x (1 - accuracy), reassigned to the reviews by
 ///           REP x accuracy. No REP is created.
 ///         - Harm: the settled harm H (the REP-weighted mean, or the DAO's on appeal) slashes H of the
-///           author's bond and H x `authorSlashBps` of their household's REP, never more REP than the
-///           weight that scored harm. Harm settles only when that weight reaches `harmQuorumBps` of
+///           author's bond and burns H x `authorSlashBps` of their household's REP, never more REP than
+///           the weight that scored harm. Harm settles only when that weight reaches `harmQuorumBps` of
 ///           the epoch's REP supply. The household liable is the one that bonded the tool, so rotating
 ///           the author agent's owner changes nothing. The slashed bond goes to the reviews by REP x
 ///           harm accuracy. Any H above zero waits out the appeal window first.
+///
+///         A tool's bounty is ATN anyone adds for its reviewers, apart from the bond. The close decides
+///         who earns it once the tool's rounds conclude, and anchors each share as a leaf of the epoch's
+///         agentMintRoot; the household's owner claims it with a proof. What's unclaimed goes back to
+///         the author with the bond.
 ///
 ///         A round with no REP behind it settles nothing: its stakes are refunded. A commit declares how
 ///         many reviews it holds, and a batch never revealed loses its whole stake to the treasury and
@@ -91,8 +97,8 @@ contract ToolBond {
         address author;
         uint256 stake;
         uint256 unbondRequestedAt; // 0 when bonded
-        uint256 unbondEpoch;       // the epoch the unbond was requested in
         uint32 pending;            // rounds on this tool not yet finalized
+        uint256 bounty;            // ATN for the tool's reviewers, paid by claim against the close
     }
 
     struct Epoch {
@@ -147,7 +153,7 @@ contract ToolBond {
         uint256 stakes;
         uint256 lossPool;          // ATN lost by inaccurate reviews
         uint256 keepSum;           // ATN kept by all reviews
-        uint256 repPool;           // REP slashed this round
+        uint256 repPool;           // REP slashed from reviewers this round
         uint256 repWin;            // sum of REP x accuracy
         uint256 bondPool;          // the author's slashed bond
         uint256 harmWin;           // sum of REP x harm accuracy
@@ -201,10 +207,14 @@ contract ToolBond {
     mapping(uint256 => mapping(address => uint256)) public reviewCountOf; // reviews a commit declared
     /// @notice The household that bonded a tool, liable for its harm: its author's owner at the first bond
     mapping(bytes32 => address) public bondHousehold;
+    /// @notice Whether a claimant has claimed a tool's bounty leaf in an epoch's close
+    mapping(bytes32 => mapping(address => mapping(uint256 => bool))) public bountyClaimed;
 
     event Bonded(bytes32 indexed digest, address indexed author, uint256 amount, uint256 stake);
     event UnbondRequested(bytes32 indexed digest, uint256 availableAt);
-    event Unbonded(bytes32 indexed digest, address indexed author, uint256 amount);
+    event Unbonded(bytes32 indexed digest, address indexed author, uint256 amount, uint256 bounty);
+    event BountyAdded(bytes32 indexed digest, address indexed from, uint256 amount, uint256 bounty);
+    event BountyClaimed(bytes32 indexed digest, uint256 indexed epoch, address indexed claimant, uint256 amount);
     event EpochStarted(uint256 indexed epoch, bytes32 charterHash, bytes32[] axisIds, uint48 snapshot, uint256 supply);
     event Committed(uint256 indexed epoch, address indexed agent, uint256 stake, uint256 weight);
     event Reviewed(bytes32 indexed digest, uint256 indexed epoch, address indexed reviewer, bytes scores, uint8 harm,
@@ -219,6 +229,7 @@ contract ToolBond {
     event Overruled(bytes32 indexed digest, uint256 indexed epoch, uint256 harm);
     event Finalized(bytes32 indexed digest, uint256 indexed epoch, uint256 harm, uint256 bondSlashed,
         uint256 lossPool, uint256 repPool);
+    event AuthorRepBurned(bytes32 indexed digest, uint256 indexed epoch, address indexed household, uint256 amount);
     event Claimed(bytes32 indexed digest, uint256 indexed epoch, address indexed reviewer, uint256 refund,
         uint256 winnings, uint256 rep);
     event ParamsSet(uint256 minStake, uint256 revealWindow, uint256 degradeBps, uint256 authorSlashBps,
@@ -241,6 +252,7 @@ contract ToolBond {
     error NothingToClaim();
     error BadParams();
     error NotAboutRound();
+    error BadProof();
 
     struct Params {
         uint256 minStake;
@@ -363,14 +375,13 @@ contract ToolBond {
     }
 
     /// @notice Stop vouching for a tool. It stops counting as bonded at once, but stays reviewable: the
-    ///         stake leaves only after unbondDelay, after the current epoch's reviews are revealed, and
-    ///         once every round on the tool is finalized.
+    ///         stake and the unclaimed bounty leave only after unbondDelay, once every round on the tool
+    ///         is finalized.
     function requestUnbond(bytes32 digest) external {
         Bond storage b = bonds[digest];
         if (msg.sender != b.author) revert NotAuthor();
-        if (b.stake == 0) revert NotBonded();
+        if (b.stake == 0 && b.bounty == 0) revert NotBonded();
         b.unbondRequestedAt = block.timestamp;
-        b.unbondEpoch = currentEpoch();
         emit UnbondRequested(digest, block.timestamp + unbondDelay);
     }
 
@@ -379,14 +390,48 @@ contract ToolBond {
         if (msg.sender != b.author) revert NotAuthor();
         if (b.unbondRequestedAt == 0) revert NotBonded();
         if (block.timestamp < b.unbondRequestedAt + unbondDelay) revert TooEarly();
-        uint256 ends = revealEnds(b.unbondEpoch);
-        if (ends == 0 || block.timestamp <= ends) revert TooEarly();
         if (b.pending != 0) revert RoundActive();
         uint256 amount = b.stake;
+        uint256 bounty = b.bounty;
         b.stake = 0;
+        b.bounty = 0;
         b.unbondRequestedAt = 0;
-        if (amount > 0) substrate.transfer(msg.sender, amount);
-        emit Unbonded(digest, msg.sender, amount);
+        if (amount + bounty > 0) substrate.transfer(msg.sender, amount + bounty);
+        emit Unbonded(digest, msg.sender, amount, bounty);
+    }
+
+    // ── Bounty ───────────────────────────────────────────────────────────────
+
+    /// @notice Add ATN to a bonded tool's bounty (approve this contract first). Anyone can; it goes
+    ///         back to the author with the bond, less what reviewers claimed.
+    function addBounty(bytes32 digest, uint256 amount) external {
+        if (amount == 0) revert ZeroAmount();
+        Bond storage b = bonds[digest];
+        if (b.author == address(0)) revert NotBonded();
+        b.bounty += amount;
+        substrate.transferFrom(msg.sender, address(this), amount);
+        emit BountyAdded(digest, msg.sender, amount, b.bounty);
+    }
+
+    /// @notice Pay a share of a tool's bounty that the close of epoch [epoch] (the Substrate's anchor
+    ///         at that index) awarded [claimant], a reviewer household's owner wallet. The leaf is
+    ///         keccak256(bytes.concat(keccak256(abi.encode("autonet:bounty", digest, claimant, amount))))
+    ///         under the anchor's agentMintRoot, sorted-pair hashing. Once per tool, claimant and epoch,
+    ///         capped at the bounty left. Anyone can submit it; the ATN goes to the claimant.
+    function claimBounty(bytes32 digest, address claimant, uint256 amount, uint256 epoch, bytes32[] calldata proof)
+        external
+    {
+        if (bountyClaimed[digest][claimant][epoch]) revert NothingToClaim();
+        bytes32 root = substrate.getAnchor(epoch).agentMintRoot;
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode("autonet:bounty", digest, claimant, amount))));
+        if (root == bytes32(0) || !MerkleProof.verifyCalldata(proof, root, leaf)) revert BadProof();
+        Bond storage b = bonds[digest];
+        uint256 paid = amount < b.bounty ? amount : b.bounty;
+        if (paid == 0) revert NothingToClaim();
+        bountyClaimed[digest][claimant][epoch] = true;
+        b.bounty -= paid;
+        substrate.transfer(claimant, paid);
+        emit BountyClaimed(digest, epoch, claimant, paid);
     }
 
     // ── Reviews ──────────────────────────────────────────────────────────────
@@ -552,10 +597,10 @@ contract ToolBond {
             slashed = b.stake * r.settledHarm / 1e18;
             b.stake -= slashed;
             address liable = bondHousehold[digest];
-            // Never more REP than the weight that scored harm
+            // Burned, never more than the weight that scored harm
             uint256 repSlash = rep.balanceOf(liable) * authorSlashBps / BPS * r.settledHarm / 1e18;
             if (repSlash > r.harmMass) repSlash = r.harmMass;
-            r.repPool += rep.slash(liable, repSlash);
+            if (repSlash > 0) emit AuthorRepBurned(digest, epoch, liable, rep.slash(liable, repSlash));
             if (r.harmWin == 0) {
                 if (slashed > 0) substrate.transfer(address(registry), slashed);
             } else {

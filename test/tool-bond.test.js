@@ -122,23 +122,76 @@ describe("ToolBond", function () {
             expect(await bond.isBonded(d2)).to.equal(true);
         });
 
-        it("a stake leaves only after the delay, the unbond epoch's reveals, and every round on the tool", async function () {
+        it("a stake leaves only after the delay and once every round on the tool is finalized", async function () {
             await bond.connect(author).requestUnbond(DIGEST);
             expect(await bond.isBonded(DIGEST)).to.equal(false);
             // Still reviewable while unbonding
             const epoch = await commit(a1, [review(scores(50, 50), 0, ATN(10))]);
-            await time.increase(PARAMS.unbondDelay + 1);
-            await expect(bond.connect(author).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "TooEarly");
             await anchor();
             await reveal(a1, epoch);
             await expect(bond.connect(author).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "TooEarly");
-            await time.increase(PARAMS.revealWindow + 1);
+            await time.increase(PARAMS.unbondDelay + 1);
             await expect(bond.connect(author).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "RoundActive");
             await bond.finalize(DIGEST, epoch, 10);
             await expect(bond.connect(outsider).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "NotAuthor");
             const before = await substrate.balanceOf(author.address);
             await bond.connect(author).withdraw(DIGEST);
             expect(await substrate.balanceOf(author.address)).to.equal(before + MIN_STAKE);
+        });
+    });
+
+    describe("bounty", function () {
+        const coder = ethers.AbiCoder.defaultAbiCoder();
+        const bountyLeaf = (digest, claimant, amount) => ethers.keccak256(ethers.keccak256(
+            coder.encode(["string", "bytes32", "address", "uint256"], ["autonet:bounty", digest, claimant, amount])));
+        // Two leaves, sorted-pair hashing: each one's proof is the other
+        const pairRoot = (x, y) => ethers.keccak256(ethers.concat(x < y ? [x, y] : [y, x]));
+
+        async function anchorRoot(root) {
+            const epoch = Number(await substrate.anchorCount());
+            await time.increase(60);
+            await substrate.connect(timelock).anchor(...(await anchorArgs(substrate, `epoch-${anchors++}`, root)));
+            return epoch;
+        }
+
+        it("anyone adds to a tool's bounty, and reviewers claim their close-awarded shares once", async function () {
+            await expect(bond.connect(outsider).addBounty(ethers.id("no bond"), ATN(1))).to.be.revertedWithCustomError(bond, "NotBonded");
+            await bond.connect(author).addBounty(DIGEST, ATN(30));
+            await expect(bond.connect(outsider).addBounty(DIGEST, ATN(20)))
+                .to.emit(bond, "BountyAdded").withArgs(DIGEST, outsider.address, ATN(20), ATN(50));
+            expect((await bond.bonds(DIGEST)).bounty).to.equal(ATN(50));
+
+            const l1 = bountyLeaf(DIGEST, a1.address, ATN(15));
+            const l2 = bountyLeaf(DIGEST, a2.address, ATN(10));
+            // The bounty leaf shares the tree with a mint leaf, and can't be claimed as one
+            const epoch = await anchorRoot(pairRoot(l1, l2));
+
+            const before = await substrate.balanceOf(a1.address);
+            await expect(bond.connect(outsider).claimBounty(DIGEST, a1.address, ATN(15), epoch, [l2]))
+                .to.emit(bond, "BountyClaimed").withArgs(DIGEST, epoch, a1.address, ATN(15));
+            expect(await substrate.balanceOf(a1.address) - before).to.equal(ATN(15));
+            await expect(bond.claimBounty(DIGEST, a1.address, ATN(15), epoch, [l2])).to.be.revertedWithCustomError(bond, "NothingToClaim");
+            await expect(bond.claimBounty(DIGEST, a2.address, ATN(11), epoch, [l1])).to.be.revertedWithCustomError(bond, "BadProof");
+            await expect(bond.claimBounty(DIGEST, a3.address, ATN(10), epoch, [l1])).to.be.revertedWithCustomError(bond, "BadProof");
+            await bond.claimBounty(DIGEST, a2.address, ATN(10), epoch, [l1]);
+            expect((await bond.bonds(DIGEST)).bounty).to.equal(ATN(25));
+        });
+
+        it("a claim is capped at the bounty left, and the rest goes back to the author with the bond", async function () {
+            await bond.connect(outsider).addBounty(DIGEST, ATN(10));
+            const leaf = bountyLeaf(DIGEST, a1.address, ATN(15));
+            const epoch = await anchorRoot(leaf); // a single leaf: the root, with an empty proof
+            await bond.claimBounty(DIGEST, a1.address, ATN(15), epoch, []);
+            expect((await bond.bonds(DIGEST)).bounty).to.equal(0n);
+            await expect(bond.claimBounty(DIGEST, a1.address, ATN(15), epoch, [])).to.be.revertedWithCustomError(bond, "NothingToClaim");
+
+            await bond.connect(outsider).addBounty(DIGEST, ATN(7));
+            await bond.connect(author).requestUnbond(DIGEST);
+            await time.increase(PARAMS.unbondDelay + 1);
+            const before = await substrate.balanceOf(author.address);
+            await expect(bond.connect(author).withdraw(DIGEST))
+                .to.emit(bond, "Unbonded").withArgs(DIGEST, author.address, MIN_STAKE, ATN(7));
+            expect(await substrate.balanceOf(author.address) - before).to.equal(MIN_STAKE + ATN(7));
         });
     });
 
@@ -251,7 +304,7 @@ describe("ToolBond", function () {
             expect(rating.sum).to.equal(axis.sum);
         });
 
-        it("settled harm slashes that share of the bond and the author's REP after the appeal window", async function () {
+        it("settled harm slashes that share of the bond and burns that share of the author's REP after the appeal window", async function () {
             const epoch = await epochWith([
                 [a1, [review(scores(0, 0), 100, ATN(10))]],
                 [a2, [review(scores(0, 0), 100, ATN(10))]],
@@ -264,18 +317,21 @@ describe("ToolBond", function () {
             expect(r.settledHarm).to.equal(ethers.parseEther("1") * 5n / 6n);
             await expect(bond.finalize(DIGEST, epoch, 10)).to.be.revertedWithCustomError(bond, "TooEarly");
             await time.increase(PARAMS.appealPeriod + 1);
-            await bond.finalize(DIGEST, epoch, 10);
+            const burned = REP(400) * r.settledHarm / ethers.parseEther("1");
+            await expect(bond.finalize(DIGEST, epoch, 10))
+                .to.emit(bond, "AuthorRepBurned").withArgs(DIGEST, epoch, author.address, burned);
 
             const slashed = MIN_STAKE * r.settledHarm / ethers.parseEther("1");
             expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE - slashed);
             expect(await bond.isBonded(DIGEST)).to.equal(false);
-            expect(await rep.balanceOf(author.address)).to.equal(REP(400) - REP(400) * r.settledHarm / ethers.parseEther("1"));
+            expect(await rep.balanceOf(author.address)).to.equal(REP(400) - burned);
 
             // The slashed bond goes by REP x harm accuracy: the accusers take most of it
             const before = await substrate.balanceOf(a1.address);
             await claimAll(epoch, [a1, a2, a3]);
             expect(await substrate.balanceOf(a1.address) - before).to.be.greaterThan(ATN(10) + slashed / 3n);
-            expect(await rep.totalSupply()).to.be.within(REP(1000) - 10n, REP(1000));
+            // Only reviewer REP is redistributed: the author's stays burned
+            expect(await rep.totalSupply()).to.be.within(REP(1000) - burned - 10n, REP(1000) - burned);
         });
 
         it("the DAO overrules the settled harm within the appeal window, and its ruling finalizes at once", async function () {

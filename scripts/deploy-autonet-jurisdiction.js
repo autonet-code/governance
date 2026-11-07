@@ -36,7 +36,7 @@
  *   TOOLBOND_AUTHOR_SLASH_BPS (10000) TOOLBOND_REVIEWER_SHARE_BPS (4000) TOOLBOND_UNBOND_DELAY_SECS (30d)
  *   TOOLBOND_HARM_WEIGHT_BPS (20000: harm counts twice a charter axis in a review's accuracy)
  *   TOOLBOND_HARM_QUORUM_BPS (10: harm settles once 0.1% of the epoch's REP supply scored it)
- *   TOOLBOND_APPEAL_PERIOD_SECS (10d; never less than one proposal lifecycle plus 2 days)
+ *   TOOLBOND_APPEAL_PERIOD_SECS (3d; a registered overrule holds the round until it can execute)
  *   MEMBERS=0x..,0x..  AMOUNTS=<18dp>,<18dp>: genesis REP (default 1000 AREP to the deployer)
  *   Registry keys recorded at genesis when given (the DAO changes them by proposal):
  *     EPOCH_TARGET_SHARE -> jurisdiction.autonet.epoch_target_share (ppm of the ATN supply burned in
@@ -143,7 +143,7 @@ async function main() {
     reviewerShareBps: envBig("TOOLBOND_REVIEWER_SHARE_BPS", 4000),
     harmWeightBps: envBig("TOOLBOND_HARM_WEIGHT_BPS", 20000),
     harmQuorumBps: envBig("TOOLBOND_HARM_QUORUM_BPS", 10),
-    appealPeriod: envBig("TOOLBOND_APPEAL_PERIOD_SECS", 10 * 86400),
+    appealPeriod: envBig("TOOLBOND_APPEAL_PERIOD_SECS", 3 * 86400),
   };
   // The current charter, as the module metadata records it
   const charterUi = (name) => metadata("autonet", "build").pluginSetup.prepareInstallation.inputs

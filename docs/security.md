@@ -45,7 +45,7 @@ An internal audit and a test plan exist; both are kept private.
 | Unbacked ATN | ATN is minted only on the external Substrate, which gates `mintFromVault` to the vault address fixed in its constructor | Substrate (autonet repo) |
 | Parity mispricing | Parity is a Registry key editable only by the timelock; the vault can be paused by its admin (the timelock) | `Registry`, `pause()` |
 | REP double count | `AutonetRepClaim` mints only the delta over a per-agent watermark on monotonic Substrate ledgers; `EconomyRepClaim` likewise per user and token | `claimedEarnings` (both), `EconomyRepClaim.claimedSpendings` |
-| Malicious tool | Nodes run only bonded tools and judge them by their ratings. Staked epoch reviews are committed hidden and weighed by REP at the epoch's start, so REP can't be gathered mid-review and nobody can copy a tally; withheld batches lose their whole stake and REP penalty. Settled harm slashes that share of the author's bond and REP after an appeal window in which the DAO can overrule; slashes move ATN and REP and never create them | `ToolBond`, `RepToken.slash`/`reassign` |
+| Malicious tool | Nodes run only bonded tools and judge them by their ratings. Staked epoch reviews are committed hidden and weighed by REP at the epoch's start, so REP can't be gathered mid-review and nobody can copy a tally; withheld batches lose their whole stake and REP penalty. Settled harm slashes that share of the author's bond and burns that share of their REP after an appeal window in which the DAO can overrule; slashes move ATN and REP and never create them | `ToolBond`, `RepToken.slash`/`reassign` |
 
 ## Known caveats
 
