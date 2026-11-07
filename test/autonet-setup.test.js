@@ -64,9 +64,7 @@ describe("AutonetSetup", function () {
         expect(await bond.registry()).to.equal(j.core.registry);
         expect(await bond.timelock()).to.equal(j.core.timelock);
         expect(await bond.governor()).to.equal(j.core.governor);
-        // Never shorter than one proposal lifecycle plus two days
-        const lifecycle = (await j.dao.votingDelay()) + (await j.dao.votingPeriod()) + (await j.timelock.getMinDelay());
-        expect(await bond.appealWindow()).to.equal(lifecycle + 2n * 86400n);
+        expect(await bond.timelock()).to.equal(j.core.timelock);
 
         expect(await j.registry.getRegistryValue("jurisdiction.autonet.substrate")).to.equal(d.substrate.toLowerCase());
         expect(await j.registry.getRegistryValue("jurisdiction.autonet.economy")).to.equal("");

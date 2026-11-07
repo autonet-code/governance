@@ -49,7 +49,7 @@ describe("Security", function () {
             )).to.be.revertedWith("DAO addresses can only be set once.");
         });
 
-        it("keeps court and tool appeal windows at least a full proposal lifecycle plus two days", async function () {
+        it("keeps the court's appeal window at least a full proposal lifecycle plus two days", async function () {
             const j = await createJurisdiction(victim, {
                 members: [member.address], amounts: [ethers.parseEther("100")],
                 votingDelay: 1, votingPeriod: 5, proposalThreshold: ethers.parseEther("1"), executionDelay: 60,
@@ -62,7 +62,8 @@ describe("Security", function () {
             const court = await ethers.getContractAt("ContentCourt", j.installs.content_court.module);
             const bond = await ethers.getContractAt("ToolBond", j.installs.autonet.prepared.helpers[2]);
             expect(await court.appealWindow()).to.equal(lifecycle + 2n * 86400n);
-            expect(await bond.appealWindow()).to.equal(lifecycle + 2n * 86400n);
+            // ToolBond holds for a registered overrule instead, like projects
+            expect(await bond.appealPeriod()).to.equal(120n);
         });
 
         it("bounds the author and arbitration fees", async function () {

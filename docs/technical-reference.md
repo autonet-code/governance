@@ -163,7 +163,7 @@ modifier onlyGovernance() {
 function proposalLifecycle() public view returns (uint) // governor.votingDelay() + votingPeriod() + timelock.getMinDelay()
 ```
 
-It calls the `ProposalLifecycle` library (`contracts/ProposalLifecycle.sol`), which ContentCourt and ToolBond also use for their own appeal floor: `appealWindow() = max(appealPeriod, total(governor, timelock) + APPEAL_BUFFER)`, each with its own `appealPeriod`, since their verdicts can't hold for a proposal. Projects use `coolingOffPeriod` and `appealPeriod` as set and hold instead (below). Unreadable targets count as 0.
+It calls the `ProposalLifecycle` library (`contracts/ProposalLifecycle.sol`), which ContentCourt also uses for its appeal floor: `appealWindow() = max(appealPeriod, total(governor, timelock) + APPEAL_BUFFER)`, since its verdicts can't hold for a proposal. Projects and ToolBond use their periods as set and hold instead (below). Unreadable targets count as 0.
 
 ### Projects and ledgers
 
@@ -215,19 +215,19 @@ Stages: `Open, Pending, Ongoing, Dispute, Appealable, Appeal, Closed`. `Appeal` 
 | `voteToReleasePayment()`, `voteToDispute()` | backers with locked funds | Ongoing | Weight = locked amount; quorum `backersVoteQuorumBps` of `totalLocked` |
 | `disputeAsContractor()`, `reimburse()` | contractor | Ongoing | |
 | `arbitrate(uint256 percent, string rulingHash)` | arbiter | Dispute | Opens the appeal window (`appealEnds = now + appealPeriod`) |
-| `registerDaoProposal(address[] targets, uint256[] values, bytes[] calldatas, bytes32 descriptionHash)` | anyone | any but Closed; Appealable only until `appealEnds` | Checks via `governor.hashProposal` that the proposal is live and calls `daoVeto` or `daoOverrule` on this project. Emits `DaoProposalRegistered(proposalId, overrule)` |
-| `daoOverrule(uint256 percent, string rulingHash)` | timelock | Appealable inside the window (or later if an overrule was registered: `overruleFiled`), or Dispute after `appealPeriod` | |
+| `registerDaoProposal(address[] targets, uint256[] values, bytes[] calldatas, bytes32 descriptionHash)` | anyone | Pending until `coolingOffPeriodEnds`, Dispute until `arbitrationDeadline`, Appealable until `appealEnds` | Checks via `governor.hashProposal` that the proposal is live and calls `daoVeto` or `daoOverrule` on this project; raises `heldUntil`. Emits `DaoProposalRegistered(proposalId, overrule, heldUntil)` |
+| `daoOverrule(uint256 percent, string rulingHash)` | timelock | Appealable inside the window (or later if an overrule was registered in Dispute or Appealable: `overruleFiled`), or Dispute after `appealPeriod` | |
 | `finalizeArbitration()` | anyone | Appealable after window, not held | |
-| `arbitrationPeriodExpired()` | anyone | Dispute after `ARBITRATION_TIMEOUT`, not held | Closes with full refund |
-| `daoVeto()` | timelock | any but Closed | Full refund of locked funds (and immediate if unsigned) |
+| `arbitrationPeriodExpired()` | anyone | Dispute after `arbitrationDeadline` (set at dispute start from the Economy's `arbitrationTimeout`), not held | Closes with full refund |
+| `daoVeto()` | timelock | any but Closed | Refund of locked funds (and immediate if unsigned), less `platformFeeBps`, which goes to the Registry at once (`vetoFeeBps`) |
 | `withdrawAsContractor()` | contractor | Closed | Pays with fees |
 | `withdrawAsContributor()` | backer | Open, Pending, Closed | Full refund pre-signing; settlement once after close |
 | `reclaimArbitrationStake()` | contractor | Closed, fee not paid out | Emits `ArbitrationStakeReclaimed` |
 | `sweepOrphanedTokens(address)` | timelock | any | ERC20Project only; sends the balance above `escrowed` to the Registry |
 | `spentBy(address) view`, `getProjectDetails() view` | anyone | | |
-| `heldByDao() view`, `heldProposals() view` | anyone | | Whether a registered proposal is live; the registered ids |
+| `heldByDao() view`, `heldUntil() view` | anyone | | Whether a hold is in force; when it ends |
 
-Holds (`contracts/DaoProposalHold.sol`): while any registered proposal is live, `signContract`, `finalizeArbitration` and `arbitrationPeriodExpired` revert with "A DAO proposal about this project is pending". Live means Pending or Active, Succeeded until `proposalDeadline + GRACE`, Queued until `eta + GRACE` (`GRACE = 1 days`). At most `MAX_HELD = 8`; dead ones are pruned on registration. The indexer registers proposals on `ProposalCreated` (`INDEXER_RELAYER_KEY`, gas only); anyone can if it is down.
+Holds (`contracts/DaoProposalHold.sol`): until `heldUntil`, `signContract`, `finalizeArbitration` and `arbitrationPeriodExpired` revert with "A DAO proposal about this project is pending". Registration needs the proposal live (Pending or Active, Succeeded until `proposalDeadline + GRACE`, Queued until `eta + GRACE`; `GRACE = 1 days`) and sets `heldUntil` to at least `proposalDeadline + GRACE + minDelay + GRACE`, or `eta + GRACE` once queued. ToolBond has the same per round: `registerDaoProposal(bytes32 digest, uint256 epoch, ...)` while Cooling and until `appealEnds`, for a proposal calling `daoOverrule(digest, epoch, harm)` on it, and `heldUntil(digest, epoch)`. The indexer registers proposals on `ProposalCreated` (`INDEXER_RELAYER_KEY`, gas only); anyone can if it is down.
 
 Fees on every reputation-accruing payout (`_payWithFees`): platform fee to the Registry first, then author fee (contractor payouts only), then the net to the payee; author and payee earnings are recorded in the Economy. Arbiter payouts pay the platform fee but no author fee. If the arbiter never ruled, the fee goes to the Registry.
 
@@ -397,11 +397,10 @@ event SpendWindowReset(address indexed token, uint256 windowStart);
 
 | Constant | Value | Where |
 |----------|-------|-------|
-| `ARBITRATION_TIMEOUT` | `150 days` | projects |
 | `MIN_PLATFORM_FEE_BPS` / `MAX_PLATFORM_FEE_BPS` | `100` (1%) / `5000` (50%) | Economy |
 | `MAX_AUTHOR_FEE_BPS` / `MAX_ARBITRATION_FEE_BPS` | `2500` (25%) each | Economy |
-| `APPEAL_BUFFER` | `2 days`, added to the proposal lifecycle for court and tool `appealWindow()` | ProposalLifecycle |
-| `GRACE` / `MAX_HELD` | `1 days` / `8`, DAO proposal holds | DaoProposalHold |
+| `APPEAL_BUFFER` | `2 days`, added to the proposal lifecycle for the court's `appealWindow()` | ProposalLifecycle |
+| `GRACE` | `1 days`, DAO proposal holds | DaoProposalHold |
 | `NATIVE_CURRENCY` / `NATIVE_TOKEN` | `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` | Economy / Registry |
 | `MAX_DELEGATE_SHARE_BPS` | `2500` | RepToken |
 | `PARITY_ONE` | `1e18` | EconomyRepClaim, AutonetVault |

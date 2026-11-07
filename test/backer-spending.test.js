@@ -90,13 +90,18 @@ describe("Backer spending", function () {
         const project = await createProject();
         const amount = ethers.parseEther("10");
         await project.connect(backer).sendFundsWithImmediate(2000, { value: amount });
+        const treasury = await ethers.provider.getBalance(await registry.getAddress());
         await project.connect(timelock).daoVeto();
 
-        expect(await spentNative(backer.address)).to.equal(0n);
+        // The platform fee on the refund goes to the treasury
+        const fee = amount * (await economy.platformFeeBps()) / 10000n;
+        expect(fee).to.be.greaterThan(0n);
+        expect(await ethers.provider.getBalance(await registry.getAddress()) - treasury).to.equal(fee);
+        expect(await spentNative(backer.address)).to.equal(fee);
         const before = await ethers.provider.getBalance(backer.address);
         const r = await (await project.connect(backer).withdrawAsContributor()).wait();
         const after = await ethers.provider.getBalance(backer.address);
-        expect(after - before + r.gasUsed * r.gasPrice).to.equal(amount);
+        expect(after - before + r.gasUsed * r.gasPrice).to.equal(amount - fee);
         expect(await ethers.provider.getBalance(await project.getAddress())).to.equal(0n);
     });
 

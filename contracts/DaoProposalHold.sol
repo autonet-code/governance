@@ -4,78 +4,61 @@ pragma solidity ^0.8.0;
 import "./IGovernor.sol";
 
 /// @title DaoProposalHold
-/// @notice A project waits for its DAO: anyone (the indexer, or any user when it's down) registers a
-///         live DAO proposal that vetoes or overrules this project, and while it is live the project
-///         won't let the contractor sign or a ruling finalize. So neither the cooling-off nor the appeal
-///         period has to fit a whole proposal lifecycle. A proposal counts as live while it is pending or
-///         being voted on, for a grace after it passes until it is queued, and for a grace after its
-///         timelock delay until it is executed; a DAO that never queues or executes can't hold forever.
+/// @notice A contract waits for its DAO without keeping a list: anyone (the indexer, or any user when
+///         it's down) registers a live DAO proposal about it inside a window, and the contract keeps
+///         one timestamp, the latest moment any registered proposal could still land. It is computed
+///         from the proposal itself at registration: its vote deadline, a grace to queue, the
+///         timelock delay and a grace to execute, or its eta and the execution grace once queued.
+///         Registering costs a few reads and checking the hold costs none, however many are filed.
 library DaoProposalHold {
     uint256 internal constant GRACE = 1 days;
-    uint256 internal constant MAX_HELD = 8;
 
     bytes4 internal constant VETO = bytes4(keccak256("daoVeto()"));
     bytes4 internal constant OVERRULE = bytes4(keccak256("daoOverrule(uint256,string)"));
 
-    struct Holds {
-        uint256[] ids;
-        bool overruleFiled; // a registered proposal overrules: its overrule lands even after the window
-    }
-
-    event DaoProposalRegistered(uint256 indexed proposalId, bool overrule);
-
-    /// Registers the proposal given in full; reverts unless it is live on [governor] and calls daoVeto
-    /// or daoOverrule on [project]. Returns whether it overrules.
-    function register(
-        Holds storage h,
-        address governor,
-        address project,
-        address[] calldata targets,
-        uint256[] calldata values,
-        bytes[] calldata calldatas,
-        bytes32 descriptionHash
-    ) internal returns (bool overrule) {
-        bool about;
+    /// Whether the calls veto or overrule [project], and whether they overrule it
+    function projectCalls(address project, address[] calldata targets, bytes[] calldata calldatas)
+        internal pure returns (bool about, bool overrule)
+    {
         for (uint256 i = 0; i < targets.length; i++) {
             if (targets[i] != project || calldatas[i].length < 4) continue;
             bytes4 sel = bytes4(calldatas[i][:4]);
             if (sel == OVERRULE) overrule = true;
             if (sel == VETO || sel == OVERRULE) about = true;
         }
-        require(about, "Proposal doesn't veto or overrule this project");
-        uint256 id = IGovernor(governor).hashProposal(targets, values, calldatas, descriptionHash);
-        require(isLive(governor, id), "Proposal isn't live");
-
-        // Drop the ones that stopped holding, so dead proposals never fill the list
-        uint256 n = h.ids.length;
-        for (uint256 i = n; i > 0; i--) {
-            uint256 held = h.ids[i - 1];
-            require(held != id, "Proposal already registered");
-            if (!isLive(governor, held)) {
-                h.ids[i - 1] = h.ids[h.ids.length - 1];
-                h.ids.pop();
-            }
-        }
-        require(h.ids.length < MAX_HELD, "Too many DAO proposals held");
-        h.ids.push(id);
-        if (overrule) h.overruleFiled = true;
-        emit DaoProposalRegistered(id, overrule);
     }
 
-    /// True while any registered proposal is live
-    function holding(Holds storage h, address governor) internal view returns (bool) {
-        for (uint256 i = 0; i < h.ids.length; i++) {
-            if (isLive(governor, h.ids[i])) return true;
-        }
-        return false;
+    function proposalId(
+        address governor,
+        address[] calldata targets,
+        uint256[] calldata values,
+        bytes[] calldata calldatas,
+        bytes32 descriptionHash
+    ) internal pure returns (uint256) {
+        return IGovernor(governor).hashProposal(targets, values, calldatas, descriptionHash);
     }
 
-    function isLive(address governor, uint256 id) internal view returns (bool) {
+    /// Reverts unless proposal [id] is live on [governor]; returns when it could last land
+    function holdUntil(address governor, address timelock, uint256 id) internal view returns (uint256) {
         IGovernor g = IGovernor(governor);
         IGovernor.ProposalState s = g.state(id);
-        if (s == IGovernor.ProposalState.Pending || s == IGovernor.ProposalState.Active) return true;
-        if (s == IGovernor.ProposalState.Succeeded) return block.timestamp <= g.proposalDeadline(id) + GRACE;
-        if (s == IGovernor.ProposalState.Queued) return block.timestamp <= g.proposalEta(id) + GRACE;
-        return false;
+        if (s == IGovernor.ProposalState.Queued) {
+            uint256 eta = g.proposalEta(id);
+            require(block.timestamp <= eta + GRACE, "Proposal isn't live");
+            return eta + GRACE;
+        }
+        uint256 deadline = g.proposalDeadline(id);
+        require(
+            s == IGovernor.ProposalState.Pending || s == IGovernor.ProposalState.Active ||
+            (s == IGovernor.ProposalState.Succeeded && block.timestamp <= deadline + GRACE),
+            "Proposal isn't live"
+        );
+        return deadline + GRACE + _minDelay(timelock) + GRACE;
+    }
+
+    function _minDelay(address timelock) private view returns (uint256) {
+        if (timelock.code.length == 0) return 0;
+        (bool ok, bytes memory data) = timelock.staticcall(abi.encodeWithSignature("getMinDelay()"));
+        return ok && data.length >= 32 ? abi.decode(data, (uint256)) : 0;
     }
 }

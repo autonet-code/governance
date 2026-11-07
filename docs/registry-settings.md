@@ -17,12 +17,11 @@ Setters are `onlyGovernance`: the Economy's `admin` until `setDaoAddresses` runs
 | `backersVoteQuorumBps` | bps of `totalLocked` | 7000 (70%) | 5000 to 9900 | `setBackersVoteQuorum(uint)` | On each backer vote |
 | `projectThreshold` | REP (18 decimals) | 0 | none | `setProjectThreshold(uint)` | REP balance to create a project |
 | `appealPeriod` | seconds | 604800 (7 days) | none | `setAppealPeriod(uint)` | At ruling, as set; also the arbiter's exclusive window. Projects only; ContentCourt and ToolBond have their own `appealPeriod` |
+| `arbitrationTimeout` | seconds | 2592000 (30 days) | none | `setArbitrationTimeout(uint)` | When a dispute starts, as `arbitrationDeadline`; after it anyone can close an unruled dispute with a full refund |
 | `maxImmediateBps` | bps per contribution | 2000 (20%) | 0 to 5000 | `setMaxImmediateBps(uint)` | On each contribution |
 | implementations | addresses | unset | none | `setImplementations(native, erc20)` | New projects only |
 
-Fixed constants on projects: `ARBITRATION_TIMEOUT = 150 days`.
-
-`minCoolingOffPeriod` is not governed: `EconomySetup` sets it from its immutable before the hand-over (`setMinCoolingOffPeriod`, admin only), 1 day by default and 60 seconds on chain 31337. Projects don't floor cooling-off or the appeal window at a proposal lifecycle; a registered DAO proposal holds them instead ([economy.md](economy.md#dao-proposal-holds)).
+`minCoolingOffPeriod` is not governed: `EconomySetup` sets it from its immutable before the hand-over (`setMinCoolingOffPeriod`, admin only), 1 day by default and 60 seconds on chain 31337. Projects don't floor cooling-off or the appeal window at a proposal lifecycle; a DAO proposal registered inside them holds them instead ([economy.md](economy.md#dao-proposal-holds)).
 
 `proposalLifecycle()` is `governor.votingDelay() + governor.votingPeriod() + timelock.getMinDelay()`, in seconds (the Governor clock is timestamp based).
 

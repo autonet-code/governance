@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "./ProposalLifecycle.sol";
+import {DaoProposalHold} from "./DaoProposalHold.sol";
 
 /// @notice The parts of the autonet Substrate a bond needs: tool authorship, the ATN token and the
 ///         anchored epochs.
@@ -138,6 +138,7 @@ contract ToolBond {
         Stage stage;
         bool overruled;
         uint48 appealEnds;
+        uint48 heldUntil;          // the latest moment a registered DAO overrule could land
         uint32 processed;          // reviews processed by finalize
         uint256 weight;            // REP behind the round's reviews
         uint256 harmSum;           // sum of REP x harm
@@ -169,7 +170,7 @@ contract ToolBond {
     IToolBondSubstrate public immutable substrate;
     IToolBondRep public immutable rep;
     IToolBondRegistry public immutable registry; // the treasury, and the charter
-    address public immutable governor; // with the timelock, the proposal lifecycle that floors the appeal window
+    address public immutable governor; // with the timelock, how long a registered overrule holds a round
     address public immutable timelock;
 
     uint256 public minStake;         // ATN base units behind each tool
@@ -178,7 +179,7 @@ contract ToolBond {
     uint256 public authorSlashBps;   // REP the author of a fully harmful tool loses (scaled by H)
     uint256 public unbondDelay;      // seconds a bond stays reviewable after its author asks to leave
     uint256 public reviewerShareBps; // share of a tool's mints its reviewers split (the daemon applies it)
-    uint256 public appealPeriod;     // seconds to appeal a settled harm to the DAO, never below one proposal lifecycle
+    uint256 public appealPeriod;     // seconds to register a DAO overrule of a settled harm
     uint256 public harmWeightBps;    // harm's weight in a review's accuracy; a charter axis weighs BPS
     uint256 public harmQuorumBps;    // share of the epoch's REP supply that must score harm for it to settle
 
@@ -223,6 +224,8 @@ contract ToolBond {
     event ParamsSet(uint256 minStake, uint256 revealWindow, uint256 degradeBps, uint256 authorSlashBps,
         uint256 unbondDelay, uint256 reviewerShareBps, uint256 harmWeightBps, uint256 harmQuorumBps);
     event AppealPeriodSet(uint256 appealPeriod);
+    event DaoProposalRegistered(bytes32 indexed digest, uint256 indexed epoch, uint256 indexed proposalId,
+        uint48 heldUntil);
 
     error NotAuthor();
     error NotTimelock();
@@ -237,6 +240,7 @@ contract ToolBond {
     error BadReveal();
     error NothingToClaim();
     error BadParams();
+    error NotAboutRound();
 
     struct Params {
         uint256 minStake;
@@ -286,10 +290,9 @@ contract ToolBond {
         return (e.started, e.charterHash, e.axisIds, e.snapshot, e.supply, revealEnds(epoch));
     }
 
-    /// @notice The appeal window after harm settles: appealPeriod, never shorter than one proposal
-    ///         lifecycle plus two days, so the DAO always has time to overrule by proposal.
-    function appealWindow() public view returns (uint256) {
-        return ProposalLifecycle.appealWindow(appealPeriod, governor, timelock);
+    /// @notice The latest moment a registered DAO overrule of a round could land; 0 if none was registered
+    function heldUntil(bytes32 digest, uint256 epoch) external view returns (uint256) {
+        return _rounds[digest][epoch].heldUntil;
     }
 
     function getRound(bytes32 digest, uint256 epoch) external view returns (
@@ -451,14 +454,45 @@ contract ToolBond {
         emit Forfeited(epoch, agent, c.stake, burned);
     }
 
-    /// @notice The DAO's ruling on a round's harm, by proposal, within the appeal window. Final:
-    ///         finalization may follow at once.
+    /// @notice Holds a round with settled harm for a live DAO proposal that overrules it. Anyone can
+    ///         register one (the indexer does on ProposalCreated) until appealEnds; the round then
+    ///         can't finalize until the latest registered proposal could no longer land, and the
+    ///         overrule lands even after the window. One timestamp per round, so filing many costs
+    ///         nothing extra and none holds past its own lifecycle.
+    function registerDaoProposal(
+        bytes32 digest,
+        uint256 epoch,
+        address[] calldata targets,
+        uint256[] calldata values,
+        bytes[] calldata calldatas,
+        bytes32 descriptionHash
+    ) external {
+        Round storage r = _rounds[digest][epoch];
+        if (r.stage != Stage.Cooling) revert WrongStage();
+        if (block.timestamp > r.appealEnds) revert TooLate();
+        bool about;
+        for (uint256 i = 0; i < targets.length; i++) {
+            if (targets[i] != address(this) || calldatas[i].length < 100) continue;
+            if (bytes4(calldatas[i][:4]) != this.daoOverrule.selector) continue;
+            (bytes32 d, uint256 e) = abi.decode(calldatas[i][4:68], (bytes32, uint256));
+            if (d == digest && e == epoch) about = true;
+        }
+        if (!about) revert NotAboutRound();
+        uint256 id = DaoProposalHold.proposalId(governor, targets, values, calldatas, descriptionHash);
+        uint256 until = DaoProposalHold.holdUntil(governor, timelock, id);
+        if (until > r.heldUntil) r.heldUntil = uint48(until);
+        emit DaoProposalRegistered(digest, epoch, id, uint48(until));
+    }
+
+    /// @notice The DAO's ruling on a round's harm, by proposal, within the appeal window or, once
+    ///         registered in time, whenever it lands before finalization. Final: finalization may
+    ///         follow at once.
     function daoOverrule(bytes32 digest, uint256 epoch, uint8 harm) external {
         if (msg.sender != timelock) revert NotTimelock();
         if (harm > 100) revert BadParams();
         Round storage r = _rounds[digest][epoch];
         if (r.stage != Stage.Cooling) revert WrongStage();
-        if (block.timestamp > r.appealEnds) revert TooLate();
+        if (block.timestamp > r.appealEnds && r.heldUntil == 0) revert TooLate();
         r.settledHarm = uint256(harm) * 1e18 / 100;
         r.overruled = true;
         emit Overruled(digest, epoch, r.settledHarm);
@@ -481,13 +515,13 @@ contract ToolBond {
             }
             if (r.settledHarm > 0) {
                 r.stage = Stage.Cooling;
-                r.appealEnds = uint48(block.timestamp + appealWindow());
+                r.appealEnds = uint48(block.timestamp + appealPeriod);
                 emit HarmSettled(digest, epoch, r.settledHarm, r.appealEnds);
                 return;
             }
             r.stage = Stage.Finalizing;
         } else if (r.stage == Stage.Cooling) {
-            if (!r.overruled && block.timestamp <= r.appealEnds) revert TooEarly();
+            if (!r.overruled && (block.timestamp <= r.appealEnds || block.timestamp <= r.heldUntil)) revert TooEarly();
             r.stage = Stage.Finalizing;
         } else if (r.stage != Stage.Finalizing) {
             revert WrongStage();

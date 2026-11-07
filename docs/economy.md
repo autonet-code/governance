@@ -39,8 +39,8 @@ Dispute --arbitrate--> Appealable --finalizeArbitration (after appeal window)-->
 Dispute (arbiter silent past appealPeriod) --daoOverrule (Timelock)--> Closed
 Appealable (inside the appeal window) --daoOverrule (Timelock)--> Closed
                              '--finalizeArbitration (after window)--> Closed
-Dispute --arbitrationPeriodExpired (150 days)--> Closed (full refund, no fee)
-any stage except Closed --daoVeto (Timelock)--> Closed (full refund of what is still held)
+Dispute --arbitrationPeriodExpired (arbitrationTimeout)--> Closed (full refund, no fee)
+any stage except Closed --daoVeto (Timelock)--> Closed (refund of what is still held, less the platform fee)
 ```
 
 If the contractor and arbiter are both passed to `createProject`, the project starts in Pending (cooling-off starts at creation). Otherwise it starts in Open.
@@ -57,11 +57,11 @@ If the contractor and arbiter are both passed to `createProject`, the project st
 | `disputeAsContractor()` | Contractor | Ongoing | Moves to Dispute |
 | `reimburse()` | Contractor | Ongoing | Closes with 0% to contractor (backers get locked funds back) |
 | `arbitrate(percent, rulingHash)` | Arbiter | Dispute | Records ruling, opens the appeal window (`appealPeriod`), moves to Appealable |
-| `registerDaoProposal(targets, values, calldatas, descriptionHash)` | Anyone (the indexer does it on `ProposalCreated`) | Any but Closed; in Appealable only before `appealEnds` | Registers a live proposal that calls `daoVeto` or `daoOverrule` on this project, so it holds (see [DAO proposal holds](#dao-proposal-holds)) |
+| `registerDaoProposal(targets, values, calldatas, descriptionHash)` | Anyone (the indexer does it on `ProposalCreated`) | Pending until cooling-off ends, Dispute until `arbitrationDeadline`, Appealable until `appealEnds` | Registers a live proposal that calls `daoVeto` or `daoOverrule` on this project, so it holds (see [DAO proposal holds](#dao-proposal-holds)) |
 | `daoOverrule(percent, rulingHash)` | Timelock (an executed proposal) | Appealable inside the window (or after it, once an overrule was registered in time), or Dispute once `appealPeriod` has passed with no ruling | Finalizes with the DAO's percentage |
 | `finalizeArbitration()` | Anyone | Appealable, after window, not held | Finalizes with the arbiter's ruling (0% if the arbiter never ruled) |
-| `arbitrationPeriodExpired()` | Anyone | Dispute, 150 days after dispute, not held | Closes with full refund of locked funds, no arbitration fee |
-| `daoVeto()` | Timelock | Any but Closed | Closes with 0% to contractor |
+| `arbitrationPeriodExpired()` | Anyone | Dispute, after `arbitrationDeadline`, not held | Closes with full refund of locked funds, no arbitration fee |
+| `daoVeto()` | Timelock | Any but Closed | Closes with 0% to contractor; the platform fee on the refund goes to the treasury |
 | `withdrawAsContractor()` | Contractor | Closed | Pays `availableToContractor` through the fee path |
 | `withdrawAsContributor()` | Backer | Closed | Pays the backer's exit amount once (`contributorSettled`) |
 | `reclaimArbitrationStake()` | Contractor | Closed, arbitration fee not paid out | Returns the stake, emits `ArbitrationStakeReclaimed` |
@@ -71,20 +71,21 @@ If the contractor and arbiter are both passed to `createProject`, the project st
 
 `coolingOffPeriodEnds = now + economy.coolingOffPeriod()`, set by `setParties` or at creation when parties are named.
 
-Cooling-off does not have to fit a proposal lifecycle: a veto proposal registered on the project holds signing until it is decided (see [DAO proposal holds](#dao-proposal-holds)). It is the backers' time to withdraw, never shorter than `minCoolingOffPeriod`, which the deployer fixes before the DAO takes over (`EconomySetup` applies its own: 1 day, or 60 seconds on a local chain). `setCoolingOffPeriod` reverts below it. The value is fixed per project when cooling-off starts; later parameter changes do not affect it. Funding during Pending does not extend cooling-off, and backers can still withdraw in full until the contract is signed.
+Cooling-off does not have to fit a proposal lifecycle: a veto proposal registered on the project before it ends holds signing until the proposal could last land (see [DAO proposal holds](#dao-proposal-holds)). It is the backers' time to withdraw, never shorter than `minCoolingOffPeriod`, which the deployer fixes before the DAO takes over (`EconomySetup` applies its own: 1 day, or 60 seconds on a local chain). `setCoolingOffPeriod` reverts below it. The value is fixed per project when cooling-off starts; later parameter changes do not affect it. Funding during Pending does not extend cooling-off, and backers can still withdraw in full until the contract is signed.
 
 ### DAO proposal holds
 
-A project waits for its DAO (`contracts/DaoProposalHold.sol`). `registerDaoProposal(targets, values, calldatas, descriptionHash)` is permissionless: the project checks with the Governor's `hashProposal` that the proposal is live and calls `daoVeto` or `daoOverrule` on this project, then emits `DaoProposalRegistered(proposalId, overrule)`. While any registered proposal is live, `signContract`, `finalizeArbitration` and `arbitrationPeriodExpired` revert with "A DAO proposal about this project is pending".
+A project waits for its DAO (`contracts/DaoProposalHold.sol`). `registerDaoProposal(targets, values, calldatas, descriptionHash)` is permissionless. The project checks that the calls veto or overrule this project and, through the Governor's `hashProposal` and `state`, that the proposal is live. Registration is open only inside a window:
 
-| Proposal state | Holds |
-|----------------|-------|
-| Pending, Active | yes |
-| Succeeded | until `proposalDeadline + 1 day` (`GRACE`), for someone to queue it |
-| Queued | until `eta + 1 day`, for someone to execute it |
-| Defeated, Canceled, Expired, Executed | no |
+| Stage | Window | Holds |
+|-------|--------|-------|
+| Pending | until `coolingOffPeriodEnds` | `signContract` |
+| Dispute | until `arbitrationDeadline` | `arbitrationPeriodExpired` |
+| Appealable | until `appealEnds` | `finalizeArbitration` |
 
-A DAO that never queues or executes can't hold a project forever. At most 8 proposals are held at once; dead ones are pruned on each registration. In Appealable, registration must happen before `appealEnds`; a registered overrule then lands even if it executes after the window (`overruleFiled`). `heldByDao()` and `heldProposals()` expose the state.
+In any other stage it reverts ("Nothing to hold in this stage"), and after the window too ("The window to hold this project has closed"). A veto still lands at any time before the project closes; only a veto registered in time holds signing.
+
+The project keeps one timestamp, `heldUntil`: the latest moment any registered proposal could land, taken from the proposal itself at registration. For a proposal not yet queued it is `proposalDeadline + GRACE + timelock minDelay + GRACE`; for a queued one, `eta + GRACE` (`GRACE = 1 day`). Registering again, or registering more proposals, only ever raises it to the latest. The held calls revert with "A DAO proposal about this project is pending" until `block.timestamp > heldUntil`. The hold doesn't end early when a proposal fails: once anyone files, the project waits the full time. That is the accepted cost of keeping no list, so no number of filings can block a real appeal or cost gas to check. A registered overrule (in Dispute or Appealable) lands even after the appeal window (`overruleFiled`). It emits `DaoProposalRegistered(proposalId, overrule, heldUntil)`; `heldByDao()` and `heldUntil()` expose the state.
 
 The indexer registers these proposals when it sees `ProposalCreated`, paying gas from `INDEXER_RELAYER_KEY` (on localhost, hardhat's public account #9). If the indexer is down, anyone can register.
 
@@ -101,9 +102,9 @@ The indexer registers these proposals when it sees `ProposalCreated`, paying gas
 | Arbitration fee | `totalLocked * arbitrationFeeBps / 10000`, fixed at signing. Set at deployment (`EconomyParams.arbitrationFeeBps`), changeable by `setArbitrationFee`, at most 25% |
 | Contractor stake | `arbitrationFee / 2`, paid at signing (Native: `msg.value >= stake`; ERC20: exactly `stake` pulled) |
 | Backers' share | `arbitrationFee - arbitrationFee / 2`, taken from the locked pool only if arbitration is finalized |
-| Appeal window | `appealPeriod`, default 7 days, fixed at the ruling. An overrule registered inside it holds finalization until decided |
+| Appeal window | `appealPeriod`, default 7 days, fixed at the ruling, no floor. An overrule registered inside it holds finalization until it could last land |
 | Arbiter exclusive window | The DAO can only rule on a silent arbiter's dispute after `disputeStarted + appealPeriod` |
-| Arbitration timeout | `ARBITRATION_TIMEOUT = 150 days` |
+| Arbitration timeout | `arbitrationTimeout`, default 30 days, set by `setArbitrationTimeout` and fixed per project when the dispute starts (`arbitrationDeadline`) |
 
 On finalization (`finalizeArbitration` or `daoOverrule`):
 
@@ -113,9 +114,9 @@ availableToContractor = pool * percent / 100
 backer exit           = pool * (100 - percent) / 100 * backerLocked / totalLocked
 ```
 
-The full arbitration fee (stake plus backers' share) goes to the arbiter through the fee path (platform fee, no author fee) if the arbiter ruled. If the arbiter never ruled (the DAO ruled from Dispute), the whole fee goes to the Registry and the stake is lost. A veto or the 150-day timeout skips arbitration accounting: nobody pays the fee and the contractor reclaims the stake.
+The full arbitration fee (stake plus backers' share) goes to the arbiter through the fee path (platform fee, no author fee) if the arbiter ruled. If the arbiter never ruled (the DAO ruled from Dispute), the whole fee goes to the Registry and the stake is lost. A veto or the arbitration timeout skips arbitration accounting: nobody pays the fee and the contractor reclaims the stake.
 
-The appeal flow lives entirely in the DAO: a member creates a Governor proposal calling `project.daoOverrule(percent, reasoning)`; once it is registered on the project before the window closes (the indexer does this, or anyone with `registerDaoProposal`), the ruling can't finalize while the proposal is live, and if it passes and executes it replaces the ruling, even after the window. Otherwise anyone can finalize with the arbiter's ruling once the window closes. The indexer also sets `appealProposalId` on the project, so trustless.business can show the appeal as underway. See [governance.md](governance.md) for proposal timing.
+The appeal flow lives entirely in the DAO: a member creates a Governor proposal calling `project.daoOverrule(percent, reasoning)`; once it is registered on the project before the window closes (the indexer does this, or anyone with `registerDaoProposal`), the ruling can't finalize until the proposal could last land, and if it passes and executes it replaces the ruling, even after the window. Otherwise anyone can finalize with the arbiter's ruling once the window closes. The indexer also sets `appealProposalId` on the project, so trustless.business can show the appeal as underway. See [governance.md](governance.md) for proposal timing.
 
 ## Money flows
 
@@ -145,11 +146,11 @@ The platform fee floor is `MIN_PLATFORM_FEE_BPS = 100` (1%), ceiling 50%. Since 
 | Release quorum | `totalLocked` | 0 | none | reclaimable |
 | `reimburse()` | 0 | all locked | none | reclaimable |
 | Arbitration finalized at p% | `pool * p%` | `pool * (100-p)%` pro rata by locked | full fee (net of platform fee), or Registry if no ruling | used for the fee |
-| 150-day timeout | 0 | all locked | none | reclaimable |
-| `daoVeto()` after signing | 0 | all locked | none (even if it already ruled) | reclaimable |
-| `daoVeto()` before signing | n/a | everything, including immediate portions | none | none taken |
+| Arbitration timeout | 0 | all locked | none | reclaimable |
+| `daoVeto()` after signing | 0 | all locked, less the platform fee | none (even if it already ruled) | reclaimable |
+| `daoVeto()` before signing | n/a | everything, including immediate portions, less the platform fee | none | none taken |
 
-Immediate funds paid at signing are never clawed back. Every outcome refunds them only if the contract was never signed (`immediateReleased == 0`).
+On a veto the platform fee (`platformFeeBps`, kept as `vetoFeeBps`) is taken from every backer's refund and sent to the treasury at once, so a frivolous project still costs something. Immediate funds paid at signing are never clawed back. Every outcome refunds them only if the contract was never signed (`immediateReleased == 0`).
 
 ### Worked example
 

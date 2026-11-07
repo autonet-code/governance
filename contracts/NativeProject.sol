@@ -55,8 +55,12 @@ contract NativeProject is Initializable {
     string public originalRulingHash;
     bool public arbiterHasRuled = false;
 
-    // DAO proposals that veto or overrule this project; while one is live, signing and finalizing wait
-    DaoProposalHold.Holds private _holds;
+    // The latest moment a registered DAO veto or overrule could land; signing, the arbitration timeout
+    // and finalizing wait until it has passed
+    uint public heldUntil;
+    bool public overruleFiled; // an overrule registered in Dispute or Appealable lands after the window
+    uint public arbitrationDeadline; // when a dispute the arbiter hasn't ruled on can be closed
+    uint public vetoFeeBps; // the platform fee kept from backers' refunds on a veto
 
     struct ProjectDetails {
         string name;
@@ -75,7 +79,6 @@ contract NativeProject is Initializable {
         bool fundsReleased;
     }
 
-    uint256 public constant ARBITRATION_TIMEOUT = 150 days;
 
     event SetParties(address _contractor, address _arbiter, string _termsHash);
     event SendFunds(address who, uint256 howMuch, uint256 immediateBps);
@@ -90,6 +93,7 @@ contract NativeProject is Initializable {
     event DaoOverruled(address indexed timelock, uint256 percent, string rulingHash);
     event AuthorPaid(address author, uint256 amount);
     event VetoedByDao(address indexed timelock);
+    event DaoProposalRegistered(uint256 indexed proposalId, bool overrule, uint256 heldUntil);
     event BackerVoteCast(address indexed voter, uint256 votingPower, bool forDispute);
     event ArbitrationStakeReclaimed(address contractor, uint256 amount);
 
@@ -170,7 +174,7 @@ contract NativeProject is Initializable {
     function arbitrationPeriodExpired() public {
         require(stage == Stage.Dispute, "Project must be in dispute stage");
         require(
-            block.timestamp >= disputeStarted + ARBITRATION_TIMEOUT,
+            block.timestamp >= arbitrationDeadline,
             "Arbitration period has not expired yet"
         );
         require(!heldByDao(), "A DAO proposal about this project is pending");
@@ -354,6 +358,7 @@ contract NativeProject is Initializable {
         if (totalVotesForDispute * 10000 >= totalLocked * quorumBps) {
             stage = Stage.Dispute;
             disputeStarted = block.timestamp;
+            arbitrationDeadline = block.timestamp + IGovernedEconomy(address(economy)).arbitrationTimeout();
             emit ProjectDisputed(msg.sender);
         }
     }
@@ -363,6 +368,7 @@ contract NativeProject is Initializable {
         require(stage == Stage.Ongoing, "This can only be called while the project is ongoing");
         stage = Stage.Dispute;
         disputeStarted = block.timestamp;
+        arbitrationDeadline = block.timestamp + IGovernedEconomy(address(economy)).arbitrationTimeout();
         emit ProjectDisputed(msg.sender);
     }
 
@@ -387,27 +393,34 @@ contract NativeProject is Initializable {
         emit ArbitrationDecision(msg.sender, percent, rulingHash);
     }
 
-    // Registers a live DAO proposal that vetoes or overrules this project (the indexer does this
-    // when the proposal is created; anyone can). While it is live the contractor can't sign and a
-    // ruling can't finalize. An overrule must be registered within the appeal window, and then
-    // lands even if its vote ends after the window.
+    // Holds this project for a live DAO proposal that vetoes or overrules it. Anyone can register one
+    // (the indexer does on ProposalCreated), but only inside a window: while Pending until the
+    // cooling-off ends, holding signing; in Dispute until the arbitration deadline, holding the timeout
+    // close; in Appealable until appealEnds, holding finalization. The project keeps one timestamp, the
+    // latest moment a registered proposal could land, so filing many costs the DAO nothing extra and
+    // none can hold past its own lifecycle. A registered overrule lands even after the appeal window.
     function registerDaoProposal(
         address[] calldata targets,
         uint256[] calldata values,
         bytes[] calldata calldatas,
         bytes32 descriptionHash
     ) external {
-        require(stage != Stage.Closed, "Project is closed");
-        require(stage != Stage.Appealable || block.timestamp <= appealEnds, "Appeal window has closed");
-        DaoProposalHold.register(_holds, daoGovernor, address(this), targets, values, calldatas, descriptionHash);
+        uint windowEnds = stage == Stage.Pending ? coolingOffPeriodEnds
+            : stage == Stage.Dispute ? arbitrationDeadline
+            : stage == Stage.Appealable ? appealEnds : 0;
+        require(windowEnds != 0, "Nothing to hold in this stage");
+        require(block.timestamp <= windowEnds, "The window to hold this project has closed");
+        (bool about, bool overrule) = DaoProposalHold.projectCalls(address(this), targets, calldatas);
+        require(about, "Proposal doesn't veto or overrule this project");
+        uint256 id = DaoProposalHold.proposalId(daoGovernor, targets, values, calldatas, descriptionHash);
+        uint256 until = DaoProposalHold.holdUntil(daoGovernor, daoTimelock, id);
+        if (until > heldUntil) heldUntil = until;
+        if (overrule && stage != Stage.Pending) overruleFiled = true;
+        emit DaoProposalRegistered(id, overrule, until);
     }
 
     function heldByDao() public view returns (bool) {
-        return DaoProposalHold.holding(_holds, daoGovernor);
-    }
-
-    function heldProposals() external view returns (uint256[] memory) {
-        return _holds.ids;
+        return block.timestamp <= heldUntil;
     }
 
     // Appeals happen on the DAO side: an overrule proposal calls this when it executes, within the
@@ -417,7 +430,7 @@ contract NativeProject is Initializable {
         require(msg.sender == daoTimelock, "Only the DAO Timelock can overrule");
         IGovernedEconomy governedEconomy = IGovernedEconomy(address(economy));
         require(
-            (stage == Stage.Appealable && (block.timestamp <= appealEnds || _holds.overruleFiled)) ||
+            (stage == Stage.Appealable && (block.timestamp <= appealEnds || overruleFiled)) ||
             (stage == Stage.Dispute && block.timestamp > disputeStarted + governedEconomy.appealPeriod()),
             "DAO can only overrule an open ruling or a silent arbiter"
         );
@@ -491,6 +504,7 @@ contract NativeProject is Initializable {
             // No dispute: disputeResolution is 0 if cancelled, 100 if released
             exitAmount += (contrib.locked * (100 - disputeResolution)) / 100;
         }
+        if (vetoFeeBps > 0) exitAmount = exitAmount * (10000 - vetoFeeBps) / 10000;
         return exitAmount;
     }
 
@@ -548,7 +562,15 @@ contract NativeProject is Initializable {
         require(msg.sender == daoTimelock, "Only the DAO Timelock can veto a project.");
         require(stage != Stage.Closed, "Cannot veto a closed project.");
         stage = Stage.Closed;
-        disputeResolution = 0; // Ensures 100% refund to backers.
+        disputeResolution = 0; // Backers get everything back, less the platform fee
+        // The platform fee on the refund goes to the treasury, so a vetoed project still costs something
+        vetoFeeBps = IGovernedEconomy(address(economy)).platformFeeBps();
+        uint fee = ((immediateReleased == 0 ? totalImmediate : 0) + totalLocked) * vetoFeeBps / 10000;
+        if (fee > 0) {
+            address registry = IGovernedEconomy(address(economy)).registryAddress();
+            (bool sent, ) = payable(registry).call{value: fee}("");
+            require(sent, "Failed to send the veto fee to DAO treasury");
+        }
         emit VetoedByDao(msg.sender);
     }
 }

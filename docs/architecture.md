@@ -64,7 +64,7 @@ Modules: EconomyRepClaim, AutonetRepClaim, ToolBond, ContentCourt
 
 **Admin hand-off.** The `Economy` constructor sets `admin = msg.sender`, here `EconomySetup`. While `timelockAddress == 0`, `onlyGovernance` means `admin`; `EconomySetup.prepareInstallation` configures the Economy and calls `setDaoAddresses` (admin only, once) in the same transaction, after which `onlyGovernance` means the Timelock and `transferAdmin` is disabled. A prepared but unattached Economy is already Timelock-governed; attaching only grants its `EconomyRepClaim` minter rights and records the Registry keys.
 
-**DAO proposal holds.** Projects don't floor cooling-off or the appeal window at a proposal lifecycle. Instead a live proposal that calls `daoVeto` or `daoOverrule` on a project, registered there with `registerDaoProposal` (by the indexer on `ProposalCreated`, or by anyone), blocks signing and finalization until it is decided ([economy.md](economy.md#dao-proposal-holds)). Cooling-off is never below the Economy's `minCoolingOffPeriod`, fixed by `EconomySetup` before the hand-over.
+**DAO proposal holds.** Projects and ToolBond don't floor their windows at a proposal lifecycle. Instead a live proposal that calls `daoVeto` or `daoOverrule` on a project, registered there with `registerDaoProposal` inside a window (by the indexer on `ProposalCreated`, or by anyone), blocks signing, the arbitration timeout or finalization until it could last land ([economy.md](economy.md#dao-proposal-holds)). Cooling-off is never below the Economy's `minCoolingOffPeriod`, fixed by `EconomySetup` before the hand-over.
 
 ### Modules and satellites
 

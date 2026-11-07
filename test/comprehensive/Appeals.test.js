@@ -258,7 +258,9 @@ describe("Comprehensive Appeals Tests", function () {
             // Should get full locked amount (immediate was already released)
             const immediate = (amount * 0n) / 10000n; // 0% immediate
             const locked = amount - immediate;
-            expect(balanceAfter - balanceBefore).to.equal(locked);
+            // less the platform fee, which goes to the treasury
+            const fee = locked * (await economy.platformFeeBps()) / 10000n;
+            expect(balanceAfter - balanceBefore).to.equal(locked - fee);
         });
 
         it("should NOT allow veto of already closed project", async function() {

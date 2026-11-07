@@ -36,6 +36,8 @@ contract Economy is IEconomy {
     uint public backersVoteQuorumBps;
     uint public projectThreshold;
     uint public appealPeriod;
+    // How long an arbiter has to rule before anyone can close the dispute with a full refund
+    uint public arbitrationTimeout;
     uint public maxImmediateBps; // Max % of contribution that can be released immediately (basis points)
 
     // Every payout that accrues reputation pays the platform fee to the treasury, so the floor
@@ -120,6 +122,7 @@ contract Economy is IEconomy {
     event BackersVoteQuorumSet(uint newQuorumBps);
     event ProjectThresholdSet(uint newThreshold);
     event AppealPeriodSet(uint newPeriod);
+    event ArbitrationTimeoutSet(uint newTimeout);
     event MaxImmediateBpsSet(uint newMaxBps);
     event AdminTransferred(address newAdmin);
     event MinCoolingOffPeriodSet(uint newMin);
@@ -133,6 +136,7 @@ contract Economy is IEconomy {
         coolingOffPeriod = 1 days;
         backersVoteQuorumBps = 7000; // 70%
         appealPeriod = 7 days;
+        arbitrationTimeout = 30 days;
         maxImmediateBps = 2000; // 20% - max portion of contribution available to contractor immediately
         admin = msg.sender;
     }
@@ -372,6 +376,12 @@ contract Economy is IEconomy {
     function setAppealPeriod(uint newPeriod) external onlyGovernance {
         appealPeriod = newPeriod;
         emit AppealPeriodSet(newPeriod);
+    }
+
+    // Applies to disputes that start afterwards
+    function setArbitrationTimeout(uint newTimeout) external onlyGovernance {
+        arbitrationTimeout = newTimeout;
+        emit ArbitrationTimeoutSet(newTimeout);
     }
 
     function setMaxImmediateBps(uint newMaxBps) external onlyGovernance {

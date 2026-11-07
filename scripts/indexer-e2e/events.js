@@ -31,7 +31,7 @@ async function untilProject(dao, project, test, what) {
 // voting, or the registration can land after the vote is over and revert
 async function untilHeld(project, proposalId, what) {
     for (let i = 0; i < 60; i++) {
-        if ((await project.heldProposals()).includes(proposalId)) return;
+        if ((await project.queryFilter(project.filters.DaoProposalRegistered(proposalId))).length > 0) return;
         await network.provider.send("evm_mine");
         await new Promise((r) => setTimeout(r, 1000));
     }
@@ -203,11 +203,7 @@ async function main() {
     const pr = await wait(ecoGov.connect(deployer).propose([await p3.getAddress()], [0], [overrule], desc));
     const appealId = eventArgs(pr, "ProposalCreated").proposalId;
     // The indexer registers the overrule on the project, holding finalization while it is live
-    for (let i = 0; i < 60 && (await p3.heldProposals()).length === 0; i++) {
-        await network.provider.send("evm_mine");
-        await new Promise((r) => setTimeout(r, 1000));
-    }
-    if ((await p3.heldProposals())[0] !== appealId) throw new Error("indexer never registered the P3 overrule on the project");
+    await untilHeld(p3, appealId, "the P3 overrule");
     console.log("indexer registered the P3 overrule on the project");
     await advance(Number(await ecoGov.votingDelay()) + 1);
     await wait(ecoGov.connect(deployer).castVote(appealId, 1));
@@ -271,8 +267,9 @@ async function main() {
     const desc7 = "Veto: P7 failed veto0|||0veto0|||0Close P70|||0https://github.com/e2e/repo";
     const failedVeto = eventArgs(await wait(ecoGov.connect(deployer).propose([p7Addr], [0], [veto7], desc7)), "ProposalCreated").proposalId;
     await untilProject(ecoDao, p7Addr, (f) => f?.vetoProposalId?.stringValue === failedVeto.toString(), "linked the P7 veto");
-    await untilHeld(p7, failedVeto, "the P7 veto");
-    console.log("indexer linked the P7 veto and registered it on the project");
+    // P7 has no parties yet, so there is no signing to hold: the indexer links the veto but can't register it
+    if ((await p7.queryFilter(p7.filters.DaoProposalRegistered(failedVeto))).length > 0) throw new Error("P7 veto was registered while Open");
+    console.log("indexer linked the P7 veto");
     await advance(Number(await ecoGov.votingDelay()) + 1);
     await wait(ecoGov.connect(deployer).castVote(failedVeto, 0));
     await advance(Number(await ecoGov.votingPeriod()) + 1);

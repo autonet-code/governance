@@ -164,11 +164,12 @@ describe("DAO-Governed Economy", function () {
             expect(await project.stage()).to.equal(6); // Closed
             expect(await project.disputeResolution()).to.equal(0);
 
-            // 6. Verify user can get a full refund
+            // 6. Verify user gets a full refund, less the platform fee
+            const fee = fundingAmount * (await economy.platformFeeBps()) / 10000n;
             const userBalanceBefore = await testToken.balanceOf(user1.address);
             await project.connect(user1).withdrawAsContributor();
             const userBalanceAfter = await testToken.balanceOf(user1.address);
-            expect(userBalanceAfter).to.equal(userBalanceBefore + fundingAmount);
+            expect(userBalanceAfter).to.equal(userBalanceBefore + fundingAmount - fee);
         });
 
         it("should prevent non-Timelock addresses from vetoing", async function() {

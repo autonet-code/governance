@@ -6,13 +6,13 @@ const { autonet, registerAgent, anchorArgs } = require("./helpers/autonet");
 
 // ToolBond against the real Substrate, a RepToken and a Registry holding the charter. The deployer is
 // the Substrate's vault minter (to fund accounts with ATN), the RepToken's admin (to grant the bond
-// slasher rights) and the Registry's owner; a plain signer stands in for the governor and timelock, so
-// it anchors epochs directly and the appeal window is the 7-day appealPeriod.
+// slasher rights) and the Registry's owner; a mock governor and a plain signer as the timelock, so the
+// timelock anchors epochs directly and the appeal window is the 7-day appealPeriod.
 //
 // REP: a1 300, a2 200, a3 100, author 400 (total 1000). The charter has two axes.
 describe("ToolBond", function () {
     let deployer, timelock, author, a1, a2, a3, outsider;
-    let substrate, rep, registry, bond, treasury;
+    let substrate, rep, registry, bond, treasury, governor;
 
     const ATN = (n) => ethers.parseUnits(String(n), 6);
     const REP = (n) => ethers.parseEther(String(n));
@@ -83,9 +83,9 @@ describe("ToolBond", function () {
         await registry.editRegistry("jurisdiction.autonet.charter", CHARTER);
         treasury = await registry.getAddress();
         substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, timelock.address, ethers.ZeroAddress, ethers.ZeroHash, "Test ATN", "TSTATN", 250, 5000);
-        // Signers stand in for the governor and timelock, so the lifecycle floor is just the 2-day buffer
+        governor = await (await ethers.getContractFactory("MockProposalGovernor")).deploy();
         bond = await (await ethers.getContractFactory("ToolBond")).deploy(await substrate.getAddress(),
-            await rep.getAddress(), treasury, deployer.address, timelock.address, PARAMS);
+            await rep.getAddress(), treasury, await governor.getAddress(), timelock.address, PARAMS);
         await rep.setSlasher(await bond.getAddress(), true);
 
         await registerAgent(substrate, author, "0x01");
@@ -292,6 +292,60 @@ describe("ToolBond", function () {
             const h = await bond.toolHarm(DIGEST);
             expect(h.mass).to.equal(REP(300));
             expect(h.sum).to.equal(0);
+        });
+
+        // A proposal calling daoOverrule on [epoch], with its id and registerDaoProposal's arguments
+        async function overruleProposal(epoch, state, deadline, eta = 0) {
+            const p = [[await bond.getAddress()], [0n], [bond.interface.encodeFunctionData("daoOverrule", [DIGEST, epoch, 0])],
+                ethers.id(`overrule ${epoch} ${deadline}`)];
+            const id = await governor.hashProposal(...p);
+            await governor.setProposal(id, state, deadline, eta);
+            return { id, args: [DIGEST, epoch, ...p] };
+        }
+
+        it("an overrule registered in the appeal window holds finalization and lands after it", async function () {
+            const epoch = await epochWith([[a1, [review(scores(0, 0), 100, ATN(10))]]]);
+            await bond.finalize(DIGEST, epoch, 10);
+            const deadline = BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod);
+            const p = await overruleProposal(epoch, 1, deadline); // Active
+            const until = deadline + 2n * BigInt(DAY); // the timelock is a signer: no delay
+            await expect(bond.connect(outsider).registerDaoProposal(...p.args))
+                .to.emit(bond, "DaoProposalRegistered").withArgs(DIGEST, epoch, p.id, until);
+            expect(await bond.heldUntil(DIGEST, epoch)).to.equal(until);
+
+            await time.increase(PARAMS.appealPeriod + 1);
+            await expect(bond.finalize(DIGEST, epoch, 10)).to.be.revertedWithCustomError(bond, "TooEarly");
+            await bond.connect(timelock).daoOverrule(DIGEST, epoch, 0);
+            await bond.finalize(DIGEST, epoch, 10);
+            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
+        });
+
+        it("a registered overrule that never lands holds only until it could have", async function () {
+            const epoch = await epochWith([[a1, [review(scores(0, 0), 100, ATN(10))]]]);
+            await bond.finalize(DIGEST, epoch, 10);
+            const eta = BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod) * 2n;
+            const p = await overruleProposal(epoch, 5, eta - 100n, eta); // Queued: held to eta plus the grace
+            await bond.registerDaoProposal(...p.args);
+            expect(await bond.heldUntil(DIGEST, epoch)).to.equal(eta + BigInt(DAY));
+            await time.increaseTo(eta + BigInt(DAY) - 1n);
+            await expect(bond.finalize(DIGEST, epoch, 10)).to.be.revertedWithCustomError(bond, "TooEarly");
+            await bond.finalize(DIGEST, epoch, 10);
+            expect((await bond.getRound(DIGEST, epoch)).stage).to.equal(4n); // Done
+        });
+
+        it("refuses registrations about another round, for a dead proposal, or after the window", async function () {
+            const epoch = await epochWith([[a1, [review(scores(0, 0), 100, ATN(10))]]]);
+            await bond.finalize(DIGEST, epoch, 10);
+            const deadline = BigInt(await time.latest()) + 1000n;
+            const other = await overruleProposal(epoch + 1n, 1, deadline);
+            other.args[1] = epoch;
+            await expect(bond.registerDaoProposal(...other.args)).to.be.revertedWithCustomError(bond, "NotAboutRound");
+            const defeated = await overruleProposal(epoch, 3, deadline);
+            await expect(bond.registerDaoProposal(...defeated.args)).to.be.revertedWith("Proposal isn't live");
+            await time.increase(PARAMS.appealPeriod + 1);
+            const late = await overruleProposal(epoch, 1, deadline + BigInt(PARAMS.appealPeriod));
+            await expect(bond.registerDaoProposal(...late.args)).to.be.revertedWithCustomError(bond, "TooLate");
+            await expect(bond.connect(timelock).daoOverrule(DIGEST, epoch, 0)).to.be.revertedWithCustomError(bond, "TooLate");
         });
 
         it("too late to overrule once the appeal window has passed", async function () {
