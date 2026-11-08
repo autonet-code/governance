@@ -77,7 +77,7 @@ Two pools with their own budgets, numbered together. See [governance.md](governa
 |------|--------|
 | `startPassiveEpoch(uint256 budget, address paymentToken)` | Timelock only, `budget > 0`. Increments `currentRewardEpoch` and calls `Registry.earmarkFunds(rewardPurpose(id, token), budget, token)` |
 | `startDelegateEpoch(uint256 budget, address paymentToken)` | The same, and fixes the epoch's `delegateBarBps` |
-| `receivedWeight(address, uint256 timepoint) view` | Past votes, less the account's own balance if it delegated to itself |
+| `receivedWeight(address, uint256 timepoint) view` | Past votes, less the account's own balance if it delegated to itself, and less its Autonet owner's balance if that owner delegated to it (`SUBSTRATE_KEY`, current binding) |
 | `rewardOf(uint256 epochId, address account) view` | At `startTimestamp - 1`. Passive: `pastBalance * budget / pastTotalSupply`. Delegate: `received * budget / pastTotalSupply` if `received` reaches the bar, else 0 |
 | `claimReward(uint256 epochId)` | Once per epoch per account, non-zero; pays via `Registry.disburseEarmarked` |
 | `rewardPurpose(uint256 epochId, address paymentToken) pure` | `keccak256(abi.encodePacked("REWARD", epochId, paymentToken))` |

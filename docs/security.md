@@ -20,7 +20,7 @@ An internal audit and a test plan exist; both are kept private.
 | Minting outside governance | `RepToken.mint` requires `admin` (the timelock) or an explicit `minters` entry, which only the admin or timelock can grant. RepToken has no built-in Economy path: economy REP comes from the `EconomyRepClaim` minter granted when the module attaches | `RepToken.setMinter` |
 | Treasury drained by a captured vote | Optional per-token rolling-window spend cap on `transferETH`, `transferERC20` and `disburseEarmarked` (fixed window: worst case 2x the cap across a boundary) | `Registry._meterSpend`; `test/treasury-spend-guard.test.js` |
 | Reward budget overspent or reused | Epoch budgets are earmarked in the Registry when the epoch starts; earmarks cannot exceed unreserved balance and ordinary transfers cannot touch reserved funds; each account claims once per epoch | `Registry.earmarkFunds`, `_requireUnreserved`, `RepToken.claimReward` |
-| Sybil delegation for rewards | Not guarded on chain, by design: a member can delegate to their own second wallet and earn from both pools. Each jurisdiction handles it through its code of conduct and REP burns by constitutional proposal. Delegates are paid only for weight received from others, above the bar | `RepToken.rewardOf` |
+| Sybil delegation for rewards | Not guarded on chain, by design: a member can delegate to their own second wallet and earn from both pools. Each jurisdiction handles it through its code of conduct and REP burns by constitutional proposal. Delegates are paid only for weight received from others, above the bar; an Autonet operator's owner delegating to it counts as the household's own | `RepToken.rewardOf` |
 
 ### Trustless economy
 

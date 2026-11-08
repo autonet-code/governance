@@ -77,6 +77,38 @@ describe("Reward epochs", function () {
             await expect(repToken.connect(alice).claimReward(epoch)).to.be.revertedWith("RepToken: Reward amount is zero");
         });
 
+        it("an Autonet operator gets no delegate pay on its own owner's REP", async function () {
+            const { autonet, registerAgent } = require("./helpers/autonet");
+            const substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, timelock.address,
+                ethers.ZeroAddress, ethers.ZeroHash, "Test ATN", "TSTATN", 250, 5000);
+            await registerAgent(substrate, outsider, "0x01", alice); // outsider is alice's operator
+            await repToken.connect(alice).delegate(outsider.address);  // 600, the household's own
+            await repToken.connect(carol).delegate(outsider.address);  // 100 from someone else
+
+            // Without Autonet installed nothing changes
+            let epoch = await startDelegates(REP(1000));
+            expect(await repToken.rewardOf(epoch, outsider.address)).to.equal(REP(700));
+
+            await registry.connect(timelock).editRegistry("jurisdiction.autonet.substrate", await substrate.getAddress());
+            epoch = await startDelegates(REP(1000));
+            expect(await repToken.receivedWeight(outsider.address, (await time.latest()) - 1)).to.equal(REP(100));
+            expect(await repToken.rewardOf(epoch, outsider.address)).to.equal(REP(100));
+            await repToken.connect(outsider).claimReward(epoch); // paid to the operator
+            expect(await usdc.balanceOf(outsider.address)).to.equal(REP(100));
+
+            // An unbound delegate, or an operator whose owner delegates elsewhere, keeps all it received
+            await repToken.connect(alice).delegate(bob.address);
+            epoch = await startDelegates(REP(1000));
+            expect(await repToken.rewardOf(epoch, bob.address)).to.equal(REP(600));
+            expect(await repToken.rewardOf(epoch, outsider.address)).to.equal(REP(100));
+
+            // A Registry value that isn't a contract address is no Autonet
+            await registry.connect(timelock).editRegistry("jurisdiction.autonet.substrate", "not an address");
+            await repToken.connect(alice).delegate(outsider.address);
+            epoch = await startDelegates(REP(1000));
+            expect(await repToken.rewardOf(epoch, outsider.address)).to.equal(REP(700));
+        });
+
         it("a delegate need not delegate to itself or hold any REP", async function () {
             await repToken.connect(alice).delegate(outsider.address);
             const epoch = await startDelegates(REP(1000));

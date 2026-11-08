@@ -192,10 +192,11 @@ function rewardPurpose(uint256 epochId, address paymentToken) public pure return
 passive:   reward = pastBalance(account) * budget / total
 
 delegate:  received = getPastVotes(account, snapshot) - (pastDelegatee(account, snapshot) == account ? pastBalance : 0)
+           received -= (owner = Substrate.getAgentOwner(account)) != 0 && pastDelegatee(owner, snapshot) == account ? pastBalance(owner) : 0
            reward   = received * 10000 >= delegateBarBps * total ? received * budget / total : 0
 ```
 
-A delegate's own REP counts for neither the bar nor the pay, and a delegate needs no REP of its own. The delegate budget is a ceiling, not a full payout: it would all be paid only if every REP were delegated to delegates above the bar. What isn't earned comes back through the reclaim below.
+A delegate's own REP counts for neither the bar nor the pay, and a delegate needs no REP of its own. With Autonet installed (`jurisdiction.autonet.substrate` in the Registry), an operator's owner's REP delegated to it is the household's own and doesn't count either. The binding read is the current one, not one at the snapshot, and the pay still goes to whoever claims, the operator. Without Autonet, or for an account with no owner bound, nothing changes. The delegate budget is a ceiling, not a full payout: it would all be paid only if every REP were delegated to delegates above the bar. What isn't earned comes back through the reclaim below.
 
 Nothing on chain stops a member from delegating to their own second wallet and earning from both pools; that is left to each jurisdiction's code of conduct, enforced by burning REP through a constitutional proposal.
 

@@ -11,6 +11,11 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 import {Checkpoints} from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
 import {IJurisdictionData} from "./IJurisdictionData.sol";
 
+/// The one Substrate call the delegate pool needs: the owner wallet an agent key is bound to
+interface IAgentOwnerSource {
+    function getAgentOwner(address agent) external view returns (address);
+}
+
 // RepToken is the specialized governance token for the Jurisdiction DAO. Reputation is created
 // only by its minters (the Economy module's EconomyRepClaim, the Autonet REP claim...), which the DAO grants and revokes, so no source of reputation is built in.
 contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionData {
@@ -143,10 +148,32 @@ contract RepToken is ERC20, ERC20Permit, ERC20Votes, IAdminToken, IJurisdictionD
         emit NewRewardEpoch(currentRewardEpoch, pool, budget, paymentToken, barBps);
     }
 
-    // The voting weight others gave an account: its votes, less its own REP if it delegated to itself.
+    /// Where an installed Autonet records its Substrate, which binds agent keys to owner wallets
+    string public constant SUBSTRATE_KEY = "jurisdiction.autonet.substrate";
+
+    // The voting weight others gave an account: its votes, less its own REP if it delegated to itself,
+    // and less its owner's REP if it is an Autonet operator its owner delegated to (one household).
     function receivedWeight(address account, uint256 timepoint) public view returns (uint256) {
         uint256 votes = getPastVotes(account, timepoint);
-        return pastDelegatee(account, timepoint) == account ? votes - _getPastBalance(account, timepoint) : votes;
+        if (pastDelegatee(account, timepoint) == account) votes -= _getPastBalance(account, timepoint);
+        address owner = _agentOwner(account);
+        if (owner != address(0) && owner != account && pastDelegatee(owner, timepoint) == account) {
+            uint256 own = _getPastBalance(owner, timepoint);
+            votes = own < votes ? votes - own : 0;
+        }
+        return votes;
+    }
+
+    // The owner wallet the Substrate binds [account] to, or none without Autonet or a binding. The
+    // binding is the current one, not one at the snapshot.
+    function _agentOwner(address account) private view returns (address) {
+        (bool ok, address substrate) = Strings.tryParseAddress(Registry(registryAddress).getRegistryValue(SUBSTRATE_KEY));
+        if (!ok || substrate.code.length == 0) return address(0);
+        try IAgentOwnerSource(substrate).getAgentOwner(account) returns (address owner) {
+            return owner;
+        } catch {
+            return address(0);
+        }
     }
 
     // An account's reward, all read at the snapshot before the epoch.
