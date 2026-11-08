@@ -59,15 +59,25 @@ describe("Supermajority for constitutional proposals", function () {
             j = await dao();
         });
 
-        it("registry edits of the charter or the epoch rules, through either edit function", async function () {
+        it("registry edits of the charter, the epoch rules, the REP rate or the daemons' contract addresses, through either edit function", async function () {
             const r = j.registry.interface;
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", [CHARTER, "{}"]), "c1")).to.equal(6667n);
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", [RULES, "3"]), "r1")).to.equal(6667n);
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("batchEditRegistry", [["a", RULES], ["1", "3"]]), "b1")).to.equal(6667n);
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", ["jurisdiction.economy.rep_rate_bps", "10000"]), "rr1")).to.equal(6667n);
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("batchEditRegistry", [["a", "jurisdiction.economy.rep_rate_bps"], ["1", "5000"]]), "rr2")).to.equal(6667n);
-            // Other keys, including look-alikes, are ordinary edits
+            // The contract addresses every Autonet daemon reads at start
+            for (const name of ["substrate", "rep_token", "tool_bond", "dao", "timelock"]) {
+                const key = `jurisdiction.autonet.${name}`;
+                expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", [key, ethers.ZeroAddress]), `a-${name}`), key).to.equal(6667n);
+                expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("batchEditRegistry", [["a", key], ["1", ethers.ZeroAddress]]), `ab-${name}`), key).to.equal(6667n);
+            }
+            // Other keys, including look-alikes and the other Autonet addresses, are ordinary edits
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", ["description", "x"]), "d1")).to.equal(0n);
+            for (const key of ["jurisdiction.autonet.vault", "jurisdiction.autonet.anchor_election", "jurisdiction.autonet.registry",
+                "jurisdiction.autonet.substrate2", "jurisdiction.economy.substrate"]) {
+                expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("editRegistry", [key, "x"]), `o-${key}`), key).to.equal(0n);
+            }
             expect(await bpsOf(j, j.core.registry, r.encodeFunctionData("batchEditRegistry", [["jurisdiction.autonet.charter2", "Jurisdiction.autonet.charter"], ["", ""]]), "l1")).to.equal(0n);
         });
 

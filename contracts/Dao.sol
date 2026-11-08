@@ -61,6 +61,12 @@ constructor(
     bytes32 private constant CHARTER_KEY = keccak256("jurisdiction.autonet.charter");
     bytes32 private constant EPOCH_RULES_KEY = keccak256("jurisdiction.autonet.epoch_rules");
     bytes32 private constant REP_RATE_KEY = keccak256("jurisdiction.economy.rep_rate_bps");
+    // The contract addresses every Autonet daemon reads at start: repointing one moves them all
+    bytes32 private constant SUBSTRATE_KEY = keccak256("jurisdiction.autonet.substrate");
+    bytes32 private constant REP_TOKEN_KEY = keccak256("jurisdiction.autonet.rep_token");
+    bytes32 private constant TOOL_BOND_KEY = keccak256("jurisdiction.autonet.tool_bond");
+    bytes32 private constant DAO_KEY = keccak256("jurisdiction.autonet.dao");
+    bytes32 private constant TIMELOCK_KEY = keccak256("jurisdiction.autonet.timelock");
     bytes4 private constant EDIT_REGISTRY = bytes4(keccak256("editRegistry(string,string)"));
     // The token calls that stay ordinary: reward epochs move treasury funds, not voting power
     bytes4 private constant START_PASSIVE_EPOCH = bytes4(keccak256("startPassiveEpoch(uint256,address)"));
@@ -122,7 +128,8 @@ constructor(
         }
         for (uint256 i = 0; i < keys.length; i++) {
             bytes32 k = keccak256(bytes(keys[i]));
-            if (k == CHARTER_KEY || k == EPOCH_RULES_KEY || k == REP_RATE_KEY) return true;
+            if (k == CHARTER_KEY || k == EPOCH_RULES_KEY || k == REP_RATE_KEY || k == SUBSTRATE_KEY
+                || k == REP_TOKEN_KEY || k == TOOL_BOND_KEY || k == DAO_KEY || k == TIMELOCK_KEY) return true;
         }
         return false;
     }
