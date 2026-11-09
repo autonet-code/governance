@@ -193,7 +193,8 @@ contract ToolBond {
     string public constant UNSCORED_KEY = "jurisdiction.autonet.unscored_axis_bps";
     uint256 public constant DEFAULT_UNSCORED_BPS = 5000;
     /// @notice Tags a concluded tool's leaf in an anchor's agentMintRoot: keccak256(bytes.concat(
-    ///         keccak256(abi.encode(CONCLUDED_TAG, digest)))). It can't be read as a mint leaf's address.
+    ///         keccak256(abi.encode(CONCLUDED_TAG, digest, shareBps)))), shareBps the close's share of
+    ///         the reviewing REP that said malware. Three words, so it never reads as a mint leaf.
     bytes32 public constant CONCLUDED_TAG = keccak256("autonet.tool_concluded");
 
     IToolBondSubstrate public immutable substrate;
@@ -271,6 +272,7 @@ contract ToolBond {
     error NothingToClaim();
     error BadParams();
     error NotAboutTool();
+    error MalwareSuspected();
 
     struct Params {
         uint256 minStake;
@@ -425,6 +427,9 @@ contract ToolBond {
         if (block.timestamp < b.unbondRequestedAt + unbondDelay) revert TooEarly();
         Verdict storage v = verdicts[digest];
         if (b.pending != 0 || (v.appealEnds != 0 && !v.settled)) revert RoundActive();
+        // Caught before the verdict: more than half the REP of its finalized rounds says malware
+        Axis storage m = _toolAxes[digest][bytes32(MALWARE)];
+        if (v.concludedAt == 0 && uint256(int256(m.sum)) / 100 * 2 > m.mass) revert MalwareSuspected();
         uint256 amount = b.stake;
         uint256 bounty = b.bounty;
         b.stake = 0;
@@ -574,15 +579,16 @@ contract ToolBond {
 
     // ── Malware verdict ──────────────────────────────────────────────────────
 
-    /// @notice Record that a tool concluded, from its leaf in an anchored close's agentMintRoot. Anyone
-    ///         can, once per tool. The share of yes is read from the tool's rounds finalized so far; more
+    /// @notice Record that a tool concluded, from its leaf in an anchored close's agentMintRoot, with
+    ///         the close's share of the reviewing REP that said malware. Anyone can, once per tool. More
     ///         than half opens the appeal window.
-    function conclude(bytes32 digest, uint256 anchorIndex, bytes32[] calldata proof) external {
+    function conclude(bytes32 digest, uint256 anchorIndex, uint256 shareBps, bytes32[] calldata proof) external {
         if (bonds[digest].author == address(0)) revert NotBonded();
         Verdict storage v = verdicts[digest];
         if (v.concludedAt != 0) revert WrongStage();
+        if (shareBps > BPS) revert BadProof();
         // Sorted-pair hashing over a double-hashed leaf, like the Substrate's mint claims
-        bytes32 node = keccak256(bytes.concat(keccak256(abi.encode(CONCLUDED_TAG, digest))));
+        bytes32 node = keccak256(bytes.concat(keccak256(abi.encode(CONCLUDED_TAG, digest, shareBps))));
         for (uint256 i = 0; i < proof.length; i++) {
             bytes32 p = proof[i];
             node = node < p ? keccak256(abi.encode(node, p)) : keccak256(abi.encode(p, node));
@@ -590,13 +596,10 @@ contract ToolBond {
         if (node != substrate.getAnchor(anchorIndex).agentMintRoot) revert BadProof();
 
         v.concludedAt = uint48(block.timestamp);
-        Axis storage m = _toolAxes[digest][bytes32(MALWARE)];
-        if (m.mass > 0) {
-            uint256 yes = uint256(int256(m.sum)) / 100;
-            v.yesMass = yes;
-            v.share = uint64(yes * 1e18 / m.mass);
-        }
-        if (uint256(v.share) * 2 > 1e18) v.appealEnds = uint48(block.timestamp + appealPeriod);
+        v.share = uint64(shareBps * 1e18 / BPS);
+        // The REP that said yes in the rounds finalized so far: who shares a slashed bond
+        v.yesMass = uint256(int256(_toolAxes[digest][bytes32(MALWARE)].sum)) / 100;
+        if (shareBps * 2 > BPS) v.appealEnds = uint48(block.timestamp + appealPeriod);
         else v.settled = true;
         emit Concluded(digest, anchorIndex, v.share, v.appealEnds);
     }
@@ -641,9 +644,9 @@ contract ToolBond {
     }
 
     /// @notice Settle a malware verdict after the appeal window and any registered appeal, or at once
-    ///         after the DAO's ruling. Malware slashes the share of yes of the author's bond, for the
-    ///         reviewers who said yes, and burns that share of authorSlashBps of the bonding household's
-    ///         REP, never more than the REP that said yes.
+    ///         after the DAO's ruling. Malware slashes the share of yes of the author's bond (all of it
+    ///         when the DAO ruled malware), for the reviewers who said yes, and burns that share of
+    ///         authorSlashBps of the bonding household's REP, never more than the REP that said yes.
     function settleMalware(bytes32 digest) external {
         Verdict storage v = verdicts[digest];
         if (v.appealEnds == 0 || v.settled) revert WrongStage();
@@ -653,12 +656,16 @@ contract ToolBond {
         uint256 slashed;
         uint256 burned;
         if (malware) {
+            // The DAO's ruling replaces the reviewers' answer
+            uint256 share = v.ruling == 1 ? 1e18 : v.share;
             Bond storage b = bonds[digest];
-            slashed = b.stake * v.share / 1e18;
+            slashed = b.stake * share / 1e18;
             b.stake -= slashed;
-            v.bondPool = slashed;
+            // Nobody on chain to share it (no yes in a finalized round): the treasury's
+            if (v.yesMass > 0) v.bondPool = slashed;
+            else if (slashed > 0) substrate.transfer(address(registry), slashed);
             address liable = bondHousehold[digest];
-            uint256 repSlash = rep.balanceOf(liable) * authorSlashBps / BPS * v.share / 1e18;
+            uint256 repSlash = rep.balanceOf(liable) * authorSlashBps / BPS * share / 1e18;
             if (repSlash > v.yesMass) repSlash = v.yesMass;
             if (repSlash > 0) {
                 burned = rep.slash(liable, repSlash);

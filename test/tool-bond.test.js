@@ -80,14 +80,15 @@ describe("ToolBond", function () {
         for (const s of signers) await bond.claim(digest, epoch, s.address);
     }
 
-    // A concluded tool's leaf in the close's agentMintRoot
-    const leaf = (digest) => ethers.keccak256(ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bytes32"], [TAG, digest])));
+    // A concluded tool's leaf in the close's agentMintRoot, with the close's share of yes in bps
+    const leaf = (digest, bps) => ethers.keccak256(ethers.keccak256(
+        ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bytes32", "uint256"], [TAG, digest, bps])));
     const pair = (x, y) => ethers.keccak256(ethers.concat(x < y ? [x, y] : [y, x]));
 
-    // The close names the tool concluded; anyone records it
-    async function concludeTool(digest = DIGEST) {
-        const index = await anchor(leaf(digest));
-        await bond.conclude(digest, index, []);
+    // The close names the tool concluded, by default with 5/6 of its REP saying malware; anyone records it
+    async function concludeTool(digest = DIGEST, bps = 8333) {
+        const index = await anchor(leaf(digest, bps));
+        await bond.conclude(digest, index, bps, []);
         return bond.verdicts(digest);
     }
 
@@ -445,24 +446,27 @@ describe("ToolBond", function () {
             await bond.finalize(digest, epoch, 10);
             return epoch;
         }
-        const SHARE = ONE * 5n / 6n;
+        const SHARE = 8333n * 10n ** 14n; // the close's 5/6, in bps
 
         it("is judged when the anchored close names the tool concluded: more than half yes opens the appeal window", async function () {
             const epoch = await malwareRound();
             expect((await bond.getRound(DIGEST, epoch)).beforeConclusion).to.equal(true);
-            await expect(bond.conclude(DIGEST, 0, [])).to.be.revertedWithCustomError(bond, "BadProof");
-            await expect(bond.conclude(ethers.id("no bond"), 0, [])).to.be.revertedWithCustomError(bond, "NotBonded");
+            await expect(bond.conclude(DIGEST, 0, 8333, [])).to.be.revertedWithCustomError(bond, "BadProof");
+            await expect(bond.conclude(ethers.id("no bond"), 0, 8333, [])).to.be.revertedWithCustomError(bond, "NotBonded");
             // A two-leaf close: the tool next to a mint leaf
             const mintLeaf = ethers.keccak256(ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["address", "uint256"], [a1.address, 5])));
-            const index = await anchor(pair(leaf(DIGEST), mintLeaf));
-            await expect(bond.conclude(DIGEST, index, [ethers.ZeroHash])).to.be.revertedWithCustomError(bond, "BadProof");
-            const tx = bond.conclude(DIGEST, index, [mintLeaf]);
+            const index = await anchor(pair(leaf(DIGEST, 8333), mintLeaf));
+            await expect(bond.conclude(DIGEST, index, 8333, [ethers.ZeroHash])).to.be.revertedWithCustomError(bond, "BadProof");
+            // The share is the close's: another one doesn't prove
+            await expect(bond.conclude(DIGEST, index, 4000, [mintLeaf])).to.be.revertedWithCustomError(bond, "BadProof");
+            await expect(bond.conclude(DIGEST, index, 10001, [mintLeaf])).to.be.revertedWithCustomError(bond, "BadProof");
+            const tx = bond.conclude(DIGEST, index, 8333, [mintLeaf]);
             await expect(tx).to.emit(bond, "Concluded");
             const v = await bond.verdicts(DIGEST);
             expect(v.share).to.equal(SHARE);
             expect(v.yesMass).to.equal(REP(500));
             expect(v.appealEnds).to.equal(BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod));
-            await expect(bond.conclude(DIGEST, index, [mintLeaf])).to.be.revertedWithCustomError(bond, "WrongStage");
+            await expect(bond.conclude(DIGEST, index, 8333, [mintLeaf])).to.be.revertedWithCustomError(bond, "WrongStage");
         });
 
         it("after the window, the bond loses the share of yes and the author's REP burns that share, for the yes reviewers", async function () {
@@ -500,7 +504,7 @@ describe("ToolBond", function () {
         it("half or less saying yes concludes clean: nothing to appeal or slash", async function () {
             const epoch = await epochWith([[a1, [clean()]], [a2, [malware()]], [a3, [malware()]]]); // 300 of 600
             await bond.finalize(DIGEST, epoch, 10);
-            const v = await concludeTool();
+            const v = await concludeTool(DIGEST, 5000);
             expect(v.share).to.equal(ONE / 2n);
             expect(v.appealEnds).to.equal(0);
             expect(v.settled).to.equal(true);
@@ -512,7 +516,7 @@ describe("ToolBond", function () {
         it("takes no more of the author's REP than the REP that said yes", async function () {
             const epoch = await epochWith([[a3, [malware()]]]);
             await bond.finalize(DIGEST, epoch, 10);
-            await concludeTool();
+            await concludeTool(DIGEST, 10000);
             await time.increase(PARAMS.appealPeriod + 1);
             await bond.settleMalware(DIGEST);
             // share 1 and authorSlashBps 100% would take all 400, capped at a3's 100
@@ -564,12 +568,33 @@ describe("ToolBond", function () {
             await expect(bond.claimBondShare(DIGEST, 0, a1.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
         });
 
-        it("the DAO upholding the verdict settles it at once, by the reviewers' share", async function () {
+        it("the DAO upholding the verdict settles it at once, in full: its ruling replaces the reviewers' share", async function () {
             await malwareRound();
             await concludeTool();
             await bond.connect(timelock).daoOverrule(DIGEST, true);
+            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled").withArgs(DIGEST, true, MIN_STAKE, REP(400));
+            expect((await bond.bonds(DIGEST)).stake).to.equal(0);
+            expect(await rep.balanceOf(author.address)).to.equal(0); // 400, under the 500 that said yes
+        });
+
+        it("an author can't withdraw while more than half the REP of the tool's finalized rounds says malware and it hasn't concluded", async function () {
+            await malwareRound();
+            await bond.connect(author).requestUnbond(DIGEST);
+            await time.increase(PARAMS.unbondDelay + 1);
+            await expect(bond.connect(author).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "MalwareSuspected");
+            // Once the verdict settles (here the DAO clears it), the bond can leave
+            await concludeTool();
+            await bond.connect(timelock).daoOverrule(DIGEST, false);
             await bond.settleMalware(DIGEST);
-            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE - MIN_STAKE * SHARE / ONE);
+            await bond.connect(author).withdraw(DIGEST);
+        });
+
+        it("a slashed bond with no yes in a finalized round goes to the treasury", async function () {
+            await concludeTool(DIGEST, 10000); // the close counted rounds not finalized here
+            await time.increase(PARAMS.appealPeriod + 1);
+            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled").withArgs(DIGEST, true, MIN_STAKE, 0);
+            expect(await substrate.balanceOf(treasury)).to.equal(MIN_STAKE);
+            expect((await bond.verdicts(DIGEST)).bondPool).to.equal(0);
         });
 
         it("a registered appeal that never lands holds only until it could have", async function () {
@@ -698,7 +723,7 @@ describe("ToolBond", function () {
             ]);
             expect((await bond.reviewOf(tool, epoch, h4.address)).reviewer).to.equal(ethers.ZeroAddress);
             await bond.finalize(tool, epoch, 10);
-            await concludeTool(tool);
+            await concludeTool(tool, 10000);
             await time.increase(PARAMS.appealPeriod + 1);
             await bond.settleMalware(tool);
             expect(await rep.balanceOf(a3.address)).to.equal(0); // share 1, authorSlashBps 100%
