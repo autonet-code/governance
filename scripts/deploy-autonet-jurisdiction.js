@@ -34,9 +34,7 @@
  *   GENESIS_ROOT (bytes32): the ATN genesis claim root of a fork or split (autonet scripts/build_atn_genesis.py); default none
  *   TOOLBOND_MIN_STAKE (100 ATN) TOOLBOND_REVEAL_WINDOW_SECS (1d) TOOLBOND_DEGRADE_BPS (1000)
  *   TOOLBOND_AUTHOR_SLASH_BPS (10000) TOOLBOND_REVIEWER_SHARE_BPS (4000) TOOLBOND_UNBOND_DELAY_SECS (30d)
- *   TOOLBOND_HARM_WEIGHT_BPS (20000: harm counts twice a charter axis in a review's accuracy)
- *   TOOLBOND_HARM_QUORUM_BPS (10: harm settles once 0.1% of the epoch's REP supply scored it)
- *   TOOLBOND_APPEAL_PERIOD_SECS (3d; a registered overrule holds the round until it can execute)
+ *   TOOLBOND_APPEAL_PERIOD_SECS (3d; an appeal the author registers holds a malware slash until it can execute)
  *   MEMBERS=0x..,0x..  AMOUNTS=<18dp>,<18dp>: genesis REP (default 1000 AREP to the deployer)
  *   Registry keys recorded at genesis when given (the DAO changes them by proposal):
  *     EPOCH_TARGET_SHARE -> jurisdiction.autonet.epoch_target_share (ppm of the ATN supply burned in
@@ -141,8 +139,6 @@ async function main() {
     authorSlashBps: envBig("TOOLBOND_AUTHOR_SLASH_BPS", 10000),
     unbondDelay: envBig("TOOLBOND_UNBOND_DELAY_SECS", 30 * 86400),
     reviewerShareBps: envBig("TOOLBOND_REVIEWER_SHARE_BPS", 4000),
-    harmWeightBps: envBig("TOOLBOND_HARM_WEIGHT_BPS", 20000),
-    harmQuorumBps: envBig("TOOLBOND_HARM_QUORUM_BPS", 10),
     appealPeriod: envBig("TOOLBOND_APPEAL_PERIOD_SECS", 3 * 86400),
   };
   // The current charter, as the module metadata records it

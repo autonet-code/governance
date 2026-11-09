@@ -9,43 +9,48 @@ const { autonet, registerAgent, anchorArgs } = require("./helpers/autonet");
 // slasher rights) and the Registry's owner; a mock governor and a plain signer as the timelock, so the
 // timelock anchors epochs directly and the appeal window is the 7-day appealPeriod.
 //
-// REP: a1 300, a2 200, a3 100, author 400 (total 1000). The charter has two axes.
+// REP: a1 300, a2 200, a3 100, author 400 (total 1000). The charter has two value axes.
 describe("ToolBond", function () {
     let deployer, timelock, author, a1, a2, a3, outsider;
     let substrate, rep, registry, bond, treasury, governor;
 
     const ATN = (n) => ethers.parseUnits(String(n), 6);
     const REP = (n) => ethers.parseEther(String(n));
+    const ONE = ethers.parseEther("1");
     const DIGEST = ethers.id("tool manifest v1");
     const MIN_STAKE = ATN(100);
     const DAY = 86400;
     const PARAMS = {
         minStake: MIN_STAKE, revealWindow: DAY, degradeBps: 1000, authorSlashBps: 10000, unbondDelay: 14 * DAY,
-        reviewerShareBps: 4000, appealPeriod: 7 * DAY, harmWeightBps: 20000, harmQuorumBps: 200,
+        reviewerShareBps: 4000, appealPeriod: 7 * DAY,
     };
-    const CHARTER = '{"axes":[{"id":"correctness","thesis":"Works."},{"id":"simplicity","thesis":"Small."}]}';
+    const CHARTER = '{"axes":[{"id":"care","thesis":"Kind."},{"id":"growth","thesis":"Grows."}]}';
     const NO = -128;
-    const NO_HARM = 255;
+    const UNINFORMATIVE = 2n ** 64n - 1n;
     const EVIDENCE = ethers.id("evidence");
+    const TAG = ethers.id("autonet.tool_concluded");
     const batches = new Map();
     let anchors = 0;
 
-    // One int8 per axis
+    // One int8 per charter axis
     const scores = (...s) => ethers.hexlify(Uint8Array.from(s.map((x) => (x + 256) % 256)));
-    const review = (s, harm, stake, digest = DIGEST) => ({ digest, scores: s, harm, stake, evidenceHash: EVIDENCE });
+    // A review: the four fixed fields, then the charter axes (50 on both by default)
+    const review = ({ c = 50, s = 50, n = 50, m = 0, axes = scores(50, 50), digest = DIGEST } = {}) =>
+        ({ digest, correctness: c, simplicity: s, novelty: n, malware: m, scores: axes, evidenceHash: EVIDENCE });
+    const malware = (digest = DIGEST) => review({ m: 1, digest });
+    const clean = (digest = DIGEST) => review({ digest });
 
     async function fund(signer, amount) {
         await substrate.mintFromVault(signer.address, amount);
         await substrate.connect(signer).approve(await bond.getAddress(), ethers.MaxUint256);
     }
 
-    // Commit a batch for the current epoch, staking the sum of its reviews' stakes
+    // Commit a batch for the current epoch
     async function commit(signer, reviews) {
         const epoch = await bond.currentEpoch();
         const salt = ethers.hexlify(ethers.randomBytes(32));
         batches.set(`${epoch}:${signer.address}`, { reviews, salt });
-        const stake = reviews.reduce((t, r) => t + BigInt(r.stake), 0n);
-        await bond.connect(signer).commit(await bond.commitmentOf(epoch, signer.address, reviews, salt), stake, reviews.length);
+        await bond.connect(signer).commit(await bond.commitmentOf(epoch, signer.address, reviews, salt), reviews.length);
         return epoch;
     }
 
@@ -54,10 +59,11 @@ describe("ToolBond", function () {
         return bond.connect(from).reveal(epoch, signer.address, reviews, salt);
     }
 
-    // The DAO anchors the epoch, closing it
-    async function anchor() {
+    // The DAO anchors the epoch, closing it; `root` is the close's agentMintRoot. Returns the anchor's index.
+    async function anchor(root = ethers.ZeroHash) {
         await time.increase(60);
-        await substrate.connect(timelock).anchor(...(await anchorArgs(substrate, `epoch-${anchors++}`)));
+        await substrate.connect(timelock).anchor(...(await anchorArgs(substrate, `epoch-${anchors++}`, root)));
+        return (await substrate.anchorCount()) - 1n;
     }
 
     // Commit each batch, anchor, reveal them all, and wait out the reveal window
@@ -72,6 +78,17 @@ describe("ToolBond", function () {
 
     async function claimAll(epoch, signers, digest = DIGEST) {
         for (const s of signers) await bond.claim(digest, epoch, s.address);
+    }
+
+    // A concluded tool's leaf in the close's agentMintRoot
+    const leaf = (digest) => ethers.keccak256(ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bytes32"], [TAG, digest])));
+    const pair = (x, y) => ethers.keccak256(ethers.concat(x < y ? [x, y] : [y, x]));
+
+    // The close names the tool concluded; anyone records it
+    async function concludeTool(digest = DIGEST) {
+        const index = await anchor(leaf(digest));
+        await bond.conclude(digest, index, []);
+        return bond.verdicts(digest);
     }
 
     beforeEach(async function () {
@@ -126,7 +143,7 @@ describe("ToolBond", function () {
             await bond.connect(author).requestUnbond(DIGEST);
             expect(await bond.isBonded(DIGEST)).to.equal(false);
             // Still reviewable while unbonding
-            const epoch = await commit(a1, [review(scores(50, 50), 0, ATN(10))]);
+            const epoch = await commit(a1, [clean()]);
             await anchor();
             await reveal(a1, epoch);
             await expect(bond.connect(author).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "TooEarly");
@@ -146,16 +163,13 @@ describe("ToolBond", function () {
 
         // a1 (300 REP) and a2 (200 REP) agree, so both are fully accurate
         async function agreeingRound() {
-            return epochWith([
-                [a1, [review(scores(50, 50), 0, ATN(10))]],
-                [a2, [review(scores(50, 50), 0, ATN(10))]],
-            ]);
+            return epochWith([[a1, [clean()]], [a2, [clean()]]]);
         }
 
         async function paid(epoch, signer) {
             const before = await substrate.balanceOf(signer.address);
             await bond.claim(DIGEST, epoch, signer.address);
-            return await substrate.balanceOf(signer.address) - before - ATN(10); // less the stake back
+            return await substrate.balanceOf(signer.address) - before;
         }
 
         it("anyone adds to a bonded tool's bounty", async function () {
@@ -233,267 +247,355 @@ describe("ToolBond", function () {
     });
 
     describe("commits and reveals", function () {
-        it("epochs follow the anchors and record the charter's axes", async function () {
+        it("epochs follow the anchors and record the charter's axes and the unscored default", async function () {
             expect(await bond.currentEpoch()).to.equal(0);
-            await commit(a1, [review(scores(50, 50), 0, 0)]);
+            await commit(a1, [clean()]);
             const info = await bond.epochInfo(0);
             expect(info.charterHash).to.equal(ethers.sha256(ethers.toUtf8Bytes(CHARTER)));
-            expect(info.axisIds).to.deep.equal([ethers.id("correctness"), ethers.id("simplicity")]);
+            expect(info.axisIds).to.deep.equal([ethers.id("care"), ethers.id("growth")]);
             expect(info.supply).to.equal(REP(1000));
             expect(info.revealDeadline).to.equal(0);
+            expect(info.unscoredBps).to.equal(5000);
             await anchor();
             expect(await bond.currentEpoch()).to.equal(1);
             expect((await bond.epochInfo(0)).revealDeadline).to.be.greaterThan(0);
         });
 
-        it("a charter that isn't compact JSON with plain ids gives the epoch no axes", async function () {
-            await registry.editRegistry("jurisdiction.autonet.charter", '{"axes":[{"id" : "correctness"}]}');
-            await commit(a1, [review("0x", 0, 0)]);
-            expect((await bond.epochInfo(0)).axisIds).to.deep.equal([]);
+        it("the unscored default is a Registry value, fixed per epoch; malformed or above 100% reads as 50%", async function () {
+            const KEY = "jurisdiction.autonet.unscored_axis_bps";
+            for (const [value, bps] of [["2500", 2500], ["10000", 10000], ["10001", 5000], ["0.5", 5000], ["", 5000]]) {
+                await registry.editRegistry(KEY, value);
+                const epoch = await commit(a1, [clean()]);
+                await registry.editRegistry(KEY, "1"); // later edits don't move a started epoch
+                expect((await bond.epochInfo(epoch)).unscoredBps, value).to.equal(bps);
+                await anchor();
+            }
         });
 
-        it("a commit needs REP at the epoch's start or a stake, once per epoch", async function () {
-            await expect(commit(outsider, [review(scores(50, 50), 0, 0)])).to.be.revertedWithCustomError(bond, "NoWeight");
-            await commit(outsider, [review(scores(50, 50), 0, ATN(5))]); // a newcomer stakes instead
-            await commit(a1, [review(scores(50, 50), 0, 0)]);
-            await expect(commit(a1, [review(scores(50, 50), 0, 0)])).to.be.revertedWithCustomError(bond, "AlreadyCommitted");
+        it("a charter that isn't compact JSON with plain ids gives the epoch no axes, and reviews only the fixed fields", async function () {
+            await registry.editRegistry("jurisdiction.autonet.charter", '{"axes":[{"id" : "care"}]}');
+            const epoch = await epochWith([[a1, [review({ axes: "0x" })]], [a2, [review({ axes: "0x" })]]]);
+            expect((await bond.epochInfo(epoch)).axisIds).to.deep.equal([]);
+            await bond.finalize(DIGEST, epoch, 10);
+            expect((await bond.reviewOf(DIGEST, epoch, a1.address)).accuracy).to.equal(ONE);
+        });
+
+        it("a commit needs its household's REP at the epoch's start, once per epoch, and takes no ATN", async function () {
+            await expect(commit(outsider, [clean()])).to.be.revertedWithCustomError(bond, "NoWeight");
+            const before = await substrate.balanceOf(a1.address);
+            await commit(a1, [clean()]);
+            await expect(commit(a1, [clean()])).to.be.revertedWithCustomError(bond, "AlreadyCommitted");
+            expect(await substrate.balanceOf(a1.address)).to.equal(before);
         });
 
         it("reveals come after the anchor, within the window, matching the commit; anyone can relay them", async function () {
-            const epoch = await commit(a1, [review(scores(50, 50), 0, ATN(10))]);
+            const epoch = await commit(a1, [clean()]);
             await expect(reveal(a1, epoch)).to.be.revertedWithCustomError(bond, "TooEarly");
             await anchor();
             const { reviews } = batches.get(`${epoch}:${a1.address}`);
             await expect(bond.reveal(epoch, a1.address, reviews, ethers.ZeroHash)).to.be.revertedWithCustomError(bond, "BadReveal");
-            await reveal(a1, epoch, outsider); // relayed
+            await expect(reveal(a1, epoch, outsider)).to.emit(bond, "Reviewed") // relayed
+                .withArgs(DIGEST, epoch, a1.address, 50, 50, 50, 0, scores(50, 50), REP(300), EVIDENCE);
             expect((await bond.reviewOf(DIGEST, epoch, a1.address)).reviewer).to.equal(a1.address);
             await expect(reveal(a1, epoch)).to.be.revertedWithCustomError(bond, "BadReveal");
 
-            const late = await commit(a2, [review(scores(50, 50), 0, 0)]);
+            const late = await commit(a2, [clean()]);
             await anchor();
             await time.increase(PARAMS.revealWindow + 1);
             await expect(reveal(a2, late)).to.be.revertedWithCustomError(bond, "TooLate");
         });
 
-        it("reviews that can't count are refunded without voiding the batch", async function () {
+        it("reviews that can't count are skipped without voiding the batch", async function () {
             const d2 = ethers.id("unbonded tool");
             const epoch = await commit(a1, [
-                review(scores(50, 50), 0, ATN(10)),
-                review(scores(50, 50), 0, ATN(1), d2),          // no bond
-                review(scores(50), 0, ATN(2)),                  // wrong axis count, and a repeat
-                review(scores(101, 0), 0, ATN(3)),              // out of range
+                review({ c: NO }),                       // a fixed field missing
+                review({ s: 255 }),
+                review({ n: 101 }),
+                review({ m: 2 }),
+                review({ c: 101 }),
+                review({ digest: d2 }),                  // no bond
+                review({ axes: scores(50) }),            // wrong axis count
+                review({ axes: scores(101, 0) }),        // out of range
+                clean(),
+                clean(),                                 // a repeat
             ]);
-            await commit(author, [review(scores(100, 100), 0, ATN(4))]); // the author's own tool
+            await commit(author, [clean()]); // the author's own tool
             await anchor();
-            const before = await substrate.balanceOf(a1.address);
-            await reveal(a1, epoch);
-            expect(await substrate.balanceOf(a1.address)).to.equal(before + ATN(6));
+            await expect(reveal(a1, epoch)).to.emit(bond, "Revealed").withArgs(epoch, a1.address, 1);
             await reveal(author, epoch);
             expect((await bond.getRound(DIGEST, epoch)).reviewCount).to.equal(1);
         });
 
-        it("a batch never revealed loses its whole stake to the treasury and degradeBps of its REP", async function () {
-            const epoch = await commit(a1, [review(scores(50, 50), 0, ATN(10))]);
+        it("a batch never revealed loses degradeBps of its REP per declared review", async function () {
+            const epoch = await commit(a1, [clean(), clean(), clean()]);
+            expect(await bond.reviewCountOf(epoch, a1.address)).to.equal(3);
             await anchor();
             await expect(bond.forfeit(epoch, a1.address)).to.be.revertedWithCustomError(bond, "TooEarly");
             await time.increase(PARAMS.revealWindow + 1);
-            await bond.connect(outsider).forfeit(epoch, a1.address);
-            expect(await substrate.balanceOf(treasury)).to.equal(ATN(10));
-            expect(await rep.balanceOf(a1.address)).to.equal(REP(270));
+            await expect(bond.connect(outsider).forfeit(epoch, a1.address))
+                .to.emit(bond, "Forfeited").withArgs(epoch, a1.address, REP(90));
+            expect(await rep.balanceOf(a1.address)).to.equal(REP(210)); // 300 - 3 x 10% x 300
             await expect(bond.forfeit(epoch, a1.address)).to.be.revertedWithCustomError(bond, "WrongStage");
+        });
+
+        it("a reveal must hold as many reviews as its commit declared", async function () {
+            const epoch = await bond.currentEpoch();
+            const reviews = [clean()];
+            const salt = ethers.ZeroHash;
+            await bond.connect(a1).commit(await bond.commitmentOf(epoch, a1.address, reviews, salt), 2);
+            await anchor();
+            await expect(bond.reveal(epoch, a1.address, reviews, salt)).to.be.revertedWithCustomError(bond, "BadReveal");
         });
     });
 
     describe("settlement", function () {
-        it("rates by REP-weighted means: inaccurate stake and REP go to accurate reviews, nothing created", async function () {
+        it("accuracy weighs every field and axis the same; REP moves from inaccurate to accurate reviews, no ATN", async function () {
             const epoch = await epochWith([
-                [a1, [review(scores(50, 50), 0, ATN(10))]],
-                [a2, [review(scores(50, 50), 0, ATN(10))]],
-                [a3, [review(scores(-100, -100), 0, ATN(10))]],
+                [a1, [clean()]],
+                [a2, [clean()]],
+                [a3, [review({ c: -100, s: 0, n: 0, m: 1, axes: scores(-100, -100) })]],
             ]);
             await bond.finalize(DIGEST, epoch, 10);
 
-            // Means: (300x50 + 200x50 - 100x100) / 600 = 25 on both axes; harm 0
-            const axis = await bond.roundAxis(DIGEST, epoch, 0);
-            expect(axis.sum / axis.mass).to.equal(25);
-            // Each review is measured against the others' means. a1: others (200x50 - 100x100) / 300 = 0, so
-            // axes 1 - 50/200 = 0.75, harm 1 (weight 2) -> 0.875. a3: others 50, axes 0.25 -> 0.625
-            expect((await bond.reviewOf(DIGEST, epoch, a1.address)).accuracy).to.equal(ethers.parseEther("0.875"));
-            expect((await bond.reviewOf(DIGEST, epoch, a3.address)).accuracy).to.equal(ethers.parseEther("0.625"));
+            // Means: correctness and axes (300x50 + 200x50 - 100x100) / 600 = 25; malware yes 100/600
+            const c = await bond.roundAxis(DIGEST, epoch, 0);
+            expect(c.sum / c.mass).to.equal(25);
+            const m = await bond.roundAxis(DIGEST, epoch, 3);
+            expect(m.sum).to.equal(REP(100) * 100n);
+            expect(m.mass).to.equal(REP(600));
+            // a1 against the others (a2 200, a3 100): correctness and both axes 1 - 50/200 = 0.75, simplicity
+            // and novelty 1 - 16.67/100, malware 1 - 1/3: 4.5833 / 6
+            const a1Acc = (await bond.reviewOf(DIGEST, epoch, a1.address)).accuracy;
+            expect(a1Acc).to.be.within(763888888888888880n, 763888888888888890n);
+            // a3 against a1 and a2: 0.25 x 3, 0.5 x 2, malware 0: 1.75 / 6
+            expect((await bond.reviewOf(DIGEST, epoch, a3.address)).accuracy).to.be.within(291666666666666660n, 291666666666666670n);
 
-            const balances = async () => Promise.all([a1, a2, a3].map((s) => substrate.balanceOf(s.address)));
-            const before = await balances();
+            const atn = await Promise.all([a1, a2, a3].map((s) => substrate.balanceOf(s.address)));
             await claimAll(epoch, [a1, a2, a3]);
-            const gained = (await balances()).map((b, i) => b - before[i]);
-            expect(gained[0]).to.be.greaterThan(ATN(10)); // accurate: back with winnings
-            expect(gained[2]).to.be.lessThan(ATN(10));    // a3 lost part of its stake
-            // Only the service fee on the winnings leaves the stakes; nothing else stays behind
-            expect(await substrate.balanceOf(await bond.getAddress())).to.be.lessThan(MIN_STAKE + 10n);
+            for (const [i, s] of [a1, a2, a3].entries()) expect(await substrate.balanceOf(s.address)).to.equal(atn[i]);
             // No REP created; rounding leaves a few wei burned
             expect(await rep.totalSupply()).to.be.within(REP(1000) - 10n, REP(1000));
             expect(await rep.balanceOf(a3.address)).to.be.lessThan(REP(100));
             expect(await rep.balanceOf(a1.address)).to.be.greaterThan(REP(300));
             await expect(bond.claim(DIGEST, epoch, a1.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
 
-            // The tool's ratings carry the round
-            const rating = await bond.toolRating(DIGEST, ethers.id("correctness"));
+            // The tool's ratings carry the round: fixed fields keyed by index, axes by id
+            const rating = await bond.toolRating(DIGEST, ethers.toBeHex(0, 32));
             expect(rating.mass).to.equal(REP(600));
-            expect(rating.sum).to.equal(axis.sum);
+            expect(rating.sum).to.equal(c.sum);
+            expect((await bond.toolRating(DIGEST, ethers.toBeHex(3, 32))).sum).to.equal(m.sum);
+            expect((await bond.toolRating(DIGEST, ethers.id("care"))).sum).to.equal(c.sum);
         });
 
-        it("settled harm slashes that share of the bond and burns that share of the author's REP after the appeal window", async function () {
+        it("an unscored axis counts at the default with the review's weight, in the sums and in accuracy", async function () {
+            // a1 leaves both axes unscored (50 at the default), a2 scores 50 and 100
             const epoch = await epochWith([
-                [a1, [review(scores(0, 0), 100, ATN(10))]],
-                [a2, [review(scores(0, 0), 100, ATN(10))]],
-                [a3, [review(scores(0, 0), 0, ATN(10))]],
+                [a1, [review({ axes: "0x" })]],
+                [a2, [review({ axes: scores(50, NO) })]],
             ]);
             await bond.finalize(DIGEST, epoch, 10);
-            // H = (300 + 200) x 100 / (600 x 100) = 5/6
-            const r = await bond.getRound(DIGEST, epoch);
-            expect(r.stage).to.equal(2n); // Cooling
-            expect(r.settledHarm).to.equal(ethers.parseEther("1") * 5n / 6n);
-            await expect(bond.finalize(DIGEST, epoch, 10)).to.be.revertedWithCustomError(bond, "TooEarly");
-            await time.increase(PARAMS.appealPeriod + 1);
-            const burned = REP(400) * r.settledHarm / ethers.parseEther("1");
-            await expect(bond.finalize(DIGEST, epoch, 10))
-                .to.emit(bond, "AuthorRepBurned").withArgs(DIGEST, epoch, author.address, burned);
+            expect((await bond.roundAxis(DIGEST, epoch, 4)).sum).to.equal(REP(500) * 50n);
+            expect((await bond.roundAxis(DIGEST, epoch, 5)).mass).to.equal(REP(500));
+            expect((await bond.reviewOf(DIGEST, epoch, a1.address)).accuracy).to.equal(ONE);
 
-            const slashed = MIN_STAKE * r.settledHarm / ethers.parseEther("1");
-            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE - slashed);
-            expect(await bond.isBonded(DIGEST)).to.equal(false);
-            expect(await rep.balanceOf(author.address)).to.equal(REP(400) - burned);
-
-            // The slashed bond goes by REP x harm accuracy: the accusers take most of it
-            const before = await substrate.balanceOf(a1.address);
-            await claimAll(epoch, [a1, a2, a3]);
-            expect(await substrate.balanceOf(a1.address) - before).to.be.greaterThan(ATN(10) + slashed / 3n);
-            // Only reviewer REP is redistributed: the author's stays burned
-            expect(await rep.totalSupply()).to.be.within(REP(1000) - burned - 10n, REP(1000) - burned);
-        });
-
-        it("the DAO overrules the settled harm within the appeal window, and its ruling finalizes at once", async function () {
-            const epoch = await epochWith([[a1, [review(scores(0, 0), 100, ATN(10))]]]);
-            await bond.finalize(DIGEST, epoch, 10);
-            await expect(bond.connect(outsider).daoOverrule(DIGEST, epoch, 0)).to.be.revertedWithCustomError(bond, "NotTimelock");
-            await bond.connect(timelock).daoOverrule(DIGEST, epoch, 0);
-            await bond.finalize(DIGEST, epoch, 10);
-            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
-            expect(await rep.balanceOf(author.address)).to.equal(REP(400));
-            // a1 was wrong on harm by the DAO's ruling
-            expect((await bond.reviewOf(DIGEST, epoch, a1.address)).harmAccuracy).to.equal(0);
-            // The tool's harm keeps the DAO's ruling, not the reviewers'
-            const h = await bond.toolHarm(DIGEST);
-            expect(h.mass).to.equal(REP(300));
-            expect(h.sum).to.equal(0);
-        });
-
-        // A proposal calling daoOverrule on [epoch], with its id and registerDaoProposal's arguments
-        async function overruleProposal(epoch, state, deadline, eta = 0) {
-            const p = [[await bond.getAddress()], [0n], [bond.interface.encodeFunctionData("daoOverrule", [DIGEST, epoch, 0])],
-                ethers.id(`overrule ${epoch} ${deadline}`)];
-            const id = await governor.hashProposal(...p);
-            await governor.setProposal(id, state, deadline, eta);
-            return { id, args: [DIGEST, epoch, ...p] };
-        }
-
-        it("an overrule registered in the appeal window holds finalization and lands after it", async function () {
-            const epoch = await epochWith([[a1, [review(scores(0, 0), 100, ATN(10))]]]);
-            await bond.finalize(DIGEST, epoch, 10);
-            const deadline = BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod);
-            const p = await overruleProposal(epoch, 1, deadline); // Active
-            const until = deadline + 2n * BigInt(DAY); // the timelock is a signer: no delay
-            await expect(bond.connect(outsider).registerDaoProposal(...p.args))
-                .to.emit(bond, "DaoProposalRegistered").withArgs(DIGEST, epoch, p.id, until);
-            expect(await bond.heldUntil(DIGEST, epoch)).to.equal(until);
-
-            await time.increase(PARAMS.appealPeriod + 1);
-            await expect(bond.finalize(DIGEST, epoch, 10)).to.be.revertedWithCustomError(bond, "TooEarly");
-            await bond.connect(timelock).daoOverrule(DIGEST, epoch, 0);
-            await bond.finalize(DIGEST, epoch, 10);
-            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
-        });
-
-        it("a registered overrule that never lands holds only until it could have", async function () {
-            const epoch = await epochWith([[a1, [review(scores(0, 0), 100, ATN(10))]]]);
-            await bond.finalize(DIGEST, epoch, 10);
-            const eta = BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod) * 2n;
-            const p = await overruleProposal(epoch, 5, eta - 100n, eta); // Queued: held to eta plus the grace
-            await bond.registerDaoProposal(...p.args);
-            expect(await bond.heldUntil(DIGEST, epoch)).to.equal(eta + BigInt(DAY));
-            await time.increaseTo(eta + BigInt(DAY) - 1n);
-            await expect(bond.finalize(DIGEST, epoch, 10)).to.be.revertedWithCustomError(bond, "TooEarly");
-            await bond.finalize(DIGEST, epoch, 10);
-            expect((await bond.getRound(DIGEST, epoch)).stage).to.equal(4n); // Done
-        });
-
-        it("refuses registrations about another round, for a dead proposal, or after the window", async function () {
-            const epoch = await epochWith([[a1, [review(scores(0, 0), 100, ATN(10))]]]);
-            await bond.finalize(DIGEST, epoch, 10);
-            const deadline = BigInt(await time.latest()) + 1000n;
-            const other = await overruleProposal(epoch + 1n, 1, deadline);
-            other.args[1] = epoch;
-            await expect(bond.registerDaoProposal(...other.args)).to.be.revertedWithCustomError(bond, "NotAboutRound");
-            const defeated = await overruleProposal(epoch, 3, deadline);
-            await expect(bond.registerDaoProposal(...defeated.args)).to.be.revertedWith("Proposal isn't live");
-            await time.increase(PARAMS.appealPeriod + 1);
-            const late = await overruleProposal(epoch, 1, deadline + BigInt(PARAMS.appealPeriod));
-            await expect(bond.registerDaoProposal(...late.args)).to.be.revertedWithCustomError(bond, "TooLate");
-            await expect(bond.connect(timelock).daoOverrule(DIGEST, epoch, 0)).to.be.revertedWithCustomError(bond, "TooLate");
-        });
-
-        it("too late to overrule once the appeal window has passed", async function () {
-            const epoch = await epochWith([[a1, [review(scores(0, 0), 100, ATN(10))]]]);
-            await bond.finalize(DIGEST, epoch, 10);
-            await time.increase(PARAMS.appealPeriod + 1);
-            await expect(bond.connect(timelock).daoOverrule(DIGEST, epoch, 0)).to.be.revertedWithCustomError(bond, "TooLate");
-        });
-
-        it("a round with no REP behind it refunds every stake and settles nothing", async function () {
-            const epoch = await epochWith([[outsider, [review(scores(-100, -100), 100, ATN(10))]]]);
-            await bond.finalize(DIGEST, epoch, 10);
-            const before = await substrate.balanceOf(outsider.address);
-            await bond.claim(DIGEST, epoch, outsider.address);
-            expect(await substrate.balanceOf(outsider.address)).to.equal(before + ATN(10));
-            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
-        });
-
-        it("a newcomer with stake but no REP earns when accurate", async function () {
-            const epoch = await epochWith([
-                [a1, [review(scores(50, 50), 0, ATN(10))]],
-                [a3, [review(scores(-100, -100), 0, ATN(10))]],
-                [outsider, [review(scores(50, 50), 0, ATN(10))]],
+            await registry.editRegistry("jurisdiction.autonet.unscored_axis_bps", "10000"); // unscored is top
+            const e1 = await epochWith([
+                [a1, [review({ axes: scores(NO, 100) })]],
+                [a2, [review({ axes: scores(100, 0) })]],
             ]);
+            await bond.finalize(DIGEST, e1, 10);
+            expect((await bond.roundAxis(DIGEST, e1, 4)).sum).to.equal(REP(500) * 100n);
+            // Agree on correctness, simplicity, novelty, malware and care; growth 1 - 100/200
+            expect((await bond.reviewOf(DIGEST, e1, a1.address)).accuracy).to.equal(ONE * 55n / 60n);
+        });
+
+        it("a lone reviewer is measured against no one, so it gains nothing and loses nothing", async function () {
+            const epoch = await epochWith([[a3, [review({ c: 100, m: 1 })]]]);
             await bond.finalize(DIGEST, epoch, 10);
-            const before = await substrate.balanceOf(outsider.address);
-            await bond.claim(DIGEST, epoch, outsider.address);
-            expect(await substrate.balanceOf(outsider.address) - before).to.be.greaterThan(ATN(10));
-            // Weight 0: it moved no mean
-            expect((await bond.roundAxis(DIGEST, epoch, 0)).mass).to.equal(REP(400));
+            expect((await bond.reviewOf(DIGEST, epoch, a3.address)).accuracy).to.equal(UNINFORMATIVE);
+            await bond.claim(DIGEST, epoch, a3.address);
+            expect(await rep.balanceOf(a3.address)).to.equal(REP(100));
         });
 
         it("finalize works in batches", async function () {
-            const epoch = await epochWith([
-                [a1, [review(scores(50, 50), 0, ATN(1))]],
-                [a2, [review(scores(50, 50), 0, ATN(1))]],
-                [a3, [review(scores(50, 50), 0, ATN(1))]],
-            ]);
+            const epoch = await epochWith([[a1, [clean()]], [a2, [clean()]], [a3, [clean()]]]);
             await bond.finalize(DIGEST, epoch, 2);
-            expect((await bond.getRound(DIGEST, epoch)).stage).to.equal(3n); // Finalizing
+            expect((await bond.getRound(DIGEST, epoch)).stage).to.equal(2n); // Finalizing
             await expect(bond.claim(DIGEST, epoch, a1.address)).to.be.revertedWithCustomError(bond, "WrongStage");
             await bond.finalize(DIGEST, epoch, 2);
-            expect((await bond.getRound(DIGEST, epoch)).stage).to.equal(4n); // Done
+            expect((await bond.getRound(DIGEST, epoch)).stage).to.equal(3n); // Done
         });
 
         it("ratings accumulate across epochs", async function () {
-            const e0 = await epochWith([[a1, [review(scores(100, NO), NO_HARM, 0)]]]);
+            const e0 = await epochWith([[a1, [review({ c: 100 })]]]);
             await bond.finalize(DIGEST, e0, 10);
-            const e1 = await epochWith([[a2, [review(scores(0, 0), NO_HARM, 0)]]]);
+            const e1 = await epochWith([[a2, [review({ c: 0 })]]]);
             await bond.finalize(DIGEST, e1, 10);
-            const c = await bond.toolRating(DIGEST, ethers.id("correctness"));
+            const c = await bond.toolRating(DIGEST, ethers.toBeHex(0, 32));
             expect(c.mass).to.equal(REP(500));
             expect(c.sum).to.equal(REP(300) * 100n);
-            expect((await bond.toolRating(DIGEST, ethers.id("simplicity"))).mass).to.equal(REP(200));
-            expect((await bond.toolHarm(DIGEST)).mass).to.equal(0);
+            expect((await bond.toolRating(DIGEST, ethers.id("growth"))).mass).to.equal(REP(500));
+        });
+    });
+
+    describe("malware", function () {
+        // a1 and a2 say malware (500 of 600 REP), a3 doesn't
+        async function malwareRound(digest = DIGEST) {
+            const epoch = await epochWith([[a1, [malware(digest)]], [a2, [malware(digest)]], [a3, [clean(digest)]]]);
+            await bond.finalize(digest, epoch, 10);
+            return epoch;
+        }
+        const SHARE = ONE * 5n / 6n;
+
+        it("is judged when the anchored close names the tool concluded: more than half yes opens the appeal window", async function () {
+            const epoch = await malwareRound();
+            expect((await bond.getRound(DIGEST, epoch)).beforeConclusion).to.equal(true);
+            await expect(bond.conclude(DIGEST, 0, [])).to.be.revertedWithCustomError(bond, "BadProof");
+            await expect(bond.conclude(ethers.id("no bond"), 0, [])).to.be.revertedWithCustomError(bond, "NotBonded");
+            // A two-leaf close: the tool next to a mint leaf
+            const mintLeaf = ethers.keccak256(ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["address", "uint256"], [a1.address, 5])));
+            const index = await anchor(pair(leaf(DIGEST), mintLeaf));
+            await expect(bond.conclude(DIGEST, index, [ethers.ZeroHash])).to.be.revertedWithCustomError(bond, "BadProof");
+            const tx = bond.conclude(DIGEST, index, [mintLeaf]);
+            await expect(tx).to.emit(bond, "Concluded");
+            const v = await bond.verdicts(DIGEST);
+            expect(v.share).to.equal(SHARE);
+            expect(v.yesMass).to.equal(REP(500));
+            expect(v.appealEnds).to.equal(BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod));
+            await expect(bond.conclude(DIGEST, index, [mintLeaf])).to.be.revertedWithCustomError(bond, "WrongStage");
+        });
+
+        it("after the window, the bond loses the share of yes and the author's REP burns that share, for the yes reviewers", async function () {
+            await malwareRound();
+            await concludeTool();
+            await bond.connect(author).requestUnbond(DIGEST);
+            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "TooEarly");
+            await time.increase(PARAMS.unbondDelay + 1);
+            await expect(bond.connect(author).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "RoundActive");
+
+            const slashed = MIN_STAKE * SHARE / ONE;
+            const burned = REP(400) * SHARE / ONE;
+            await expect(bond.connect(outsider).settleMalware(DIGEST))
+                .to.emit(bond, "MalwareSettled").withArgs(DIGEST, true, slashed, burned)
+                .and.to.emit(bond, "AuthorRepBurned").withArgs(DIGEST, author.address, burned);
+            expect(await rep.balanceOf(author.address)).to.equal(REP(400) - burned);
+            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "WrongStage");
+
+            // The slashed bond goes to the yes reviewers by REP, as earnings (less the service fee)
+            const epoch = 0n;
+            const before = await substrate.balanceOf(a1.address);
+            await expect(bond.claimBondShare(DIGEST, epoch, a1.address))
+                .to.emit(bond, "BondShareClaimed").withArgs(DIGEST, epoch, a1.address, slashed * 3n / 5n);
+            const share = slashed * 3n / 5n;
+            expect(await substrate.balanceOf(a1.address) - before).to.equal(share - share * 250n / 10000n);
+            await bond.claimBondShare(DIGEST, epoch, a2.address);
+            await expect(bond.claimBondShare(DIGEST, epoch, a1.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
+            await expect(bond.claimBondShare(DIGEST, epoch, a3.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
+
+            const left = await substrate.balanceOf(author.address);
+            await bond.connect(author).withdraw(DIGEST);
+            expect(await substrate.balanceOf(author.address) - left).to.equal(MIN_STAKE - slashed);
+        });
+
+        it("half or less saying yes concludes clean: nothing to appeal or slash", async function () {
+            const epoch = await epochWith([[a1, [clean()]], [a2, [malware()]], [a3, [malware()]]]); // 300 of 600
+            await bond.finalize(DIGEST, epoch, 10);
+            const v = await concludeTool();
+            expect(v.share).to.equal(ONE / 2n);
+            expect(v.appealEnds).to.equal(0);
+            expect(v.settled).to.equal(true);
+            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "WrongStage");
+            await expect(bond.connect(timelock).daoOverrule(DIGEST, true)).to.be.revertedWithCustomError(bond, "WrongStage");
+            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
+        });
+
+        it("takes no more of the author's REP than the REP that said yes", async function () {
+            const epoch = await epochWith([[a3, [malware()]]]);
+            await bond.finalize(DIGEST, epoch, 10);
+            await concludeTool();
+            await time.increase(PARAMS.appealPeriod + 1);
+            await bond.settleMalware(DIGEST);
+            // share 1 and authorSlashBps 100% would take all 400, capped at a3's 100
+            expect(await rep.balanceOf(author.address)).to.equal(REP(300));
+            expect((await bond.bonds(DIGEST)).stake).to.equal(0);
+        });
+
+        it("rounds finalized after the conclusion still rate the tool but share no slashed bond", async function () {
+            await malwareRound();
+            await concludeTool();
+            const later = await epochWith([[a1, [malware()]], [a2, [malware()]]]);
+            await bond.finalize(DIGEST, later, 10);
+            expect((await bond.getRound(DIGEST, later)).beforeConclusion).to.equal(false);
+            expect((await bond.toolRating(DIGEST, ethers.toBeHex(3, 32))).mass).to.equal(REP(600) + (await bond.getRound(DIGEST, later)).weight);
+            await time.increase(PARAMS.appealPeriod + 1);
+            await bond.settleMalware(DIGEST);
+            await expect(bond.claimBondShare(DIGEST, later, a1.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
+            await bond.claimBondShare(DIGEST, 0, a1.address);
+        });
+
+        // A proposal calling daoOverrule on the tool, with its id and registerDaoProposal's arguments
+        async function overruleProposal(state, deadline, eta = 0, digest = DIGEST, ruling = false) {
+            const p = [[await bond.getAddress()], [0n], [bond.interface.encodeFunctionData("daoOverrule", [digest, ruling])],
+                ethers.id(`overrule ${digest} ${deadline}`)];
+            const id = await governor.hashProposal(...p);
+            await governor.setProposal(id, state, deadline, eta);
+            return { id, args: [DIGEST, ...p] };
+        }
+
+        it("only the author appeals, and an appeal registered in the window holds the slash until the DAO rules", async function () {
+            await malwareRound();
+            await concludeTool();
+            const deadline = BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod);
+            const p = await overruleProposal(1, deadline); // Active
+            await expect(bond.connect(outsider).registerDaoProposal(...p.args)).to.be.revertedWithCustomError(bond, "NotAuthor");
+            const until = deadline + 2n * BigInt(DAY); // the timelock is a signer: no delay
+            await expect(bond.connect(author).registerDaoProposal(...p.args))
+                .to.emit(bond, "DaoProposalRegistered").withArgs(DIGEST, p.id, until);
+            expect((await bond.verdicts(DIGEST)).heldUntil).to.equal(until);
+
+            await time.increase(PARAMS.appealPeriod + 1);
+            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "TooEarly");
+            await expect(bond.connect(outsider).daoOverrule(DIGEST, false)).to.be.revertedWithCustomError(bond, "NotTimelock");
+            await expect(bond.connect(timelock).daoOverrule(DIGEST, false)).to.emit(bond, "MalwareRuled").withArgs(DIGEST, false);
+            await expect(bond.connect(timelock).daoOverrule(DIGEST, true)).to.be.revertedWithCustomError(bond, "WrongStage");
+            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled").withArgs(DIGEST, false, 0, 0);
+            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
+            expect(await rep.balanceOf(author.address)).to.equal(REP(400));
+            await expect(bond.claimBondShare(DIGEST, 0, a1.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
+        });
+
+        it("the DAO upholding the verdict settles it at once, by the reviewers' share", async function () {
+            await malwareRound();
+            await concludeTool();
+            await bond.connect(timelock).daoOverrule(DIGEST, true);
+            await bond.settleMalware(DIGEST);
+            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE - MIN_STAKE * SHARE / ONE);
+        });
+
+        it("a registered appeal that never lands holds only until it could have", async function () {
+            await malwareRound();
+            await concludeTool();
+            const eta = BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod) * 2n;
+            const p = await overruleProposal(5, eta - 100n, eta); // Queued: held to eta plus the grace
+            await bond.connect(author).registerDaoProposal(...p.args);
+            expect((await bond.verdicts(DIGEST)).heldUntil).to.equal(eta + BigInt(DAY));
+            await time.increaseTo(eta + BigInt(DAY) - 1n);
+            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "TooEarly");
+            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled");
+        });
+
+        it("refuses appeals about another tool, for a dead proposal, or after the window", async function () {
+            await malwareRound();
+            await concludeTool();
+            const deadline = BigInt(await time.latest()) + 1000n;
+            const other = await overruleProposal(1, deadline, 0, ethers.id("other tool"));
+            await expect(bond.connect(author).registerDaoProposal(...other.args)).to.be.revertedWithCustomError(bond, "NotAboutTool");
+            const defeated = await overruleProposal(3, deadline);
+            await expect(bond.connect(author).registerDaoProposal(...defeated.args)).to.be.revertedWith("Proposal isn't live");
+            await time.increase(PARAMS.appealPeriod + 1);
+            const late = await overruleProposal(1, deadline + BigInt(PARAMS.appealPeriod));
+            await expect(bond.connect(author).registerDaoProposal(...late.args)).to.be.revertedWithCustomError(bond, "TooLate");
+            await expect(bond.connect(timelock).daoOverrule(DIGEST, false)).to.be.revertedWithCustomError(bond, "TooLate");
         });
     });
 
@@ -508,7 +610,7 @@ describe("ToolBond", function () {
         });
 
         it("an agent's review weighs its owner's REP at the epoch's start", async function () {
-            const epoch = await commit(h1, [review(scores(50, 50), 0, 0)]);
+            const epoch = await commit(h1, [clean()]);
             expect((await bond.commits(epoch, h1.address)).weight).to.equal(REP(300));
             expect(await bond.householdOf(epoch, h1.address)).to.equal(a1.address);
             await anchor();
@@ -518,9 +620,9 @@ describe("ToolBond", function () {
         });
 
         it("a household weighs once per tool: its earliest commit carries it, whatever the reveal order", async function () {
-            const epoch = await commit(h1, [review(scores(50, 50), 0, ATN(10))]);
-            await commit(h2, [review(scores(-50, -50), 100, ATN(10))]);
-            await commit(a2, [review(scores(50, 50), 0, ATN(10))]);
+            const epoch = await commit(h1, [clean()]);
+            await commit(h2, [review({ c: -50, m: 1, axes: scores(-50, NO) })]);
+            await commit(a2, [clean()]);
             await anchor();
             await reveal(h2, epoch); // weighs at first
             expect((await bond.reviewOf(DIGEST, epoch, h2.address)).weight).to.equal(REP(300));
@@ -529,18 +631,18 @@ describe("ToolBond", function () {
 
             expect((await bond.reviewOf(DIGEST, epoch, h1.address)).weight).to.equal(REP(300));
             expect((await bond.reviewOf(DIGEST, epoch, h2.address)).weight).to.equal(0);
-            const r = await bond.getRound(DIGEST, epoch);
-            expect(r.weight).to.equal(REP(500));
-            expect(r.harmMass).to.equal(REP(500));
-            expect(r.harmSum).to.equal(0); // h2's harm score left with its weight
-            const axis = await bond.roundAxis(DIGEST, epoch, 0);
-            expect(axis.sum).to.equal(REP(500) * 50n);
-            expect(axis.mass).to.equal(REP(500));
+            expect((await bond.getRound(DIGEST, epoch)).weight).to.equal(REP(500));
+            // h2's values left with its weight, its unscored axis included
+            for (const [i, sum] of [[0, 50n], [3, 0n], [4, 50n], [5, 50n]]) {
+                const a = await bond.roundAxis(DIGEST, epoch, i);
+                expect(a.sum, `field ${i}`).to.equal(REP(500) * sum);
+                expect(a.mass).to.equal(REP(500));
+            }
         });
 
         it("a later commit of the same household reviews at zero weight", async function () {
-            const epoch = await commit(h1, [review(scores(50, 50), 0, 0)]);
-            await commit(h2, [review(scores(50, 50), 0, ATN(1))]);
+            const epoch = await commit(h1, [clean()]);
+            await commit(h2, [clean()]);
             await anchor();
             await reveal(h1, epoch);
             await expect(reveal(h2, epoch)).to.not.emit(bond, "ReviewUnweighted");
@@ -550,9 +652,9 @@ describe("ToolBond", function () {
 
         it("REP a review loses or wins moves on its household, never on the agent key", async function () {
             const epoch = await epochWith([
-                [h1, [review(scores(-100, -100), 0, ATN(10))]],
-                [a2, [review(scores(100, 100), 0, ATN(10))]],
-                [a3, [review(scores(100, 100), 0, ATN(10))]],
+                [h1, [review({ c: -100, axes: scores(-100, -100) })]],
+                [a2, [review({ c: 100, axes: scores(100, 100) })]],
+                [a3, [review({ c: 100, axes: scores(100, 100) })]],
             ]);
             await bond.finalize(DIGEST, epoch, 10);
             expect(await rep.balanceOf(a1.address)).to.be.lessThan(REP(300));
@@ -562,79 +664,19 @@ describe("ToolBond", function () {
         });
 
         it("a withheld batch costs its household degradeBps of the REP it weighed", async function () {
-            const epoch = await commit(h1, [review(scores(50, 50), 0, ATN(10))]);
+            const epoch = await commit(h1, [clean()]);
             await anchor();
             await time.increase(PARAMS.revealWindow + 1);
             await bond.forfeit(epoch, h1.address);
             expect(await rep.balanceOf(a1.address)).to.equal(REP(270));
         });
 
-        it("no household reviews its own tool, and harm slashes the author's household", async function () {
-            // h3 is a3's agent and authors a tool; a1's and a3's agents review it
-            await registerAgent(substrate, h3, "0x13", a3);
-            const tool = ethers.id("h3 tool");
-            await substrate.connect(h3).registerTool(tool);
-            await bond.connect(h3).bond(tool, MIN_STAKE);
-            const [h4] = (await ethers.getSigners()).slice(10, 11);
-            await registerAgent(substrate, h4, "0x14", a3);
-            const epoch = await epochWith([
-                [h1, [review(scores(0, 0), 100, ATN(10), tool)]],
-                [a2, [review(scores(0, 0), 100, ATN(10), tool)]],
-                [h4, [review(scores(100, 100), 0, 0, tool)]],
-            ]);
-            expect((await bond.reviewOf(tool, epoch, h4.address)).reviewer).to.equal(ethers.ZeroAddress);
-            await bond.finalize(tool, epoch, 10);
-            await time.increase(PARAMS.appealPeriod + 1);
-            await bond.finalize(tool, epoch, 10);
-            expect(await rep.balanceOf(a3.address)).to.equal(0); // harm 100, authorSlashBps 100%
-        });
-    });
-
-    describe("harm without a quorum, lone reviewers, rotations, withheld batches", function () {
-        const UNINFORMATIVE = 2n ** 64n - 1n;
-
-        it("a lone reviewer is measured against no one, so it gains nothing and loses nothing", async function () {
-            const epoch = await epochWith([[a3, [review(scores(100, 100), 100, ATN(10))]]]);
-            await bond.finalize(DIGEST, epoch, 10);
-            await time.increase(PARAMS.appealPeriod + 1);
-            await bond.finalize(DIGEST, epoch, 10);
-            expect((await bond.reviewOf(DIGEST, epoch, a3.address)).accuracy).to.equal(UNINFORMATIVE);
-            const before = await substrate.balanceOf(a3.address);
-            await bond.claim(DIGEST, epoch, a3.address);
-            expect(await substrate.balanceOf(a3.address)).to.equal(before + ATN(10)); // its stake back, no winnings
-            expect(await rep.balanceOf(a3.address)).to.equal(REP(100));
-        });
-
-        it("harm settles only once the weight that scored it reaches the quorum, and still rates the tool below it", async function () {
-            await bond.connect(timelock).setParams({ ...PARAMS, harmQuorumBps: 1500 }); // 150 of 1000 REP
-            const epoch = await epochWith([[a3, [review(scores(0, 0), 100, ATN(10))]]]);
-            await bond.finalize(DIGEST, epoch, 10);
-            const r = await bond.getRound(DIGEST, epoch);
-            expect(r.stage).to.equal(4n); // Done, no appeal window, nothing slashed
-            expect(r.settledHarm).to.equal(0);
-            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
-            expect(await rep.balanceOf(author.address)).to.equal(REP(400));
-            const harm = await bond.toolHarm(DIGEST);
-            expect(harm.mass).to.equal(REP(100));
-            expect(harm.sum).to.equal(REP(100) * 100n);
-        });
-
-        it("a harm slash takes no more REP than the weight that scored harm", async function () {
-            const epoch = await epochWith([[a3, [review(scores(0, 0), 100, ATN(10))]]]);
-            await bond.finalize(DIGEST, epoch, 10);
-            await time.increase(PARAMS.appealPeriod + 1);
-            await bond.finalize(DIGEST, epoch, 10);
-            // H = 1 and authorSlashBps 100% would take all 400, capped at a3's 100
-            expect(await rep.balanceOf(author.address)).to.equal(REP(300));
-        });
-
-        it("the household that bonded a tool stays liable when the author agent changes owner", async function () {
-            const [h3, h4, empty] = (await ethers.getSigners()).slice(9, 12);
+        it("no household reviews its own tool, and malware slashes the household that bonded it, whoever owns the author later", async function () {
+            const [h4, empty] = (await ethers.getSigners()).slice(10, 12);
             await registerAgent(substrate, h3, "0x13", a3);
             await registerAgent(substrate, h4, "0x14", a3);
             const tool = ethers.id("h3 tool");
             await substrate.connect(h3).registerTool(tool);
-            await fund(h3, ATN(200));
             await bond.connect(h3).bond(tool, MIN_STAKE);
             expect(await bond.bondHousehold(tool)).to.equal(a3.address);
 
@@ -650,34 +692,16 @@ describe("ToolBond", function () {
             expect(await bond.bondHousehold(tool)).to.equal(a3.address);
 
             const epoch = await epochWith([
-                [a1, [review(scores(0, 0), 100, ATN(10), tool)]],
-                [a2, [review(scores(0, 0), 100, ATN(10), tool)]],
-                [h4, [review(scores(100, 100), 0, 0, tool)]], // a3's own household: refused
+                [h1, [malware(tool)]],
+                [a2, [malware(tool)]],
+                [h4, [clean(tool)]], // a3's own household: refused
             ]);
             expect((await bond.reviewOf(tool, epoch, h4.address)).reviewer).to.equal(ethers.ZeroAddress);
             await bond.finalize(tool, epoch, 10);
+            await concludeTool(tool);
             await time.increase(PARAMS.appealPeriod + 1);
-            await bond.finalize(tool, epoch, 10);
-            expect(await rep.balanceOf(a3.address)).to.equal(0);
-        });
-
-        it("a withheld batch forfeits degradeBps of its REP per review it declared", async function () {
-            const epoch = await commit(a1, [
-                review(scores(50, 50), 0, ATN(1)), review(scores(50, 50), 0, ATN(1)), review(scores(50, 50), 0, ATN(1))]);
-            expect(await bond.reviewCountOf(epoch, a1.address)).to.equal(3);
-            await anchor();
-            await time.increase(PARAMS.revealWindow + 1);
-            await bond.forfeit(epoch, a1.address);
-            expect(await rep.balanceOf(a1.address)).to.equal(REP(210)); // 300 - 3 x 10% x 300
-        });
-
-        it("a reveal must hold as many reviews as its commit declared", async function () {
-            const epoch = await bond.currentEpoch();
-            const reviews = [review(scores(50, 50), 0, 0)];
-            const salt = ethers.ZeroHash;
-            await bond.connect(a1).commit(await bond.commitmentOf(epoch, a1.address, reviews, salt), 0, 2);
-            await anchor();
-            await expect(bond.reveal(epoch, a1.address, reviews, salt)).to.be.revertedWithCustomError(bond, "BadReveal");
+            await bond.settleMalware(tool);
+            expect(await rep.balanceOf(a3.address)).to.equal(0); // share 1, authorSlashBps 100%
         });
     });
 
@@ -686,8 +710,8 @@ describe("ToolBond", function () {
             await expect(bond.connect(outsider).setParams(PARAMS)).to.be.revertedWithCustomError(bond, "NotTimelock");
             await expect(bond.connect(timelock).setParams({ ...PARAMS, degradeBps: 10001 })).to.be.revertedWithCustomError(bond, "BadParams");
             await expect(bond.connect(timelock).setParams({ ...PARAMS, revealWindow: 0 })).to.be.revertedWithCustomError(bond, "BadParams");
-            await bond.connect(timelock).setParams({ ...PARAMS, harmWeightBps: 30000 });
-            expect(await bond.harmWeightBps()).to.equal(30000);
+            await bond.connect(timelock).setParams({ ...PARAMS, appealPeriod: 3 * DAY });
+            expect(await bond.appealPeriod()).to.equal(3 * DAY);
         });
     });
 });
