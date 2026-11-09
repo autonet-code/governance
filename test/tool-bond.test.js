@@ -513,14 +513,14 @@ describe("ToolBond", function () {
             expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
         });
 
-        it("takes no more of the author's REP than the REP that said yes", async function () {
+        it("burns the author's REP by the share with no cap, even beyond the REP that said yes", async function () {
             const epoch = await epochWith([[a3, [malware()]]]);
             await bond.finalize(DIGEST, epoch, 10);
             await concludeTool(DIGEST, 10000);
             await time.increase(PARAMS.appealPeriod + 1);
             await bond.settleMalware(DIGEST);
-            // share 1 and authorSlashBps 100% would take all 400, capped at a3's 100
-            expect(await rep.balanceOf(author.address)).to.equal(REP(300));
+            // share 1 and authorSlashBps 100%: all 400, though only a3's 100 said yes
+            expect(await rep.balanceOf(author.address)).to.equal(0);
             expect((await bond.bonds(DIGEST)).stake).to.equal(0);
         });
 
@@ -574,7 +574,7 @@ describe("ToolBond", function () {
             await bond.connect(timelock).daoOverrule(DIGEST, true);
             await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled").withArgs(DIGEST, true, MIN_STAKE, REP(400));
             expect((await bond.bonds(DIGEST)).stake).to.equal(0);
-            expect(await rep.balanceOf(author.address)).to.equal(0); // 400, under the 500 that said yes
+            expect(await rep.balanceOf(author.address)).to.equal(0);
         });
 
         it("an author can't withdraw while more than half the REP of the tool's finalized rounds says malware and it hasn't concluded", async function () {
@@ -592,7 +592,7 @@ describe("ToolBond", function () {
         it("a slashed bond with no yes in a finalized round goes to the treasury", async function () {
             await concludeTool(DIGEST, 10000); // the close counted rounds not finalized here
             await time.increase(PARAMS.appealPeriod + 1);
-            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled").withArgs(DIGEST, true, MIN_STAKE, 0);
+            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled").withArgs(DIGEST, true, MIN_STAKE, REP(400));
             expect(await substrate.balanceOf(treasury)).to.equal(MIN_STAKE);
             expect((await bond.verdicts(DIGEST)).bondPool).to.equal(0);
         });

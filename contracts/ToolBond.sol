@@ -82,8 +82,8 @@ interface IToolBondRegistry {
 ///         reviewers having reached the conclusion threshold. If more than half the REP of its rounds
 ///         finalized by then said yes, an appeal window opens, in which the tool's author can take it to
 ///         the DAO. Then the author's bond loses that share and the bonding household's REP burns
-///         that share of `authorSlashBps`, never more than the REP that said yes, unless the DAO ruled
-///         it isn't malware. The slashed bond goes to the reviewers who said yes, by REP.
+///         that share of `authorSlashBps` (all of the share when the DAO rules malware), unless the DAO
+///         ruled it isn't malware. The appeal, not a cap, guards against a false verdict. The slashed bond goes to the reviewers who said yes, by REP.
 ///
 ///         A commit declares how many reviews it holds, and a batch never revealed loses that many
 ///         times `degradeBps` of its REP, the most its revealed reviews could have cost, so revealing
@@ -646,7 +646,7 @@ contract ToolBond {
     /// @notice Settle a malware verdict after the appeal window and any registered appeal, or at once
     ///         after the DAO's ruling. Malware slashes the share of yes of the author's bond (all of it
     ///         when the DAO ruled malware), for the reviewers who said yes, and burns that share of
-    ///         authorSlashBps of the bonding household's REP, never more than the REP that said yes.
+    ///         authorSlashBps of the bonding household's REP.
     function settleMalware(bytes32 digest) external {
         Verdict storage v = verdicts[digest];
         if (v.appealEnds == 0 || v.settled) revert WrongStage();
@@ -666,7 +666,6 @@ contract ToolBond {
             else if (slashed > 0) substrate.transfer(address(registry), slashed);
             address liable = bondHousehold[digest];
             uint256 repSlash = rep.balanceOf(liable) * authorSlashBps / BPS * share / 1e18;
-            if (repSlash > v.yesMass) repSlash = v.yesMass;
             if (repSlash > 0) {
                 burned = rep.slash(liable, repSlash);
                 emit AuthorRepBurned(digest, liable, burned);
