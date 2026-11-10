@@ -6,13 +6,13 @@ const { autonet, registerAgent, anchorArgs } = require("./helpers/autonet");
 
 // ToolBond against the real Substrate, a RepToken and a Registry holding the charter. The deployer is
 // the Substrate's vault minter (to fund accounts with ATN), the RepToken's admin (to grant the bond
-// slasher rights) and the Registry's owner; a mock governor and a plain signer as the timelock, so the
-// timelock anchors epochs directly and the appeal window is the 7-day appealPeriod.
+// slasher rights) and the Registry's owner; a plain signer is the timelock, so it anchors epochs and
+// rules on verdicts directly.
 //
 // REP: a1 300, a2 200, a3 100, author 400 (total 1000). The charter has two value axes.
 describe("ToolBond", function () {
     let deployer, timelock, author, a1, a2, a3, outsider;
-    let substrate, rep, registry, bond, treasury, governor;
+    let substrate, rep, registry, bond, treasury;
 
     const ATN = (n) => ethers.parseUnits(String(n), 6);
     const REP = (n) => ethers.parseEther(String(n));
@@ -22,7 +22,7 @@ describe("ToolBond", function () {
     const DAY = 86400;
     const PARAMS = {
         minStake: MIN_STAKE, revealWindow: DAY, degradeBps: 1000, authorSlashBps: 10000, unbondDelay: 14 * DAY,
-        reviewerShareBps: 4000, appealPeriod: 7 * DAY,
+        reviewerShareBps: 4000,
     };
     const CHARTER = '{"axes":[{"id":"care","thesis":"Kind."},{"id":"growth","thesis":"Grows."}]}';
     const NO = -128;
@@ -101,9 +101,8 @@ describe("ToolBond", function () {
         await registry.editRegistry("jurisdiction.autonet.charter", CHARTER);
         treasury = await registry.getAddress();
         substrate = await autonet("Substrate", deployer).deploy(ethers.ZeroAddress, deployer.address, timelock.address, ethers.ZeroAddress, ethers.ZeroHash, "Test ATN", "TSTATN", 250, 5000);
-        governor = await (await ethers.getContractFactory("MockProposalGovernor")).deploy();
         bond = await (await ethers.getContractFactory("ToolBond")).deploy(await substrate.getAddress(),
-            await rep.getAddress(), treasury, await governor.getAddress(), timelock.address, PARAMS);
+            await rep.getAddress(), treasury, timelock.address, PARAMS);
         await rep.setSlasher(await bond.getAddress(), true);
 
         await registerAgent(substrate, author, "0x01");
@@ -447,10 +446,10 @@ describe("ToolBond", function () {
             return epoch;
         }
         const SHARE = 8333n * 10n ** 14n; // the close's 5/6, in bps
+        const [NONE, BY_REVIEWERS, BY_DAO] = [0n, 1n, 2n];
 
-        it("is judged when the anchored close names the tool concluded: more than half yes opens the appeal window", async function () {
-            const epoch = await malwareRound();
-            expect((await bond.getRound(DIGEST, epoch)).beforeConclusion).to.equal(true);
+        it("is judged when the anchored close names the tool concluded: more than half yes settles at once, to the treasury", async function () {
+            await malwareRound();
             await expect(bond.conclude(DIGEST, 0, 8333, [])).to.be.revertedWithCustomError(bond, "BadProof");
             await expect(bond.conclude(ethers.id("no bond"), 0, 8333, [])).to.be.revertedWithCustomError(bond, "NotBonded");
             // A two-leaf close: the tool next to a mint leaf
@@ -460,121 +459,124 @@ describe("ToolBond", function () {
             // The share is the close's: another one doesn't prove
             await expect(bond.conclude(DIGEST, index, 4000, [mintLeaf])).to.be.revertedWithCustomError(bond, "BadProof");
             await expect(bond.conclude(DIGEST, index, 10001, [mintLeaf])).to.be.revertedWithCustomError(bond, "BadProof");
-            const tx = bond.conclude(DIGEST, index, 8333, [mintLeaf]);
-            await expect(tx).to.emit(bond, "Concluded");
-            const v = await bond.verdicts(DIGEST);
-            expect(v.share).to.equal(SHARE);
-            expect(v.yesMass).to.equal(REP(500));
-            expect(v.appealEnds).to.equal(BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod));
-            await expect(bond.conclude(DIGEST, index, 8333, [mintLeaf])).to.be.revertedWithCustomError(bond, "WrongStage");
-        });
-
-        it("after the window, the bond loses the share of yes and the author's REP burns that share, for the yes reviewers", async function () {
-            await malwareRound();
-            await concludeTool();
-            await bond.connect(author).requestUnbond(DIGEST);
-            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "TooEarly");
-            await time.increase(PARAMS.unbondDelay + 1);
-            await expect(bond.connect(author).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "RoundActive");
 
             const slashed = MIN_STAKE * SHARE / ONE;
             const burned = REP(400) * SHARE / ONE;
-            await expect(bond.connect(outsider).settleMalware(DIGEST))
-                .to.emit(bond, "MalwareSettled").withArgs(DIGEST, true, slashed, burned)
+            await expect(bond.connect(outsider).conclude(DIGEST, index, 8333, [mintLeaf]))
+                .to.emit(bond, "Concluded").withArgs(DIGEST, index, SHARE)
+                .and.to.emit(bond, "MalwareSlashed").withArgs(DIGEST, BY_REVIEWERS, slashed, burned)
                 .and.to.emit(bond, "AuthorRepBurned").withArgs(DIGEST, author.address, burned);
+            const v = await bond.verdicts(DIGEST);
+            expect([v.malware, v.cleared, v.share, v.repBurned]).to.deep.equal([BY_REVIEWERS, false, SHARE, burned]);
+            expect(v.concludedAt).to.equal(await time.latest());
+            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE - slashed);
+            expect(await substrate.balanceOf(treasury)).to.equal(slashed);
             expect(await rep.balanceOf(author.address)).to.equal(REP(400) - burned);
-            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "WrongStage");
+            await expect(bond.conclude(DIGEST, index, 8333, [mintLeaf])).to.be.revertedWithCustomError(bond, "WrongStage");
 
-            // The slashed bond goes to the yes reviewers by REP, as earnings (less the service fee)
-            const epoch = 0n;
-            const before = await substrate.balanceOf(a1.address);
-            await expect(bond.claimBondShare(DIGEST, epoch, a1.address))
-                .to.emit(bond, "BondShareClaimed").withArgs(DIGEST, epoch, a1.address, slashed * 3n / 5n);
-            const share = slashed * 3n / 5n;
-            expect(await substrate.balanceOf(a1.address) - before).to.equal(share - share * 250n / 10000n);
-            await bond.claimBondShare(DIGEST, epoch, a2.address);
-            await expect(bond.claimBondShare(DIGEST, epoch, a1.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
-            await expect(bond.claimBondShare(DIGEST, epoch, a3.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
-
-            const left = await substrate.balanceOf(author.address);
+            // What's left leaves with the author as usual
+            await bond.connect(author).requestUnbond(DIGEST);
+            await time.increase(PARAMS.unbondDelay + 1);
+            const before = await substrate.balanceOf(author.address);
             await bond.connect(author).withdraw(DIGEST);
-            expect(await substrate.balanceOf(author.address) - left).to.equal(MIN_STAKE - slashed);
+            expect(await substrate.balanceOf(author.address) - before).to.equal(MIN_STAKE - slashed);
         });
 
-        it("half or less saying yes concludes clean: nothing to appeal or slash", async function () {
+        it("half or less saying yes concludes clean", async function () {
             const epoch = await epochWith([[a1, [clean()]], [a2, [malware()]], [a3, [malware()]]]); // 300 of 600
             await bond.finalize(DIGEST, epoch, 10);
-            const v = await concludeTool(DIGEST, 5000);
-            expect(v.share).to.equal(ONE / 2n);
-            expect(v.appealEnds).to.equal(0);
-            expect(v.settled).to.equal(true);
-            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "WrongStage");
-            await expect(bond.connect(timelock).daoOverrule(DIGEST, true)).to.be.revertedWithCustomError(bond, "WrongStage");
+            const index = await anchor(leaf(DIGEST, 5000));
+            await expect(bond.conclude(DIGEST, index, 5000, [])).to.not.emit(bond, "MalwareSlashed");
+            const v = await bond.verdicts(DIGEST);
+            expect([v.malware, v.share]).to.deep.equal([NONE, ONE / 2n]);
             expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
+            expect(await rep.balanceOf(author.address)).to.equal(REP(400));
+            await expect(bond.connect(timelock).clear(DIGEST)).to.be.revertedWithCustomError(bond, "WrongStage");
         });
 
         it("burns the author's REP by the share with no cap, even beyond the REP that said yes", async function () {
             const epoch = await epochWith([[a3, [malware()]]]);
             await bond.finalize(DIGEST, epoch, 10);
             await concludeTool(DIGEST, 10000);
-            await time.increase(PARAMS.appealPeriod + 1);
-            await bond.settleMalware(DIGEST);
             // share 1 and authorSlashBps 100%: all 400, though only a3's 100 said yes
             expect(await rep.balanceOf(author.address)).to.equal(0);
             expect((await bond.bonds(DIGEST)).stake).to.equal(0);
+            expect(await substrate.balanceOf(treasury)).to.equal(MIN_STAKE);
         });
 
-        it("rounds finalized after the conclusion still rate the tool but share no slashed bond", async function () {
+        it("the DAO clears a reviewers' verdict at any time, and the REP burned for it goes back to the household", async function () {
             await malwareRound();
             await concludeTool();
-            const later = await epochWith([[a1, [malware()]], [a2, [malware()]]]);
-            await bond.finalize(DIGEST, later, 10);
-            expect((await bond.getRound(DIGEST, later)).beforeConclusion).to.equal(false);
-            expect((await bond.toolRating(DIGEST, ethers.toBeHex(3, 32))).mass).to.equal(REP(600) + (await bond.getRound(DIGEST, later)).weight);
-            await time.increase(PARAMS.appealPeriod + 1);
-            await bond.settleMalware(DIGEST);
-            await expect(bond.claimBondShare(DIGEST, later, a1.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
-            await bond.claimBondShare(DIGEST, 0, a1.address);
+            const burned = REP(400) * SHARE / ONE;
+            await expect(bond.connect(outsider).clear(DIGEST)).to.be.revertedWithCustomError(bond, "NotTimelock");
+            await time.increase(365 * DAY);
+            await expect(bond.connect(timelock).clear(DIGEST))
+                .to.emit(bond, "Cleared").withArgs(DIGEST, author.address, burned);
+            expect(await rep.balanceOf(author.address)).to.equal(REP(400));
+            const v = await bond.verdicts(DIGEST);
+            expect([v.malware, v.cleared, v.share, v.repBurned]).to.deep.equal([BY_REVIEWERS, true, SHARE, 0n]);
+            await expect(bond.connect(timelock).clear(DIGEST)).to.be.revertedWithCustomError(bond, "WrongStage");
+            // The bond isn't restored here: the same proposal pays it back from the treasury
+            expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE - MIN_STAKE * SHARE / ONE);
         });
 
-        // A proposal calling daoOverrule on the tool, with its id and registerDaoProposal's arguments
-        async function overruleProposal(state, deadline, eta = 0, digest = DIGEST, ruling = false) {
-            const p = [[await bond.getAddress()], [0n], [bond.interface.encodeFunctionData("daoOverrule", [digest, ruling])],
-                ethers.id(`overrule ${digest} ${deadline}`)];
-            const id = await governor.hashProposal(...p);
-            await governor.setProposal(id, state, deadline, eta);
-            return { id, args: [DIGEST, ...p] };
-        }
-
-        it("only the author appeals, and an appeal registered in the window holds the slash until the DAO rules", async function () {
+        it("the treasury pays back a cleared author by an ordinary proposal action", async function () {
             await malwareRound();
             await concludeTool();
-            const deadline = BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod);
-            const p = await overruleProposal(1, deadline); // Active
-            await expect(bond.connect(outsider).registerDaoProposal(...p.args)).to.be.revertedWithCustomError(bond, "NotAuthor");
-            const until = deadline + 2n * BigInt(DAY); // the timelock is a signer: no delay
-            await expect(bond.connect(author).registerDaoProposal(...p.args))
-                .to.emit(bond, "DaoProposalRegistered").withArgs(DIGEST, p.id, until);
-            expect((await bond.verdicts(DIGEST)).heldUntil).to.equal(until);
+            const slashed = MIN_STAKE * SHARE / ONE;
+            // The Registry's owner (the timelock in a jurisdiction; the deployer here) sends ATN
+            await registry.transferERC20(await substrate.getAddress(), author.address, slashed);
+            expect(await substrate.balanceOf(treasury)).to.equal(0);
+        });
 
-            await time.increase(PARAMS.appealPeriod + 1);
-            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "TooEarly");
-            await expect(bond.connect(outsider).daoOverrule(DIGEST, false)).to.be.revertedWithCustomError(bond, "NotTimelock");
-            await expect(bond.connect(timelock).daoOverrule(DIGEST, false)).to.emit(bond, "MalwareRuled").withArgs(DIGEST, false);
-            await expect(bond.connect(timelock).daoOverrule(DIGEST, true)).to.be.revertedWithCustomError(bond, "WrongStage");
-            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled").withArgs(DIGEST, false, 0, 0);
+        it("the DAO designates any bonded tool malware at any time: the whole bond to the treasury, no REP burned", async function () {
+            await malwareRound();
+            await expect(bond.connect(outsider).designate(DIGEST)).to.be.revertedWithCustomError(bond, "NotTimelock");
+            await expect(bond.connect(timelock).designate(ethers.id("no bond"))).to.be.revertedWithCustomError(bond, "NotBonded");
+            await expect(bond.connect(timelock).designate(DIGEST))
+                .to.emit(bond, "MalwareSlashed").withArgs(DIGEST, BY_DAO, MIN_STAKE, 0)
+                .and.to.not.emit(bond, "AuthorRepBurned");
+            let v = await bond.verdicts(DIGEST);
+            expect([v.concludedAt, v.malware, v.cleared, v.share, v.repBurned]).to.deep.equal([0n, BY_DAO, false, ONE, 0n]);
+            expect(await substrate.balanceOf(treasury)).to.equal(MIN_STAKE);
+            expect(await rep.balanceOf(author.address)).to.equal(REP(400));
+            expect(await bond.isBonded(DIGEST)).to.equal(false);
+
+            // Its word stands over a later conclusion: recorded, nothing more
+            const index = await anchor(leaf(DIGEST, 8333));
+            await expect(bond.conclude(DIGEST, index, 8333, []))
+                .to.emit(bond, "Concluded").withArgs(DIGEST, index, ONE)
+                .and.to.not.emit(bond, "MalwareSlashed");
+            v = await bond.verdicts(DIGEST);
+            expect([v.malware, v.share]).to.deep.equal([BY_DAO, ONE]);
+            expect(await rep.balanceOf(author.address)).to.equal(REP(400));
+
+            // Cleared, and designated again
+            await expect(bond.connect(timelock).clear(DIGEST)).to.emit(bond, "Cleared").withArgs(DIGEST, author.address, 0);
+            await bond.connect(timelock).designate(DIGEST);
+            v = await bond.verdicts(DIGEST);
+            expect([v.malware, v.cleared]).to.deep.equal([BY_DAO, false]);
+        });
+
+        it("a designation over a reviewers' verdict takes the rest of the bond, and a clear gives back the REP the reviewers' verdict burned", async function () {
+            await malwareRound();
+            await concludeTool();
+            const burned = REP(400) * SHARE / ONE;
+            await expect(bond.connect(timelock).designate(DIGEST))
+                .to.emit(bond, "MalwareSlashed").withArgs(DIGEST, BY_DAO, MIN_STAKE - MIN_STAKE * SHARE / ONE, 0);
+            expect((await bond.verdicts(DIGEST)).repBurned).to.equal(burned);
+            await expect(bond.connect(timelock).clear(DIGEST)).to.emit(bond, "Cleared").withArgs(DIGEST, author.address, burned);
+            expect(await rep.balanceOf(author.address)).to.equal(REP(400));
+        });
+
+        it("a cleared tool concluding later isn't slashed again", async function () {
+            await bond.connect(timelock).designate(DIGEST);
+            await bond.connect(timelock).clear(DIGEST);
+            await bond.connect(author).bond(DIGEST, MIN_STAKE); // the author tops up
+            await malwareRound();
+            await expect(bond.conclude(DIGEST, await anchor(leaf(DIGEST, 8333)), 8333, [])).to.not.emit(bond, "MalwareSlashed");
             expect((await bond.bonds(DIGEST)).stake).to.equal(MIN_STAKE);
             expect(await rep.balanceOf(author.address)).to.equal(REP(400));
-            await expect(bond.claimBondShare(DIGEST, 0, a1.address)).to.be.revertedWithCustomError(bond, "NothingToClaim");
-        });
-
-        it("the DAO upholding the verdict settles it at once, in full: its ruling replaces the reviewers' share", async function () {
-            await malwareRound();
-            await concludeTool();
-            await bond.connect(timelock).daoOverrule(DIGEST, true);
-            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled").withArgs(DIGEST, true, MIN_STAKE, REP(400));
-            expect((await bond.bonds(DIGEST)).stake).to.equal(0);
-            expect(await rep.balanceOf(author.address)).to.equal(0);
         });
 
         it("an author can't withdraw while more than half the REP of the tool's finalized rounds says malware and it hasn't concluded", async function () {
@@ -582,45 +584,27 @@ describe("ToolBond", function () {
             await bond.connect(author).requestUnbond(DIGEST);
             await time.increase(PARAMS.unbondDelay + 1);
             await expect(bond.connect(author).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "MalwareSuspected");
-            // Once the verdict settles (here the DAO clears it), the bond can leave
+            // Once it concludes, what's left of the bond can leave
             await concludeTool();
-            await bond.connect(timelock).daoOverrule(DIGEST, false);
-            await bond.settleMalware(DIGEST);
             await bond.connect(author).withdraw(DIGEST);
         });
 
-        it("a slashed bond with no yes in a finalized round goes to the treasury", async function () {
-            await concludeTool(DIGEST, 10000); // the close counted rounds not finalized here
-            await time.increase(PARAMS.appealPeriod + 1);
-            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled").withArgs(DIGEST, true, MIN_STAKE, REP(400));
-            expect(await substrate.balanceOf(treasury)).to.equal(MIN_STAKE);
-            expect((await bond.verdicts(DIGEST)).bondPool).to.equal(0);
+        it("a DAO clear before the conclusion lifts the withdraw block", async function () {
+            await malwareRound();
+            await bond.connect(author).requestUnbond(DIGEST);
+            await time.increase(PARAMS.unbondDelay + 1);
+            await bond.connect(timelock).designate(DIGEST);
+            await expect(bond.connect(author).withdraw(DIGEST)).to.be.revertedWithCustomError(bond, "MalwareSuspected");
+            await bond.connect(timelock).clear(DIGEST);
+            await bond.connect(author).withdraw(DIGEST);
         });
 
-        it("a registered appeal that never lands holds only until it could have", async function () {
+        it("rounds finalized after the conclusion still rate the tool", async function () {
             await malwareRound();
             await concludeTool();
-            const eta = BigInt(await time.latest()) + BigInt(PARAMS.appealPeriod) * 2n;
-            const p = await overruleProposal(5, eta - 100n, eta); // Queued: held to eta plus the grace
-            await bond.connect(author).registerDaoProposal(...p.args);
-            expect((await bond.verdicts(DIGEST)).heldUntil).to.equal(eta + BigInt(DAY));
-            await time.increaseTo(eta + BigInt(DAY) - 1n);
-            await expect(bond.settleMalware(DIGEST)).to.be.revertedWithCustomError(bond, "TooEarly");
-            await expect(bond.settleMalware(DIGEST)).to.emit(bond, "MalwareSettled");
-        });
-
-        it("refuses appeals about another tool, for a dead proposal, or after the window", async function () {
-            await malwareRound();
-            await concludeTool();
-            const deadline = BigInt(await time.latest()) + 1000n;
-            const other = await overruleProposal(1, deadline, 0, ethers.id("other tool"));
-            await expect(bond.connect(author).registerDaoProposal(...other.args)).to.be.revertedWithCustomError(bond, "NotAboutTool");
-            const defeated = await overruleProposal(3, deadline);
-            await expect(bond.connect(author).registerDaoProposal(...defeated.args)).to.be.revertedWith("Proposal isn't live");
-            await time.increase(PARAMS.appealPeriod + 1);
-            const late = await overruleProposal(1, deadline + BigInt(PARAMS.appealPeriod));
-            await expect(bond.connect(author).registerDaoProposal(...late.args)).to.be.revertedWithCustomError(bond, "TooLate");
-            await expect(bond.connect(timelock).daoOverrule(DIGEST, false)).to.be.revertedWithCustomError(bond, "TooLate");
+            const later = await epochWith([[a1, [malware()]], [a2, [malware()]]]);
+            await bond.finalize(DIGEST, later, 10);
+            expect((await bond.toolRating(DIGEST, ethers.toBeHex(3, 32))).mass).to.equal(REP(600) + (await bond.getRound(DIGEST, later)).weight);
         });
     });
 
@@ -724,8 +708,6 @@ describe("ToolBond", function () {
             expect((await bond.reviewOf(tool, epoch, h4.address)).reviewer).to.equal(ethers.ZeroAddress);
             await bond.finalize(tool, epoch, 10);
             await concludeTool(tool, 10000);
-            await time.increase(PARAMS.appealPeriod + 1);
-            await bond.settleMalware(tool);
             expect(await rep.balanceOf(a3.address)).to.equal(0); // share 1, authorSlashBps 100%
         });
     });
@@ -735,8 +717,8 @@ describe("ToolBond", function () {
             await expect(bond.connect(outsider).setParams(PARAMS)).to.be.revertedWithCustomError(bond, "NotTimelock");
             await expect(bond.connect(timelock).setParams({ ...PARAMS, degradeBps: 10001 })).to.be.revertedWithCustomError(bond, "BadParams");
             await expect(bond.connect(timelock).setParams({ ...PARAMS, revealWindow: 0 })).to.be.revertedWithCustomError(bond, "BadParams");
-            await bond.connect(timelock).setParams({ ...PARAMS, appealPeriod: 3 * DAY });
-            expect(await bond.appealPeriod()).to.equal(3 * DAY);
+            await bond.connect(timelock).setParams({ ...PARAMS, unbondDelay: 3 * DAY });
+            expect(await bond.unbondDelay()).to.equal(3 * DAY);
         });
     });
 });

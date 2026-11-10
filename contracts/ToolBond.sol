@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {DaoProposalHold} from "./DaoProposalHold.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 /// @notice The parts of the autonet Substrate a bond needs: tool authorship, the ATN token and the
@@ -79,11 +78,11 @@ interface IToolBondRegistry {
 ///           left goes back to the author with the bond.
 ///
 ///         Malware is judged once per tool, when it concludes: when an anchored close names it, its
-///         reviewers having reached the conclusion threshold. If more than half the REP of its rounds
-///         finalized by then said yes, an appeal window opens, in which the tool's author can take it to
-///         the DAO. Then the author's bond loses that share and the bonding household's REP burns
-///         that share of `authorSlashBps` (all of the share when the DAO rules malware), unless the DAO
-///         ruled it isn't malware. The appeal, not a cap, guards against a false verdict. The slashed bond goes to the reviewers who said yes, by REP.
+///         reviewers having reached the conclusion threshold, with the share of its reviewing REP that
+///         said yes. More than half settles at once: the author's bond loses that share to the treasury
+///         and the bonding household's REP burns that share of `authorSlashBps`. The DAO, by ordinary
+///         proposal, can clear any malware verdict at any time (the REP burned here goes back) or
+///         designate any bonded tool malware (its whole bond to the treasury).
 ///
 ///         A commit declares how many reviews it holds, and a batch never revealed loses that many
 ///         times `degradeBps` of its REP, the most its revealed reviews could have cost, so revealing
@@ -138,7 +137,6 @@ contract ToolBond {
         uint8 malware;
         bool claimed;
         bool bountied;             // takes a part of the round's bounty
-        bool bondClaimed;          // took its share of a slashed bond
         uint64 accuracy;           // 1e18 scale; UNINFORMATIVE with no other review to measure it against
         uint128 weight;
         bytes16 scores;            // charter axes as revealed, NO_SCORE where unscored
@@ -146,7 +144,6 @@ contract ToolBond {
 
     struct Round {
         Stage stage;
-        bool beforeConclusion;     // finalized before the tool concluded: its yes votes share a slashed bond
         uint32 processed;          // reviews processed by finalize
         uint256 weight;            // REP behind the round's reviews
         uint256 repPool;           // REP slashed from reviewers this round
@@ -158,16 +155,13 @@ contract ToolBond {
         Review[] reviews;
     }
 
-    /// @notice A tool's malware verdict, formed once when it concludes
+    /// @notice A tool's malware verdict: the reviewers' at conclusion, or the DAO's at any time
     struct Verdict {
-        uint48 concludedAt;
-        uint48 appealEnds;         // 0 unless more than half said malware
-        uint48 heldUntil;          // the latest moment a registered DAO appeal could land
-        uint8 ruling;              // the DAO's: 0 none, 1 malware, 2 not malware
-        bool settled;
-        uint64 share;              // REP-weighted share of yes at conclusion, 1e18 scale
-        uint256 yesMass;           // REP that said yes, in rounds finalized before conclusion
-        uint256 bondPool;          // the slashed bond, for those reviewers
+        uint48 concludedAt;        // when the close named it concluded, 0 before
+        uint8 malware;             // NONE, BY_REVIEWERS or BY_DAO
+        bool cleared;              // the DAO cleared the verdict
+        uint64 share;              // share of yes, 1e18 scale: the close's, or all of it by the DAO
+        uint256 repBurned;         // the household's REP burned for it here, not yet given back
     }
 
     struct Axis {
@@ -184,6 +178,10 @@ contract ToolBond {
     uint256 public constant NOVELTY = 2;
     uint256 public constant MALWARE = 3;
     uint256 public constant FIELDS = 4;
+    /// @notice Verdict.malware: who found the tool malware
+    uint8 public constant NONE = 0;
+    uint8 public constant BY_REVIEWERS = 1;
+    uint8 public constant BY_DAO = 2;
     int8 public constant NO_SCORE = -128;
     uint64 private constant UNINFORMATIVE = type(uint64).max;
     bytes16 private constant NO_SCORES = bytes16(0x80808080808080808080808080808080); // NO_SCORE on every axis
@@ -200,7 +198,6 @@ contract ToolBond {
     IToolBondSubstrate public immutable substrate;
     IToolBondRep public immutable rep;
     IToolBondRegistry public immutable registry; // the treasury, the charter and review settings
-    address public immutable governor; // with the timelock, how long a registered appeal holds a verdict
     address public immutable timelock;
 
     uint256 public minStake;         // ATN base units behind each tool
@@ -209,7 +206,6 @@ contract ToolBond {
     uint256 public authorSlashBps;   // REP the author of malware loses (scaled by the share of yes)
     uint256 public unbondDelay;      // seconds a bond stays reviewable after its author asks to leave
     uint256 public reviewerShareBps; // share of a tool's mints its reviewers split (the daemon applies it)
-    uint256 public appealPeriod;     // seconds the author has to register a DAO appeal of a malware verdict
 
     mapping(bytes32 => Bond) public bonds;
     mapping(bytes32 => Verdict) public verdicts;
@@ -247,15 +243,12 @@ contract ToolBond {
     event Forfeited(uint256 indexed epoch, address indexed agent, uint256 rep);
     event Finalized(bytes32 indexed digest, uint256 indexed epoch, uint256 repPool);
     event Claimed(bytes32 indexed digest, uint256 indexed epoch, address indexed reviewer, uint256 rep);
-    event Concluded(bytes32 indexed digest, uint256 anchorIndex, uint256 malwareShare, uint48 appealEnds);
-    event DaoProposalRegistered(bytes32 indexed digest, uint256 indexed proposalId, uint48 heldUntil);
-    event MalwareRuled(bytes32 indexed digest, bool malware);
-    event MalwareSettled(bytes32 indexed digest, bool malware, uint256 bondSlashed, uint256 repBurned);
+    event Concluded(bytes32 indexed digest, uint256 anchorIndex, uint256 malwareShare);
+    event MalwareSlashed(bytes32 indexed digest, uint8 by, uint256 bondSlashed, uint256 repBurned);
     event AuthorRepBurned(bytes32 indexed digest, address indexed household, uint256 amount);
-    event BondShareClaimed(bytes32 indexed digest, uint256 indexed epoch, address indexed reviewer, uint256 amount);
+    event Cleared(bytes32 indexed digest, address indexed household, uint256 repReturned);
     event ParamsSet(uint256 minStake, uint256 revealWindow, uint256 degradeBps, uint256 authorSlashBps,
         uint256 unbondDelay, uint256 reviewerShareBps);
-    event AppealPeriodSet(uint256 appealPeriod);
 
     error NotAuthor();
     error NotTimelock();
@@ -271,7 +264,6 @@ contract ToolBond {
     error BadProof();
     error NothingToClaim();
     error BadParams();
-    error NotAboutTool();
     error MalwareSuspected();
 
     struct Params {
@@ -281,14 +273,12 @@ contract ToolBond {
         uint256 authorSlashBps;
         uint256 unbondDelay;
         uint256 reviewerShareBps;
-        uint256 appealPeriod;
     }
 
-    constructor(address _substrate, address _rep, address _registry, address _governor, address _timelock, Params memory p) {
+    constructor(address _substrate, address _rep, address _registry, address _timelock, Params memory p) {
         substrate = IToolBondSubstrate(_substrate);
         rep = IToolBondRep(_rep);
         registry = IToolBondRegistry(_registry);
-        governor = _governor;
         timelock = _timelock;
         _setParams(p);
     }
@@ -322,10 +312,10 @@ contract ToolBond {
     }
 
     function getRound(bytes32 digest, uint256 epoch) external view returns (
-        Stage stage, uint256 weight, uint256 reviewCount, bool beforeConclusion
+        Stage stage, uint256 weight, uint256 reviewCount
     ) {
         Round storage r = _rounds[digest][epoch];
-        return (r.stage, r.weight, r.reviews.length, r.beforeConclusion);
+        return (r.stage, r.weight, r.reviews.length);
     }
 
     /// @notice A round's bounty: the tool's bounty when it started finalizing, the REP a tool needs to
@@ -426,10 +416,11 @@ contract ToolBond {
         if (b.unbondRequestedAt == 0) revert NotBonded();
         if (block.timestamp < b.unbondRequestedAt + unbondDelay) revert TooEarly();
         Verdict storage v = verdicts[digest];
-        if (b.pending != 0 || (v.appealEnds != 0 && !v.settled)) revert RoundActive();
-        // Caught before the verdict: more than half the REP of its finalized rounds says malware
+        if (b.pending != 0) revert RoundActive();
+        // Caught before the verdict: more than half the REP of its finalized rounds says malware,
+        // unless the DAO cleared it
         Axis storage m = _toolAxes[digest][bytes32(MALWARE)];
-        if (v.concludedAt == 0 && uint256(int256(m.sum)) / 100 * 2 > m.mass) revert MalwareSuspected();
+        if (v.concludedAt == 0 && !v.cleared && uint256(int256(m.sum)) / 100 * 2 > m.mass) revert MalwareSuspected();
         uint256 amount = b.stake;
         uint256 bounty = b.bounty;
         b.stake = 0;
@@ -544,7 +535,6 @@ contract ToolBond {
             r.bountyPool = pool;
         }
         r.stage = Stage.Done;
-        r.beforeConclusion = verdicts[digest].concludedAt == 0;
         bonds[digest].pending--;
         emit Finalized(digest, epoch, r.repPool);
     }
@@ -581,7 +571,9 @@ contract ToolBond {
 
     /// @notice Record that a tool concluded, from its leaf in an anchored close's agentMintRoot, with
     ///         the close's share of the reviewing REP that said malware. Anyone can, once per tool. More
-    ///         than half opens the appeal window.
+    ///         than half settles at once: the bond loses that share to the treasury and the bonding
+    ///         household's REP burns that share of authorSlashBps. Once the DAO has designated the tool
+    ///         (or cleared that), its word stands: the conclusion is recorded and nothing more.
     function conclude(bytes32 digest, uint256 anchorIndex, uint256 shareBps, bytes32[] calldata proof) external {
         if (bonds[digest].author == address(0)) revert NotBonded();
         Verdict storage v = verdicts[digest];
@@ -596,101 +588,67 @@ contract ToolBond {
         if (node != substrate.getAnchor(anchorIndex).agentMintRoot) revert BadProof();
 
         v.concludedAt = uint48(block.timestamp);
-        v.share = uint64(shareBps * 1e18 / BPS);
-        // The REP that said yes in the rounds finalized so far: who shares a slashed bond
-        v.yesMass = uint256(int256(_toolAxes[digest][bytes32(MALWARE)].sum)) / 100;
-        if (shareBps * 2 > BPS) v.appealEnds = uint48(block.timestamp + appealPeriod);
-        else v.settled = true;
-        emit Concluded(digest, anchorIndex, v.share, v.appealEnds);
-    }
-
-    /// @notice The tool's author appeals a malware verdict: registers a live DAO proposal calling
-    ///         daoOverrule on it, before the appeal window ends. The verdict then can't settle until the
-    ///         latest registered proposal could no longer land. One timestamp per tool, so filing many
-    ///         costs nothing extra and none holds past its own lifecycle.
-    function registerDaoProposal(
-        bytes32 digest,
-        address[] calldata targets,
-        uint256[] calldata values,
-        bytes[] calldata calldatas,
-        bytes32 descriptionHash
-    ) external {
-        Verdict storage v = verdicts[digest];
-        if (v.appealEnds == 0 || v.settled || v.ruling != 0) revert WrongStage();
-        if (block.timestamp > v.appealEnds) revert TooLate();
-        if (msg.sender != bonds[digest].author && msg.sender != bondHousehold[digest]) revert NotAuthor();
-        bool about;
-        for (uint256 i = 0; i < targets.length; i++) {
-            if (targets[i] != address(this) || calldatas[i].length < 68) continue;
-            if (bytes4(calldatas[i][:4]) != this.daoOverrule.selector) continue;
-            if (bytes32(calldatas[i][4:36]) == digest) about = true;
-        }
-        if (!about) revert NotAboutTool();
-        uint256 id = DaoProposalHold.proposalId(governor, targets, values, calldatas, descriptionHash);
-        uint256 until = DaoProposalHold.holdUntil(governor, timelock, id);
-        if (until > v.heldUntil) v.heldUntil = uint48(until);
-        emit DaoProposalRegistered(digest, id, uint48(until));
-    }
-
-    /// @notice The DAO's ruling on a malware verdict, by proposal, within the appeal window or, once
-    ///         registered in time, whenever it lands before settlement. Final.
-    function daoOverrule(bytes32 digest, bool malware) external {
-        if (msg.sender != timelock) revert NotTimelock();
-        Verdict storage v = verdicts[digest];
-        if (v.appealEnds == 0 || v.settled || v.ruling != 0) revert WrongStage();
-        if (block.timestamp > v.appealEnds && v.heldUntil == 0) revert TooLate();
-        v.ruling = malware ? 1 : 2;
-        emit MalwareRuled(digest, malware);
-    }
-
-    /// @notice Settle a malware verdict after the appeal window and any registered appeal, or at once
-    ///         after the DAO's ruling. Malware slashes the share of yes of the author's bond (all of it
-    ///         when the DAO ruled malware), for the reviewers who said yes, and burns that share of
-    ///         authorSlashBps of the bonding household's REP.
-    function settleMalware(bytes32 digest) external {
-        Verdict storage v = verdicts[digest];
-        if (v.appealEnds == 0 || v.settled) revert WrongStage();
-        if (v.ruling == 0 && (block.timestamp <= v.appealEnds || block.timestamp <= v.heldUntil)) revert TooEarly();
-        v.settled = true;
-        bool malware = v.ruling != 2;
-        uint256 slashed;
-        uint256 burned;
-        if (malware) {
-            // The DAO's ruling replaces the reviewers' answer
-            uint256 share = v.ruling == 1 ? 1e18 : v.share;
-            Bond storage b = bonds[digest];
-            slashed = b.stake * share / 1e18;
-            b.stake -= slashed;
-            // Nobody on chain to share it (no yes in a finalized round): the treasury's
-            if (v.yesMass > 0) v.bondPool = slashed;
-            else if (slashed > 0) substrate.transfer(address(registry), slashed);
-            address liable = bondHousehold[digest];
-            uint256 repSlash = rep.balanceOf(liable) * authorSlashBps / BPS * share / 1e18;
-            if (repSlash > 0) {
-                burned = rep.slash(liable, repSlash);
-                emit AuthorRepBurned(digest, liable, burned);
+        if (v.malware == NONE) {
+            v.share = uint64(shareBps * 1e18 / BPS);
+            if (shareBps * 2 > BPS) {
+                v.malware = BY_REVIEWERS;
+                _slash(digest, v, true);
             }
         }
-        emit MalwareSettled(digest, malware, slashed, burned);
+        emit Concluded(digest, anchorIndex, v.share);
     }
 
-    /// @notice A yes review's share of a tool's slashed bond, by REP, from a round finalized before the
-    ///         tool concluded. Paid through the Substrate's service rail, so it counts as the reviewer's
-    ///         earnings. Anyone can claim it for the reviewer.
-    function claimBondShare(bytes32 digest, uint256 epoch, address reviewer) external {
-        Verdict storage vd = verdicts[digest];
-        Round storage r = _rounds[digest][epoch];
-        uint256 idx = _reviewIndex[digest][epoch][reviewer];
-        if (vd.bondPool == 0 || !r.beforeConclusion || idx == 0) revert NothingToClaim();
-        Review storage v = r.reviews[idx - 1];
-        if (v.malware != 1 || v.weight == 0 || v.bondClaimed) revert NothingToClaim();
-        v.bondClaimed = true;
-        uint256 amount = vd.bondPool * v.weight / vd.yesMass;
-        if (amount > 0) substrate.payForService(reviewer, amount, digest);
-        emit BondShareClaimed(digest, epoch, reviewer, amount);
+    /// @notice The DAO clears a tool's malware verdict, the reviewers' or its own, at any time, by
+    ///         proposal. The REP burned here for the tool goes back to the bonding household. The bond
+    ///         and the author's lost payment come back from the treasury as other actions of the same
+    ///         proposal.
+    function clear(bytes32 digest) external {
+        if (msg.sender != timelock) revert NotTimelock();
+        Verdict storage v = verdicts[digest];
+        if (v.malware == NONE || v.cleared) revert WrongStage();
+        v.cleared = true;
+        uint256 back = v.repBurned;
+        v.repBurned = 0;
+        address household = bondHousehold[digest];
+        // Out of this contract's slashed credit, which holds what it burned
+        if (back > 0) rep.reassign(household, back);
+        emit Cleared(digest, household, back);
+    }
+
+    /// @notice The DAO designates a bonded tool malware at any time, by proposal, concluded or not:
+    ///         share 100%, the whole bond to the treasury. It burns no REP; a proposal that wants that
+    ///         burns it on the RepToken.
+    function designate(bytes32 digest) external {
+        if (msg.sender != timelock) revert NotTimelock();
+        if (bonds[digest].author == address(0)) revert NotBonded();
+        Verdict storage v = verdicts[digest];
+        v.malware = BY_DAO;
+        v.cleared = false;
+        v.share = 1e18;
+        _slash(digest, v, false);
     }
 
     // ── Internals ────────────────────────────────────────────────────────────
+
+    /// @dev The bond loses the verdict's share to the treasury; with burnRep, the bonding household's
+    ///      REP burns that share of authorSlashBps
+    function _slash(bytes32 digest, Verdict storage v, bool burnRep) private {
+        Bond storage b = bonds[digest];
+        uint256 slashed = b.stake * v.share / 1e18;
+        b.stake -= slashed;
+        if (slashed > 0) substrate.transfer(address(registry), slashed);
+        uint256 burned;
+        if (burnRep) {
+            address liable = bondHousehold[digest];
+            uint256 repSlash = rep.balanceOf(liable) * authorSlashBps / BPS * v.share / 1e18;
+            if (repSlash > 0) {
+                burned = rep.slash(liable, repSlash);
+                v.repBurned += burned;
+                emit AuthorRepBurned(digest, liable, burned);
+            }
+        }
+        emit MalwareSlashed(digest, v.malware, slashed, burned);
+    }
 
     function _startEpoch(uint256 epoch, Epoch storage e) private {
         uint256 snapshot = epoch == 0 ? substrate.deployedAt() : substrate.getAnchor(epoch - 1).timestamp;
@@ -777,7 +735,7 @@ contract ToolBond {
         }
         r.reviews.push(Review({
             reviewer: agent, correctness: ri.correctness, simplicity: ri.simplicity, novelty: ri.novelty,
-            malware: ri.malware, claimed: false, bountied: false, bondClaimed: false, accuracy: 0,
+            malware: ri.malware, claimed: false, bountied: false, accuracy: 0,
             weight: uint128(weight), scores: ri.scores.length == 0 ? NO_SCORES : bytes16(ri.scores)
         }));
         _reviewIndex[ri.digest][epoch][agent] = r.reviews.length;
@@ -885,8 +843,6 @@ contract ToolBond {
         authorSlashBps = p.authorSlashBps;
         unbondDelay = p.unbondDelay;
         reviewerShareBps = p.reviewerShareBps;
-        appealPeriod = p.appealPeriod;
-        emit AppealPeriodSet(p.appealPeriod);
         emit ParamsSet(p.minStake, p.revealWindow, p.degradeBps, p.authorSlashBps, p.unbondDelay, p.reviewerShareBps);
     }
 }

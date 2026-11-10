@@ -16,7 +16,7 @@ Setters are `onlyGovernance`: the Economy's `admin` until `setDaoAddresses` runs
 | `coolingOffPeriod` | seconds | 86400 (1 day) | at least `minCoolingOffPeriod` | `setCoolingOffPeriod(uint)` | Once, when parties are set |
 | `backersVoteQuorumBps` | bps of `totalLocked` | 7000 (70%) | 5000 to 9900 | `setBackersVoteQuorum(uint)` | On each backer vote |
 | `projectThreshold` | REP (18 decimals) | 0 | none | `setProjectThreshold(uint)` | REP balance to create a project |
-| `appealPeriod` | seconds | 604800 (7 days) | none | `setAppealPeriod(uint)` | At ruling, as set; also the arbiter's exclusive window. Projects only; ContentCourt and ToolBond have their own `appealPeriod` |
+| `appealPeriod` | seconds | 604800 (7 days) | none | `setAppealPeriod(uint)` | At ruling, as set; also the arbiter's exclusive window. Projects only; ContentCourt has its own `appealPeriod` |
 | `arbitrationTimeout` | seconds | 2592000 (30 days) | none | `setArbitrationTimeout(uint)` | When a dispute starts, as `arbitrationDeadline`; after it anyone can close an unruled dispute with a full refund |
 | `maxImmediateBps` | bps per contribution | 2000 (20%) | 0 to 5000 | `setMaxImmediateBps(uint)` | On each contribution |
 | implementations | addresses | unset | none | `setImplementations(native, erc20)` | New projects only |

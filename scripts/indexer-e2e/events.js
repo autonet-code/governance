@@ -316,7 +316,7 @@ async function main() {
         modules: { autonet: {
             substrate: { challengeWindow: 3600, charter: CHARTER, epochRules: "2", genesisRoot: ethers.ZeroHash, serviceFeeBps: 250, feeTreasuryBps: 5000 },
             toolBond: { minStake: 100_000_000n, revealWindow: 86400, degradeBps: 1000, authorSlashBps: 10000,
-                unbondDelay: 30 * 86400, reviewerShareBps: 4000, appealPeriod: 120 },
+                unbondDelay: 30 * 86400, reviewerShareBps: 4000 },
         } },
         keys: [`jurisdiction.parity.${usdcAddr.toLowerCase()}`], values: [(10n ** 30n).toString()],
     });

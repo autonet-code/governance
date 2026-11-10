@@ -63,8 +63,9 @@ describe("AutonetSetup", function () {
         expect(await bond.reviewerShareBps()).to.equal(4000n);
         expect(await bond.registry()).to.equal(j.core.registry);
         expect(await bond.timelock()).to.equal(j.core.timelock);
-        expect(await bond.governor()).to.equal(j.core.governor);
-        expect(await bond.timelock()).to.equal(j.core.timelock);
+        // A DAO clear's refunds: the timelock owns the treasury and administers the RepToken
+        expect(await j.registry.owner()).to.equal(j.core.timelock);
+        expect(await (await ethers.getContractAt("RepToken", j.core.token)).admin()).to.equal(j.core.timelock);
 
         expect(await j.registry.getRegistryValue("jurisdiction.autonet.substrate")).to.equal(d.substrate.toLowerCase());
         expect(await j.registry.getRegistryValue("jurisdiction.autonet.economy")).to.equal("");

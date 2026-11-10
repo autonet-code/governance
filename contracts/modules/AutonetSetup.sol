@@ -114,7 +114,7 @@ contract AutonetSetup is ModuleSetup {
         if (d.substrate != substrateAddr) revert CreateFailed();
 
         d.repClaim = address(new AutonetRepClaim(d.substrate, core.token, new address[](0), new uint256[](0)));
-        d.toolBond = _create(abi.encodePacked(_read(toolBondCode), abi.encode(d.substrate, core.token, core.registry, core.governor, core.timelock, b)));
+        d.toolBond = _create(abi.encodePacked(_read(toolBondCode), abi.encode(d.substrate, core.token, core.registry, core.timelock, b)));
         d.serviceRegistry = _create(abi.encodePacked(_read(serviceRegistryCode), abi.encode(d.substrate)));
         d.paymentChannel = _create(abi.encodePacked(_read(paymentChannelCode), abi.encode(d.substrate, s.challengeWindow)));
 

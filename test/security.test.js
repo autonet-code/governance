@@ -60,10 +60,7 @@ describe("Security", function () {
             // Verdicts can't hold for a DAO proposal, so their window fits one (appealPeriod is 120 s here);
             // projects hold instead
             const court = await ethers.getContractAt("ContentCourt", j.installs.content_court.module);
-            const bond = await ethers.getContractAt("ToolBond", j.installs.autonet.prepared.helpers[2]);
             expect(await court.appealWindow()).to.equal(lifecycle + 2n * 86400n);
-            // ToolBond holds for a registered overrule instead, like projects
-            expect(await bond.appealPeriod()).to.equal(120n);
         });
 
         it("bounds the author and arbitration fees", async function () {
