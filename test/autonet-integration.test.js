@@ -158,7 +158,7 @@ describe("Autonet integration (real Substrate and ServiceMarket)", function () {
         const voucher = await buyer.signTypedData(domain, { Voucher: [{ name: "channelId", type: "uint256" }, { name: "cumulativeAmount", type: "uint256" }] },
             { channelId: 1, cumulativeAmount: ATN(20) });
         const earnedBefore = await substrate.serviceEarnings(agent.address);
-        await channel.connect(agent).closeChannel(1, ATN(20), voucher);
+        await channel.connect(agent).closeChannel(1, ATN(20), voucher, ATN(20));
 
         // 5% fee after the retune
         expect(await substrate.serviceEarnings(agent.address)).to.equal(earnedBefore + ATN(19));
