@@ -29,9 +29,7 @@ module.exports = {
     ganache: {
       url: "http://127.0.0.1:7545",
       chainId: 1337,
-      accounts: {
-        mnemonic: "fruit insect love learn tower opera divide link intact always garment foam",
-      }
+      accounts: process.env.GANACHE_MNEMONIC ? { mnemonic: process.env.GANACHE_MNEMONIC } : [],  // local Ganache only
     },
     sepolia: {
       url: `https://sepolia.infura.io/v3/${INFURA_API_KEY}`,
