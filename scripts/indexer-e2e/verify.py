@@ -1,20 +1,16 @@
-# Indexer end-to-end, phase C: compare what the indexer wrote to the Firestore EMULATOR with
+# Indexer end-to-end, phase C: compare what the indexer wrote to its document store (E2E_STORE) with
 # what events.js did on-chain (out/manifest.json). Prints PASS/FAIL lines; exit code 1 on any FAIL.
-#   python scripts/indexer-e2e/verify.py <indexer dir>
+#   python scripts/indexer-e2e/verify.py <werule-indexer dir>
 import json, os, sys
-os.environ["FIRESTORE_EMULATOR_HOST"] = os.environ.get("E2E_EMULATOR_HOST") or "127.0.0.1:8080"  # never touch production
-import firebase_admin
-from firebase_admin import credentials, firestore
-from google.cloud.firestore_v1.base_query import FieldFilter
 
 indexer_dir = sys.argv[1]
+sys.path.insert(0, os.path.abspath(indexer_dir))
+import docstore
+from docstore import FieldFilter
+
 here = os.path.dirname(__file__)
 manifest = json.load(open(os.path.join(here, "out", "manifest.json")))
-
-def client(name, cred):
-    return firestore.client(firebase_admin.initialize_app(credentials.Certificate(os.path.join(indexer_dir, cred)), name=name))
-
-hb = client("homebase", "homebase.json")
+hb = docstore.Client(os.environ["E2E_STORE"])
 failures = 0
 
 def check(label, ok, detail=""):

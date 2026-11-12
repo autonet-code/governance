@@ -1,43 +1,42 @@
 #!/bin/bash
-# Indexer end-to-end on its own hardhat node and Firestore emulator. It deploys, wipes the
-# emulator and moves the chain's clock, so it never runs against the owner's local stack:
+# Indexer end-to-end on its own hardhat node and a scratch document store. It deploys, wipes the store
+# and moves the chain's clock, so it never runs against the owner's local stack:
 #   npx hardhat node --port 8546
-#   firebase emulators:start --only firestore (on 8081)
-#   E2E_RPC_URL=http://127.0.0.1:8546 E2E_EMULATOR_HOST=127.0.0.1:8081 scripts/indexer-e2e/run.sh <indexer dir> [--replay]
-# Both variables are required, and 8545/8080 are refused unless E2E_ALLOW_MAIN_STACK=1.
-# It stops only the indexer it started.
+#   E2E_RPC_URL=http://127.0.0.1:8546 scripts/indexer-e2e/run.sh <werule-indexer dir> [--replay]
+# 8545 is refused unless E2E_ALLOW_MAIN_STACK=1. The store (out/store.sqlite) and the network file
+# (out/networks-src/networks/Localhost.json) are the run's own. It stops only the indexer it started.
 set -e
-INDEXER_DIR="${1:?indexer dir}"
+INDEXER_DIR="${1:?werule-indexer dir}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CONTRACTS="$HERE/../.."
 LOG="$HERE/out/indexer.log"
 mkdir -p "$HERE/out"
 : "${E2E_RPC_URL:?set E2E_RPC_URL to the e2e node, e.g. http://127.0.0.1:8546}"
-: "${E2E_EMULATOR_HOST:?set E2E_EMULATOR_HOST to the e2e emulator, e.g. 127.0.0.1:8081}"
-case "$E2E_RPC_URL $E2E_EMULATOR_HOST" in
-    *:8545*|*:8080*) if [ "$E2E_ALLOW_MAIN_STACK" != "1" ]; then
-        echo "Refusing to run against the main local stack (8545/8080); use other ports" >&2; exit 2; fi ;;
+case "$E2E_RPC_URL" in
+    *:8545*) if [ "$E2E_ALLOW_MAIN_STACK" != "1" ]; then
+        echo "Refusing to run against the main local chain (8545); use another port" >&2; exit 2; fi ;;
 esac
-export E2E_RPC_URL E2E_EMULATOR_HOST
-export LOCAL_FIRESTORE_EMULATOR_HOST="$E2E_EMULATOR_HOST"
-export LOCAL_RPC_URL="$E2E_RPC_URL"
-if [ "$E2E_EMULATOR_HOST" = "127.0.0.1:8080" ]; then MATCH='*app.py localhost*'; else MATCH='*app.py localhost*indexer-e2e*'; fi
+export E2E_RPC_URL
+# Python on Windows needs C:/... paths, not Git Bash /c/... ones
+WIN_OUT="$(cygpath -m "$HERE/out" 2>/dev/null || echo "$HERE/out")"
+export E2E_STORE="$WIN_OUT/store.sqlite" E2E_NETWORKS="$WIN_OUT/networks-src"
+export DOCSTORE_PATH="$E2E_STORE" NETWORKS_SOURCE="dir:$E2E_NETWORKS"
+MATCH='*app.py Localhost*indexer-e2e*'
 
 stop_indexer() {
     powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '$MATCH' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" || true
 }
 start_indexer() {
-    # autonet too: a jurisdiction's agent events reach its DAO's activity feed through it
-    (cd "$INDEXER_DIR" && PYTHONUNBUFFERED=1 python -u app.py localhost homebase trustless autonet --no-alerts --instance-id indexer-e2e > "$1" 2>&1 &)
+    # every module: DAOs, projects, and the agents' events in their DAOs' activity feeds
+    (cd "$INDEXER_DIR" && PYTHONUNBUFFERED=1 python -u app.py Localhost --no-alerts --instance-id indexer-e2e > "$1" 2>&1 &)
 }
 
 stop_indexer
-# DAOs and their Economy projects all live in homebase-6907d
-curl -s -X DELETE "http://$E2E_EMULATOR_HOST/emulator/v1/projects/homebase-6907d/databases/(default)/documents" > /dev/null
+rm -f "$E2E_STORE" "$E2E_STORE-wal" "$E2E_STORE-shm"
 
 cd "$CONTRACTS"
 npx hardhat run scripts/indexer-e2e/deploy.js --network localhost > /dev/null
-python "$HERE/seed_emulator.py" "$INDEXER_DIR"
+python "$HERE/seed_network.py"
 
 start_indexer "$LOG"
 until grep -q "Starting from block" "$LOG" 2>/dev/null; do sleep 1; done
@@ -74,10 +73,9 @@ python "$HERE/verify.py" "$INDEXER_DIR" || true
 if [ "$2" = "--replay" ]; then
     python - "$INDEXER_DIR" <<'PY'
 import os, sys
-os.environ["FIRESTORE_EMULATOR_HOST"] = os.environ.get("E2E_EMULATOR_HOST") or "127.0.0.1:8080"
-import firebase_admin
-from firebase_admin import credentials, firestore
-db = firestore.client(firebase_admin.initialize_app(credentials.Certificate(os.path.join(sys.argv[1], "homebase.json"))))
+sys.path.insert(0, os.path.abspath(sys.argv[1]))
+import docstore
+db = docstore.Client(os.environ["E2E_STORE"])
 db.collection("contracts").document("Localhost").set({"lastSyncedBlock": 1, "projectsLastSyncedBlock": 1}, merge=True)
 print("checkpoints rewound to block 1")
 PY

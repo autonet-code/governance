@@ -99,17 +99,17 @@ npx hardhat run scripts/e2eLocal.js --network localhost
 
 Deploys the factory suite, creates an economy DAO, sets parities with werule's encoding (`parity * 10^(36 - decimals)`), runs a native and a 6-decimal ERC20 project with immediate release, and checks: Economy admin frozen, cooling-off at least the fixed minimum, treasury platform fees, and contractor and backer REP. Prints `PASS`/`FAIL` per check and exits non-zero on any failure.
 
-### `scripts/indexer-e2e/` (contracts plus indexer plus Firestore emulator)
+### `scripts/indexer-e2e/` (contracts plus the werule indexer)
 
-**Being ported** to JurisdictionFactory and the module setups, like `e2eLocal.js`; the descriptions below are of the harness's shape. All Firestore writes go to the emulator (`FIRESTORE_EMULATOR_HOST=127.0.0.1:8080` is forced), never production.
+Runs the werule indexer ([EightRice/werule-indexer](https://github.com/EightRice/werule-indexer)) against its own hardhat node and a scratch document store, never the main local stack (hardhat 8545 is refused).
 
 | File | Role |
 |------|------|
-| `run.sh <indexer dir> [--replay]` | Needs `npx hardhat node` and `firebase emulators:start --only firestore` running. Clears both emulator projects and the indexer's local state, runs `deploy.js` and `seed_emulator.py`, starts the indexer (`app.py localhost homebase trustless --no-alerts`), runs `events.js`, waits until the indexer log is quiet for 15 s, then runs `verify.py`. `--replay` rewinds both checkpoints to block 1, restarts the indexer and verifies again to catch double counting |
-| `deploy.js` | Deploys the factories and project implementations to the local node; writes `out/deployment.json` in the Firestore `contracts/<network>` shape |
-| `seed_emulator.py <indexer dir>` | Writes `out/deployment.json` to `contracts/Localhost` in both emulator projects (`homebase`, `trustless`) |
-| `events.js` | Emits every DAO and trustless event type the indexer handles (standard and economy DAOs; proposals through execute; delegation; project flows) and records expectations in `out/manifest.json` |
-| `verify.py <indexer dir>` | Compares emulator documents (`idaosLocalhost`, members, proposals, votes, registry, economy and project docs) with the manifest. `PASS`/`FAIL` lines, exit 1 on any failure |
+| `run.sh <werule-indexer dir> [--replay]` | Needs `npx hardhat node --port 8546` and `E2E_RPC_URL=http://127.0.0.1:8546`. Wipes the run's store (`out/store.sqlite`), runs `deploy.js` and `seed_network.py`, starts the indexer (`app.py Localhost --no-alerts`), runs `events.js` and `legacy.js`, waits until the indexer log is quiet, then runs `verify.py`; then the downtime phase. `--replay` rewinds both checkpoints to block 1, restarts the indexer and verifies again to catch double counting |
+| `deploy.js` | Deploys the factories and project implementations to the local node; writes `out/deployment.json` in the network file's shape (the `contracts/<network>` document) |
+| `seed_network.py` | Writes `out/deployment.json` as the network file `out/networks-src/networks/Localhost.json`, which the indexer reads through `NETWORKS_SOURCE` |
+| `events.js` | Emits every DAO and project event type the indexer handles (standard and economy DAOs; proposals through execute; delegation; project flows) and records expectations in `out/manifest.json` |
+| `verify.py <werule-indexer dir>` | Compares the store's documents (`idaosLocalhost`, members, proposals, votes, registry, economy and project docs, activity) with the manifest. `PASS`/`FAIL` lines, exit 1 on any failure |
 | `ui.sh <indexer dir> <app dir> <integration test>` | UI write flows. Needs the emulator and chromedriver (port 4444). Restarts the hardhat node so chain time matches the browser, deploys, seeds, starts the indexer with `--skip-historical`, runs `ui_setup.js`, then `flutter drive` on Chrome with the addresses passed as `--dart-define`s |
 | `ui_setup.js` | On a fresh chain without time travel: an economy DAO for trustless flows and a standard DAO with an open proposal for werule voting. Writes `out/ui.json` |
 

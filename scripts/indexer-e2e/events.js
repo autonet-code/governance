@@ -10,12 +10,14 @@ const dep = require("./out/deployment.json");
 const manifest = { daos: {}, projects: {} };
 
 const eventArgs = (receipt, name) => receipt.logs.find(l => l.eventName === name)?.args;
-// A project doc as the indexer wrote it to the Firestore emulator (homebase), or null
-const EMULATOR = process.env.E2E_EMULATOR_HOST || "127.0.0.1:8080";
+// A project doc as the indexer wrote it to its document store (E2E_STORE), or null
+const { execFileSync } = require("child_process");
+const READ_DOC = "import sqlite3,sys\nr=sqlite3.connect(sys.argv[1]).execute('SELECT data FROM docs WHERE path=?',(sys.argv[2],)).fetchone()\nprint(r[0] if r else 'null')";
 async function projectDoc(dao, project) {
-    const url = `http://${EMULATOR}/v1/projects/homebase-6907d/databases/(default)/documents/idaosLocalhost/${dao}/projects/${project.toLowerCase()}`;
-    const res = await fetch(url, { headers: { Authorization: "Bearer owner" } });
-    return res.ok ? (await res.json()).fields : null;
+    const store = process.env.E2E_STORE;
+    if (!store) throw new Error("E2E_STORE is not set");
+    const out = execFileSync("python", ["-c", READ_DOC, store, `idaosLocalhost/${dao}/projects/${project.toLowerCase()}`]);
+    return JSON.parse(out.toString());
 }
 // Mines blocks (so the indexer keeps going) until the project doc satisfies [test], or fails
 async function untilProject(dao, project, test, what) {
@@ -247,12 +249,12 @@ async function main() {
     const desc6 = "Appeal: P6 failed appeal0|||0appeal0|||0Overrule P6 to 10%0|||0https://github.com/e2e/repo";
     const failedAppeal = eventArgs(await wait(ecoGov.connect(deployer).propose([p6Addr], [0], [overrule6], desc6)), "ProposalCreated").proposalId;
     const ecoDao = await ecoGov.getAddress();
-    await untilProject(ecoDao, p6Addr, (f) => f?.appealProposalId?.stringValue === failedAppeal.toString(), "linked the P6 appeal");
+    await untilProject(ecoDao, p6Addr, (f) => f?.appealProposalId === failedAppeal.toString(), "linked the P6 appeal");
     await untilHeld(p6, failedAppeal, "the P6 appeal");
     await advance(Number(await ecoGov.votingDelay()) + 1);
     await wait(ecoGov.connect(deployer).castVote(failedAppeal, 0));
     await advance(Number(await ecoGov.votingPeriod()) + 1);
-    await untilProject(ecoDao, p6Addr, (f) => f && !f.appealProposalId?.stringValue, "cleared the defeated P6 appeal");
+    await untilProject(ecoDao, p6Addr, (f) => f && !f.appealProposalId, "cleared the defeated P6 appeal");
     console.log("indexer cleared the defeated P6 appeal");
     manifest.projects.p6 = { address: p6Addr, stage: "appealable", backers: [bob.address],
         appealProposalId: null, appealProposals: [failedAppeal.toString()],
@@ -266,14 +268,14 @@ async function main() {
     const veto7 = p7.interface.encodeFunctionData("daoVeto");
     const desc7 = "Veto: P7 failed veto0|||0veto0|||0Close P70|||0https://github.com/e2e/repo";
     const failedVeto = eventArgs(await wait(ecoGov.connect(deployer).propose([p7Addr], [0], [veto7], desc7)), "ProposalCreated").proposalId;
-    await untilProject(ecoDao, p7Addr, (f) => f?.vetoProposalId?.stringValue === failedVeto.toString(), "linked the P7 veto");
+    await untilProject(ecoDao, p7Addr, (f) => f?.vetoProposalId === failedVeto.toString(), "linked the P7 veto");
     // P7 has no parties yet, so there is no signing to hold: the indexer links the veto but can't register it
     if ((await p7.queryFilter(p7.filters.DaoProposalRegistered(failedVeto))).length > 0) throw new Error("P7 veto was registered while Open");
     console.log("indexer linked the P7 veto");
     await advance(Number(await ecoGov.votingDelay()) + 1);
     await wait(ecoGov.connect(deployer).castVote(failedVeto, 0));
     await advance(Number(await ecoGov.votingPeriod()) + 1);
-    await untilProject(ecoDao, p7Addr, (f) => f && !f.vetoProposalId?.stringValue, "cleared the defeated P7 veto");
+    await untilProject(ecoDao, p7Addr, (f) => f && !f.vetoProposalId, "cleared the defeated P7 veto");
     console.log("indexer cleared the defeated P7 veto");
     manifest.projects.p7 = { address: p7Addr, stage: "open", backers: [carol.address],
         vetoProposalId: null, vetoProposals: [failedVeto.toString()],
