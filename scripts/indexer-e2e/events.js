@@ -287,7 +287,8 @@ async function main() {
     const debateTitle = "E2E debate", debateThesis = "Root thesis";
     const debateId = ethers.keccak256(ethers.toUtf8Bytes(`${debateTitle}\n${debateThesis}`)).slice(2, 18);
     const ecoRegistry = await ethers.getContractAt("Registry", manifest.daos.economy.registryAddress);
-    await govern(ecoGov.connect(deployer), [deployer, alice], [await ecoRegistry.getAddress()],
+    // the deployer's two thirds pass it early (super quorum), so the deployer alone votes
+    await govern(ecoGov.connect(deployer), [deployer], [await ecoRegistry.getAddress()],
         [ecoRegistry.interface.encodeFunctionData("editRegistry", [`debates.${debateId}`, "open"])],
         `${debateTitle}0|||0debate0|||0${debateThesis}0|||0`);
 

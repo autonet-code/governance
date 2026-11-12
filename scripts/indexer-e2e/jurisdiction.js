@@ -12,7 +12,7 @@ function coreParams(o = {}) {
         name: o.name, symbol: o.symbol, description: o.description ?? "",
         initialMembers: o.members ?? [], initialAmounts: o.amounts ?? [],
         votingDelay: o.votingDelay ?? 0, votingPeriod: o.votingPeriod ?? 1,          // minutes
-        proposalThreshold: o.proposalThreshold ?? 0, quorumFraction: o.quorumFraction ?? 4,
+        proposalThreshold: o.proposalThreshold ?? 1, quorumFraction: o.quorumFraction ?? 4,
         executionDelay: o.executionDelay ?? 60,                                       // seconds
         supermajorityBps: o.supermajorityBps ?? 0,                                    // 0: default 6667
     };
