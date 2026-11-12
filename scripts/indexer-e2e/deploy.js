@@ -1,12 +1,17 @@
 // Indexer end-to-end, phase A: deploy the jurisdiction suite to a local node and record addresses.
 //   npx hardhat run scripts/indexer-e2e/deploy.js --network localhost
+// On the main local chain (no E2E_RPC_URL) it also writes the werule indexer's network file
+// deployments/networks/Localhost.json, which the local indexer reads; an e2e run (E2E_RPC_URL set)
+// leaves it alone and seeds its own (seed_network.py).
 const { ethers } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 const { deployJurisdictionSuite, MODULES } = require("../lib/modules");
+const { writeNetworkFile } = require("../lib/network-file");
 
 async function main() {
     const [deployer] = await ethers.getSigners();
+    const fromBlock = (await ethers.provider.getBlockNumber()) + 1;
     const s = await deployJurisdictionSuite(ethers, deployer);
     const addr = (c) => c.getAddress();
     // Everything here is seeded into contracts/Localhost; the indexer watches jurisdictionFactory
@@ -37,6 +42,10 @@ async function main() {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(out, null, 2));
     console.log(JSON.stringify(out, null, 2));
+    if (!process.env.E2E_RPC_URL) {
+        const { rpc, chainId, ...fields } = out;
+        console.log(`Network file ${writeNetworkFile({ chainId, hardhatUrl: rpc, fromBlock, fields })}`);
+    }
 }
 
 main().catch((e) => { console.error(e); process.exitCode = 1; });

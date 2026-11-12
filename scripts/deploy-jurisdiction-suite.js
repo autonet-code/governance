@@ -9,13 +9,17 @@
 //   moduleProcessor      builds attach/detach proposals
 //   nativeProject, erc20Project   project implementations (the economy setup also holds them)
 //
-// Writes deployments/<etherlink-shadownet|localhost>-jurisdiction.json.
+// Writes deployments/<etherlink-shadownet|localhost>-jurisdiction.json, and merges the addresses into
+// the werule indexer's network file deployments/networks/<Name>.json (scripts/lib/network-file.js),
+// with fromBlock = the block this deploy started at.
 //   npx hardhat run scripts/deploy-jurisdiction-suite.js --network ets
 // CURATOR (optional): address that maintains the catalog and repos; default the deployer.
-const { ethers } = require("hardhat");
+const hre = require("hardhat");
+const { ethers } = hre;
 const fs = require("fs");
 const path = require("path");
 const { deployJurisdictionSuite, MODULES } = require("./lib/modules");
+const { writeNetworkFile } = require("./lib/network-file");
 
 async function main() {
   const [deployer] = await ethers.getSigners();
@@ -27,6 +31,7 @@ async function main() {
   console.log(`Jurisdiction suite on chain ${net.chainId}, deployer ${deployer.address}`);
   console.log(`Balance: ${ethers.formatEther(await ethers.provider.getBalance(deployer.address))}\n`);
 
+  const fromBlock = (await ethers.provider.getBlockNumber()) + 1;
   const s = await deployJurisdictionSuite(ethers, deployer, { log: console.log, curator: process.env.CURATOR || undefined });
   const addr = (c) => c.getAddress();
   const out = {
@@ -58,6 +63,12 @@ async function main() {
   console.log("\nFirestore fields:");
   for (const [k, v] of Object.entries(out.firestoreFields)) console.log(`  ${k.padEnd(20)} ${v}`);
   console.log(`Saved ${file}`);
+  const netFile = writeNetworkFile({
+    chainId: net.chainId, hardhatUrl: hre.network.config.url, fromBlock,
+    fields: { ...out.firestoreFields, ...out.factories,
+              ...Object.fromEntries(MODULES.map((m) => [`${m}Setup`, out.modules[m].setup])) },
+  });
+  console.log(`Network file ${netFile}`);
 }
 
 main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
