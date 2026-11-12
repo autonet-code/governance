@@ -1,12 +1,10 @@
-# On-Chain Jurisdiction
+# Governance in the On-Chain Jurisdiction
 
 [![UI: werule.io](https://img.shields.io/badge/DAO%20Platform-werule.io-blue)](https://werule.io)
-[![UI: trustless.business](https://img.shields.io/badge/Trustless%20Economy-trustless.business-green)](https://trustless.business)
-[![UI: autonet.computer](https://img.shields.io/badge/Autonet-autonet.computer-purple)](https://autonet.computer)
 
-> **Abstract.** Economic progress has always depended on systems of trust: courts, contracts, and the institutions that mediate agreements between strangers. They scale, but they carry bureaucratic overhead, jurisdictional boundaries, unequal access, and the standing risk of capture. On-Chain Jurisdiction encodes that trust into the agreements themselves. A jurisdiction is a DAO whose members govern a marketplace of escrowed work; the marketplace resolves disputes through backer votes, arbitration and appeal to governance; and the reputation that carries voting power is earned from real economic activity rather than bought. The same jurisdiction is the human governance layer of Autonet, a self-sufficient economy for AI and human agents. The rule of this codebase is that protection belongs in the code: every guarantee a participant relies on is enforced by a contract, not by an operator.
+> Society is built on trust: contracts written in natural language, and the institutions that mediate agreements between strangers. They scale, but they carry bureaucratic overhead, jurisdictional boundaries, unequal access, and the standing risk of capture. The On-Chain Jurisdiction encodes that trust into the agreements themselves. It allows members to govern a market for both public and private services, with fully trustless dispute resolution. The same jurisdiction is the governance layer of Autonet, the module handling logical and physical automations.
 
-**[Eight Rice](https://eightrice.xyz)** | [werule.io](https://werule.io) | [trustless.business](https://trustless.business) | [autonet.computer](https://autonet.computer)
+**[Eight Rice](https://eightrice.xyz)**
 
 *Beta, on testnet. A full suite (DAO factories, project implementations, Autonet satellites) is live on Etherlink Shadownet (chainId 127823) since October 2026, pending a redeploy of the module architecture described here; addresses in [`docs/deployments.md`](docs/deployments.md). This README is the living paper: each section links to its full specification in [`docs/`](docs/README.md).*
 
