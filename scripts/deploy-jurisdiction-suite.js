@@ -11,7 +11,8 @@
 //
 // Writes deployments/<etherlink-shadownet|localhost>-jurisdiction.json, and merges the addresses into
 // the werule indexer's network file deployments/networks/<Name>.json (scripts/lib/network-file.js),
-// with fromBlock = the block this deploy started at.
+// with fromBlock = the block this deploy started at, and publishes that file to R2 (Shadownet only; see
+// scripts/lib/network-file.js for the keys).
 //   npx hardhat run scripts/deploy-jurisdiction-suite.js --network ets
 // CURATOR (optional): address that maintains the catalog and repos; default the deployer.
 const hre = require("hardhat");
@@ -19,7 +20,7 @@ const { ethers } = hre;
 const fs = require("fs");
 const path = require("path");
 const { deployJurisdictionSuite, MODULES } = require("./lib/modules");
-const { writeNetworkFile } = require("./lib/network-file");
+const { writeNetworkFile, publishNetworkFile } = require("./lib/network-file");
 
 async function main() {
   const [deployer] = await ethers.getSigners();
@@ -69,6 +70,7 @@ async function main() {
               ...Object.fromEntries(MODULES.map((m) => [`${m}Setup`, out.modules[m].setup])) },
   });
   console.log(`Network file ${netFile}`);
+  publishNetworkFile(netFile);
 }
 
 main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });

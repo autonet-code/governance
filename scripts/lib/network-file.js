@@ -4,10 +4,16 @@
 // entry in networks.json, which werule and the Autonet app read. So everything in it is public:
 // `rpc` is a public RPC URL (a keyed one belongs in the indexer's RPC_<NAME> environment variable).
 //
-// Local dev reads the folder directly (NETWORKS_SOURCE=dir:<this repo>/deployments); for a real network
-// copy the file into the indexer's private source: python networks.py put deployments/networks/<Name>.json
+// Local dev reads the folder directly (NETWORKS_SOURCE=dir:<this repo>/deployments). A real network's
+// file is also published to the R2 data bucket (networks/<Name>.json), where the indexer picks it up,
+// through the indexer's own uploader (python networks.py put), when R2 keys are available: the R2_*
+// environment variables, else ~/.edge/r2.env (R2_ACCESS_KEY_ID=..., R2_SECRET_ACCESS_KEY=...).
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
+
+const R2_ACCOUNT_ID = "774864e190e45a3f8c637282fb83eed5";
 
 const CHAINS = {
     31337: { name: "Localhost", nativeCurrency: "ETH", symbol: "ETH", blockExplorer: "" },
@@ -63,4 +69,37 @@ function writeNetworkFile({ chainId, hardhatUrl, fromBlock, fields }) {
     return file;
 }
 
-module.exports = { writeNetworkFile, networkFilePath, chainInfo };
+function r2Env() {
+    const env = { R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID || R2_ACCOUNT_ID,
+                  R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY };
+    const file = process.env.R2_ENV_FILE || path.join(os.homedir(), ".edge", "r2.env");
+    if ((!env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) && fs.existsSync(file)) {
+        for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+            const m = line.match(/^\s*(R2_[A-Z_]+)\s*=\s*(.+?)\s*$/);
+            if (m && !env[m[1]]) env[m[1]] = m[2];
+        }
+    }
+    return env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY ? env : null;
+}
+
+// Publish a network file to the R2 data bucket (NETWORKS_BUCKET, default autonet-data) for the indexer.
+// Never a local chain's. Without R2 keys the file stays local, and the deploy says so.
+function publishNetworkFile(file) {
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (Number(data.chainId) === 31337) return false;
+    const env = r2Env();
+    if (!env) {
+        console.log(`No R2 keys (R2_* or ~/.edge/r2.env): ${path.basename(file)} kept local; publish it later with`);
+        console.log(`  python networks.py put ${file}   (in werule-indexer, NETWORKS_SOURCE=r2:autonet-data)`);
+        return false;
+    }
+    const indexer = process.env.WERULE_INDEXER_DIR || path.join(__dirname, "..", "..", "..", "werule-indexer");
+    const bucket = process.env.NETWORKS_BUCKET || "autonet-data";
+    const r = spawnSync(process.env.PYTHON || "python", ["networks.py", "put", path.resolve(file)], {
+        cwd: indexer, stdio: "inherit", env: { ...process.env, ...env, NETWORKS_SOURCE: `r2:${bucket}` },
+    });
+    if (r.status !== 0) throw new Error(`publishing ${file} to r2:${bucket} failed (exit ${r.status})`);
+    return true;
+}
+
+module.exports = { writeNetworkFile, publishNetworkFile, networkFilePath, chainInfo };
