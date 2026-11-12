@@ -96,6 +96,68 @@ The contract determines this at submission, so a proposal can't avoid the classi
 
 This is by design. A jurisdiction whose members stop participating can't rewrite its rules, including by lowering the bar. Those who remain can fork.
 
+# Projects
+
+Projects is the jurisdiction's marketplace for work, and its civil justice. An author posts a project, backers fund it into escrow, a contractor delivers the work, and the backers either release the funds or send the project to an arbiter. The jurisdiction stands above every project: it can veto a project and overrule an arbiter. Projects is the only way to crowdfund within a jurisdiction. From funding to the last payout, the funds move only by the rules of the project's contract, and no intermediary holds them.
+
+The description below follows a project from its creation to its close. As in Governance, a user may be a human using the Werule app or an Agent calling the contracts directly.
+
+## Installing Projects
+
+Projects is an optional module, attached at genesis or later by proposal. Attaching it adds the Economy contract, which creates the projects and keeps the ledger that REP is claimed from, and EconomyRepClaim.sol, which mints that REP. Each project is a contract of its own, paid either in the chain's native currency or in one token. The installation takes the following parameters, shown with their default values:
+
+- **Platform fee.** The share of every payout that goes to the treasury, between 1% and 50%. The default is 1%.
+- **Author fee.** The share of the contractor's payouts that goes to the project's author, at most 25%. The default is 1%.
+- **Arbitration fee.** The share of the locked funds that pays the arbiter for a ruling, at most 25%. It is set at installation.
+- **Cooling-off period.** How long backers can withdraw before the contractor can sign. The default is one day. It can never be shorter than a minimum fixed at installation.
+- **Backer quorum.** The share of the locked funds whose votes release the payment or open a dispute, between 50% and 99%. The default is 70%.
+- **Project threshold.** The REP an author needs to create a project. The default is zero.
+- **Appeal window.** How long after a ruling the DAO can still overrule it. The default is seven days.
+- **Arbitration timeout.** How long an arbiter has to rule before the backers can take back their locked funds. The default is 30 days.
+- **Immediate release cap.** The largest share of a contribution that a backer can mark for immediate release, at most 50%. The default is 20%.
+
+Every parameter can be changed later by ordinary proposal. A change reaches existing projects as well, except for the cooling-off period and the arbitration fee, which a project fixes when its cooling-off starts and when it is signed.
+
+## Creating and funding a project
+
+An author holding at least the project threshold of REP creates a project, with a name, a description and the hash of its terms, and names a contractor and an arbiter. The author can also name them later, which opens the project to funding first.
+
+Anyone can fund a project. A backer can mark part of each contribution, up to the immediate release cap, for immediate release: it is paid to the contractor at signing, as working capital. The rest is locked in escrow. The split is how a backer prices their trust in the contractor.
+
+Once the contractor and the arbiter are named, the cooling-off period starts. Until the contract is signed, a backer can withdraw everything they contributed, the immediate share included.
+
+## Signing
+
+After the cooling-off period, the contractor signs the contract, and the work starts. Signing fixes the arbitration fee as a share of the locked funds, and the contractor stakes half of it. The immediate shares are paid out at signing and never come back, whatever happens afterwards.
+
+A member who thinks a project should not go ahead proposes a veto. A veto proposal registered on the project during the cooling-off period holds the signing until the proposal is decided (a pending veto), so the jurisdiction always finishes its vote before the contractor can sign. The Werule indexer registers such proposals, and anyone else can register them as well.
+
+## Release
+
+When the work is delivered, the backers vote to release the locked funds to the contractor. Each backer votes with their locked funds, and immediate shares carry no vote. Once backers holding the backer quorum vote to release, the project closes and the contractor collects the locked funds. The contractor can instead give up the project, which closes it and returns the locked funds to the backers.
+
+## Disputes
+
+If backers holding the quorum vote to dispute, or if the contractor disputes, the project goes to its arbiter. The arbiter rules on a split: a percentage of the locked funds goes to the contractor, and the rest to the backers in proportion to what each of them locked. The arbitration fee pays the arbiter, half from the contractor's stake and half from the locked funds, and only if the arbiter rules.
+
+A ruling takes effect when the appeal window closes. Within the window, any member can appeal by proposing a different split to the DAO. A registered appeal holds the ruling until the proposal is decided, and if the proposal passes, the DAO's split replaces the arbiter's, even after the window has closed.
+
+An arbiter who has not ruled by the end of the appeal window loses the exclusive right to rule. From then on the DAO can rule in the arbiter's place, and the arbitration fee goes to the treasury. If nobody rules before the arbitration timeout, the project closes and the backers take back their locked funds, with no fee.
+
+The parties choose their arbiter by taking part in the project, and the DAO is their court of appeal. This is the jurisdiction's civil justice.
+
+## The DAO's veto
+
+The DAO can veto any project until it closes. A veto closes the project and returns to the backers what the project still holds, less the platform fee, and a frivolous project therefore still costs its backers something. Before signing, a veto returns the immediate shares as well. After signing, the immediate shares are the contractor's.
+
+## What a project earns
+
+Every payout follows the same path. The platform fee goes to the treasury, the author fee goes to the author on the contractor's payouts only, and the rest goes to the payee. Refunds to backers pay no fee.
+
+The Economy contract keeps a ledger of what each member earned and spent in projects, per token. Earnings are the contractor's net payouts, the author's fees and the arbiter's net fee. Spending is what a backer contributed, less what came back. A member claims REP against the ledger at the token's parity, multiplied by the REP rate: REP = value x parity x rate. A token without a parity earns no REP. The REP rate is a Registry entry that applies to every token, and since it decides how much voting power economic activity mints, it changes only by constitutional proposal. A new rate also applies to REP earned before it but not yet claimed.
+
+Every payout that earns REP pays the platform fee, and the fee is therefore the least that REP costs. Funding one's own project to farm REP costs real money. REP claimed from Projects counts only once delegated (see [Putting REP to use](#putting-rep-to-use)).
+
 <!-- paper:end -->
 
 # Developing
