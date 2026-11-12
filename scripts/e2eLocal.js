@@ -49,7 +49,7 @@ async function main() {
     const params = {
         name: "E2E", symbol: "E2E", description: "",
         initialMembers: [deployer.address], initialAmounts: [ethers.parseEther("100")],
-        votingDelay: 1, votingPeriod: 5, proposalThreshold: 0, quorumFraction: 4, executionDelay: 60,
+        votingDelay: 1, votingPeriod: 5, proposalThreshold: 1, quorumFraction: 4, executionDelay: 60,
         supermajorityBps: 0,
     };
     const c = await factory.deployCore.staticCall(params);

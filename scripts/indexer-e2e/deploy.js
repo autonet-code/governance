@@ -28,10 +28,6 @@ async function main() {
         nativeCurrency: "ETH", symbol: "ETH", blockExplorer: "",
     };
     for (const name of MODULES) out[`${name}Setup`] = await addr(s.setups[name]);
-    // Debates: werule and the indexer find the factory in contracts/Localhost
-    const debates = await (await ethers.getContractFactory("DebatesFactory")).deploy();
-    await debates.waitForDeployment();
-    out.debatesFactory = await debates.getAddress();
     // The retired StandardFactory addresses (legacy DAOs on Etherlink): stand-ins that emit their events
     for (const key of ["wrapper", "wrapper_t", "wrapper_w"]) {
         const legacy = await (await ethers.getContractFactory("LegacyFactoryEvents")).deploy();

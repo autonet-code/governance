@@ -540,6 +540,28 @@ describe("Standard DAO Governance", function () {
             expect(await dao.proposalThreshold()).to.equal(newThreshold);
         });
 
+        it("never takes a proposal threshold of 0, at creation or by proposal", async function () {
+            const { createJurisdiction } = require("./helpers/jurisdiction");
+            await expect(createJurisdiction(deployer, {
+                name: "Zero", symbol: "Z", members: [member1.address], amounts: [ethers.parseEther("1")],
+                proposalThreshold: 0,
+            })).to.be.reverted;
+
+            const targets = [await dao.getAddress()];
+            const calldatas = [dao.interface.encodeFunctionData("setProposalThreshold", [0])];
+            const description = "Proposal threshold to 0";
+            const receipt = await (await dao.connect(member1).propose(targets, [0], calldatas, description)).wait();
+            const proposalId = receipt.logs.map(l => { try { return dao.interface.parseLog(l); } catch { return null; } })
+                .find(e => e && e.name === "ProposalCreated").args.proposalId;
+            await time.increase(61);
+            await dao.connect(member1).castVote(proposalId, 1);
+            await time.increase(121);
+            await dao.connect(member1).queue(targets, [0], calldatas, ethers.id(description));
+            await time.increase(61);
+            await expect(dao.connect(member1).execute(targets, [0], calldatas, ethers.id(description))).to.be.reverted;
+            expect(await dao.proposalThreshold()).to.equal(ethers.parseEther("1"));
+        });
+
         it("should update quorum via proposal", async function () {
             const newQuorum = 10; // 10%
 

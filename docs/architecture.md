@@ -80,7 +80,7 @@ Modules are prepared by a `ModuleSetup` and attached by `JurisdictionFactory.fin
 
 ### Debates
 
-`DebatesFactory` is one network-wide contract, not part of any suite. It deploys `Debate` instances against any `IVotes` token and has no authority over the jurisdiction. See [governance.md](governance.md#debates).
+Debates are a jurisdiction's non-executive consensus tool, and there is no debates contract. A debate is opened by an ordinary proposal whose action writes `debates.<id>` = `open` to the DAO's registry, with the title and thesis in the proposal's description, and retired by a proposal that clears the entry. Arguments and stakes are EIP-712 messages signed by members (no gas), checked by the werule indexer against the chain (signature, voting power at least the proposal threshold, a budget of 100% of the author's voting power per debate) and published with the DAO's data. Scores are floored at zero, so a refuted argument stops counting without pushing its parent the other way. Specification: [DEBATES.md](https://github.com/EightRice/werule-indexer/blob/master/DEBATES.md).
 
 ## Deployment
 

@@ -282,14 +282,14 @@ async function main() {
         events: ["NewProject", "SendFunds", "ProposalCreated"] };
 
     // ---------------- Debates ----------------
-    // A debate on the Economy DAO's token: opened (root argument), argued, backed and closed
-    const debatesFactory = await ethers.getContractAt("DebatesFactory", dep.debatesFactory);
-    const debateRc = await wait(debatesFactory.connect(deployer).createDebate(await ecoToken.getAddress(), "E2E debate", "Root thesis", E(10)));
-    const debateAddr = eventArgs(debateRc, "DebateCreated").debateAddress;
-    const debate = await ethers.getContractAt("Debate", debateAddr);
-    await wait(debate.connect(alice).addArgument(1, 1, E(5), "A counterpoint"));
-    await wait(debate.connect(deployer).addWeight(1, E(1)));
-    await wait(debate.connect(deployer).closeDebate());
+    // A debate opened by proposal (werule-indexer DEBATES.md): the registry entry debates.<id> = "open",
+    // the title and thesis in the proposal's description. Its arguments are signed messages, off-chain.
+    const debateTitle = "E2E debate", debateThesis = "Root thesis";
+    const debateId = ethers.keccak256(ethers.toUtf8Bytes(`${debateTitle}\n${debateThesis}`)).slice(2, 18);
+    const ecoRegistry = await ethers.getContractAt("Registry", manifest.daos.economy.registryAddress);
+    await govern(ecoGov.connect(deployer), [deployer, alice], [await ecoRegistry.getAddress()],
+        [ecoRegistry.interface.encodeFunctionData("editRegistry", [`debates.${debateId}`, "open"])],
+        `${debateTitle}0|||0debate0|||0${debateThesis}0|||0`);
 
     // REP from economy activity (outside any proposal)
     await wait(repClaim.connect(bob).claim());
@@ -306,9 +306,8 @@ async function main() {
     // Every kind of event the economy DAO went through reaches its activity feed
     manifest.daos.economy.activity = ["daoCreated", "mint", "delegate", "registryEdit", "proposalCreated", "vote",
         "proposalQueued", "proposalExecuted", "createProject", "sendFunds", "signContract", "projectDisputed",
-        "arbitrate", "daoOverruled", "vetoedByDao", "debateCreated", "debateArgument", "debateWeight", "debateClosed",
-        "supermajoritySet"];
-    manifest.daos.economy.debates = [debateAddr];
+        "arbitrate", "daoOverruled", "vetoedByDao", "debateOpened", "supermajoritySet"];
+    manifest.daos.economy.debates = [{ id: debateId, title: debateTitle, thesis: debateThesis, status: "open" }];
 
     // ---------------- Autonet ----------------
     // A jurisdiction with the autonet module, and an agent registering on its Substrate

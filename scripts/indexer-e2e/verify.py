@@ -103,10 +103,14 @@ for kind, d in manifest["daos"].items():
         dangling = [a for a in feed if (a.get("targetKind") == "proposal" and a.get("targetId") not in proposals)
                     or (a.get("targetKind") == "project" and a.get("targetId", "").lower() not in projects)]
         check(f"[{kind}] activity links resolve", not dangling, f"{len(dangling)} dangling, e.g. {dangling[:1]}")
-    for addr in d.get("debates", []):
-        check(f"[{kind}] debate {addr[:8]} recorded", find_doc(snap.reference.collection("debates"), addr) is not None)
-        check(f"[{kind}] debate {addr[:8]} in the feed",
-              any(a.get("targetKind") == "debate" and a.get("targetId", "").lower() == addr.lower() for a in feed))
+    for want in d.get("debates", []):
+        got = snap.reference.collection("debates").document(want["id"]).get()
+        doc = got.to_dict() if got.exists else {}
+        check(f"[{kind}] debate {want['id']} opened by its proposal",
+              got.exists and doc.get("status") == want["status"] and doc.get("title") == want["title"]
+              and doc.get("thesis") == want["thesis"] and doc.get("proposalId"), f"doc={doc}")
+        check(f"[{kind}] debate {want['id']} in the feed",
+              any(a.get("targetKind") == "debate" and a.get("targetId") == want["id"] for a in feed))
     for addr in d.get("agents", []):
         check(f"[{kind}] agent {addr[:8]} in the feed",
               any(a.get("targetKind") == "agent" and a.get("targetId", "").lower() == addr.lower() for a in feed))

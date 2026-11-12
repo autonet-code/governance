@@ -2,7 +2,7 @@
 
 How a jurisdiction governs itself: the Governor, its Timelock, the RepToken that carries voting power, reward epochs, and the Registry that holds the treasury and configuration. For how these contracts are deployed and wired together, see [architecture.md](architecture.md). For function-level API detail, see [technical-reference.md](technical-reference.md).
 
-Sources: `contracts/Dao.sol`, `RepToken.sol`, `Registry.sol`, `IJurisdictionData.sol`, `IAdminToken.sol`, `contracts/factories/`, `contracts/debates/`. Behaviour described here is exercised by `test/dao-governance*.test.js`, `test/reward-epochs.test.js`, `test/default-delegate.test.js`, `test/treasury-spend-guard.test.js` and `test/security.test.js`.
+Sources: `contracts/Dao.sol`, `RepToken.sol`, `Registry.sol`, `IJurisdictionData.sol`, `IAdminToken.sol`, `contracts/factories/`. Behaviour described here is exercised by `test/dao-governance*.test.js`, `test/reward-epochs.test.js`, `test/default-delegate.test.js`, `test/treasury-spend-guard.test.js` and `test/security.test.js`.
 
 ## Contracts at a glance
 
@@ -21,7 +21,7 @@ Every governance action follows the same path: **propose, vote, queue, execute**
 
 | Extension | Effect |
 |---|---|
-| `GovernorSettings` | `votingDelay`, `votingPeriod`, `proposalThreshold`, changeable later by proposal |
+| `GovernorSettings` | `votingDelay`, `votingPeriod`, `proposalThreshold`, changeable later by proposal; the threshold is at least 1 (`InvalidProposalThreshold`), at creation and after, so proposing (and posting in a debate) always takes membership |
 | `GovernorCountingSimple` | Against (0), For (1), Abstain (2) |
 | `GovernorVotes` | Voting power from the token's `IVotes` checkpoints |
 | `GovernorVotesQuorumFraction` | Quorum as a percentage of total supply at the snapshot |
@@ -244,12 +244,7 @@ A per-token fixed-window rate limit on outflows: `maxPerWindow[token]` (0 = unme
 
 ## Debates
 
-`contracts/debates/` is independent of the Governor: a signalling tool that any `IVotes` + `IERC6372` token can use.
-
-- `DebatesFactory.createDebate(token, title, rootArgument, rootWeight)` deploys a `Debate` and indexes it globally and per token (`getDebates`, `getDebatesByToken`, `getDebateList*`).
-- A `Debate` snapshots at `token.clock() - 1`. Each address gets a budget equal to its past votes; staking weight on new arguments (`addArgument(parentId, PRO|CON, weight, content)`) or existing ones (`addWeight`) spends from it, and nothing is refunded.
-- `netScore = directWeight + sum(PRO children netScore) - sum(CON children netScore)`, recomputed up the tree on each change. `getDebateSentiment()` is the root's score.
-- Only the creator can `closeDebate()`. Nothing on-chain acts on the result.
+Debates are a jurisdiction's non-executive consensus tool, and there is no debates contract. A debate is opened by an ordinary proposal whose action writes `debates.<id>` = `open` to the DAO's registry, with the title and thesis in the proposal's description, and retired by a proposal that clears the entry. Arguments and stakes are EIP-712 messages signed by members (no gas), checked by the werule indexer against the chain (signature, voting power at least the proposal threshold, a budget of 100% of the author's voting power per debate) and published with the DAO's data. Scores are floored at zero, so a refuted argument stops counting without pushing its parent the other way. Specification: [DEBATES.md](https://github.com/EightRice/werule-indexer/blob/master/DEBATES.md).
 
 ## Common proposals
 

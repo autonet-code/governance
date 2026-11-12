@@ -77,6 +77,9 @@ constructor(
     event ProposalSupermajority(uint256 indexed proposalId, uint256 bps);
     event SupermajoritySet(uint256 oldBps, uint256 newBps);
     error InvalidSupermajority(uint256 bps);
+    /// The proposal threshold is at least 1 (the smallest unit of REP): proposing, and posting in a
+    /// debate (which uses the same bar), takes membership, never nothing
+    error InvalidProposalThreshold(uint256 threshold);
 
     /// Changing the threshold takes a proposal, which is itself protected
     function setSupermajority(uint256 bps) external onlyGovernance {
@@ -306,6 +309,12 @@ constructor(
         returns (uint256)
     {
         return super.proposalThreshold();
+    }
+
+    /// At creation (GovernorSettings' constructor) and by proposal (setProposalThreshold)
+    function _setProposalThreshold(uint256 newProposalThreshold) internal override {
+        if (newProposalThreshold == 0) revert InvalidProposalThreshold(newProposalThreshold);
+        super._setProposalThreshold(newProposalThreshold);
     }
 
     function _queueOperations(uint256 proposalId, address[] memory targets, uint256[] memory values, bytes[] memory calldatas, bytes32 descriptionHash)

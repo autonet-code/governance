@@ -307,9 +307,7 @@ function uninstallCalls(IModuleSetup setup, uint256 id) external view returns (a
 
 ## Debates
 
-`contracts/debates/`. `DebatesFactory.createDebate(address token, string title, string rootArgument, uint256 rootWeight)` deploys a `Debate` argument tree. `Debate.addArgument(parentId, argType, weight, content)`, `addWeight(argumentId, weight)`, `closeDebate()` (creator only), plus views (`getFullDebate`, `getDebateSentiment`, `getRemainingVotingPower`). Each account's total weight is capped by its `getPastVotes` at the token clock just before creation.
-
----
+Debates are a jurisdiction's non-executive consensus tool, and there is no debates contract. A debate is opened by an ordinary proposal whose action writes `debates.<id>` = `open` to the DAO's registry, with the title and thesis in the proposal's description, and retired by a proposal that clears the entry. Arguments and stakes are EIP-712 messages signed by members (no gas), checked by the werule indexer against the chain (signature, voting power at least the proposal threshold, a budget of 100% of the author's voting power per debate) and published with the DAO's data. Scores are floored at zero, so a refuted argument stops counting without pushing its parent the other way. Specification: [DEBATES.md](https://github.com/EightRice/werule-indexer/blob/master/DEBATES.md).
 
 ## Events
 
